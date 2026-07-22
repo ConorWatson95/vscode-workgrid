@@ -1,0 +1,347 @@
+{
+  "name": "task-workspaces",
+  "displayName": "Task Workspaces",
+  "description": "Manage isolated development tasks using Git worktrees and coding agents.",
+  "version": "0.1.0",
+  "publisher": "task-workspaces",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "taskWorkspaces",
+          "title": "Task Workspaces",
+          "icon": "$(list-tree)"
+        }
+      ]
+    },
+    "views": {
+      "taskWorkspaces": [
+        {
+          "id": "taskWorkspaces.tree",
+          "name": "Task Workspaces",
+          "icon": "$(list-tree)"
+        },
+        {
+          "id": "taskWorkspaces.detail",
+          "name": "Details",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "taskWorkspaces.create",
+        "title": "Create Task Workspace",
+        "category": "Task Workspaces",
+        "icon": "$(add)"
+      },
+      {
+        "command": "taskWorkspaces.refresh",
+        "title": "Refresh",
+        "category": "Task Workspaces",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "taskWorkspaces.sessionHistory",
+        "title": "Session History…",
+        "category": "Task Workspaces",
+        "icon": "$(history)"
+      },
+      {
+        "command": "taskWorkspaces.open",
+        "title": "Open Workspace",
+        "category": "Task Workspaces",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "taskWorkspaces.detail",
+        "title": "Task Details",
+        "category": "Task Workspaces",
+        "icon": "$(info)"
+      },
+      {
+        "command": "taskWorkspaces.showDiff",
+        "title": "Show Git Diff",
+        "category": "Task Workspaces",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "taskWorkspaces.copyPath",
+        "title": "Copy Path",
+        "category": "Task Workspaces"
+      },
+      {
+        "command": "taskWorkspaces.archive",
+        "title": "Archive Task (hide)",
+        "category": "Task Workspaces",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "taskWorkspaces.unarchive",
+        "title": "Restore Task",
+        "category": "Task Workspaces",
+        "icon": "$(history)"
+      },
+      {
+        "command": "taskWorkspaces.toggleArchived",
+        "title": "Show/Hide Archived Tasks",
+        "category": "Task Workspaces",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "taskWorkspaces.remove",
+        "title": "Remove Workspace",
+        "category": "Task Workspaces",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "taskWorkspaces.adopt",
+        "title": "Adopt Worktree as Task",
+        "category": "Task Workspaces",
+        "icon": "$(add)"
+      },
+      {
+        "command": "taskWorkspaces.openChat",
+        "title": "Open Chat",
+        "category": "Task Workspaces",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "taskWorkspaces.startAgent",
+        "title": "Start Agent (default mode)",
+        "category": "Task Workspaces",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskWorkspaces.startNative",
+        "title": "Start in Claude Extension (new window)",
+        "category": "Task Workspaces",
+        "icon": "$(window)"
+      },
+      {
+        "command": "taskWorkspaces.startChat",
+        "title": "Start in Chat Panel",
+        "category": "Task Workspaces",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "taskWorkspaces.startTerminal",
+        "title": "Start in Terminal",
+        "category": "Task Workspaces",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "taskWorkspaces.stopAgent",
+        "title": "Stop Agent",
+        "category": "Task Workspaces",
+        "icon": "$(debug-stop)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "taskWorkspaces.create",
+          "when": "view == taskWorkspaces.tree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "taskWorkspaces.refresh",
+          "when": "view == taskWorkspaces.tree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "taskWorkspaces.toggleArchived",
+          "when": "view == taskWorkspaces.tree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "taskWorkspaces.sessionHistory",
+          "when": "view == taskWorkspaces.tree",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "taskWorkspaces.startNative",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "inline@1"
+        },
+        {
+          "command": "taskWorkspaces.startChat",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "inline@2"
+        },
+        {
+          "command": "taskWorkspaces.startTerminal",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "inline@3"
+        },
+        {
+          "command": "taskWorkspaces.open",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "inline@4"
+        },
+        {
+          "command": "taskWorkspaces.adopt",
+          "when": "view == taskWorkspaces.tree && viewItem == orphan",
+          "group": "inline@1"
+        },
+        {
+          "command": "taskWorkspaces.detail",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "taskWorkspaces.open",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "taskWorkspaces.showDiff",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@3"
+        },
+        {
+          "command": "taskWorkspaces.copyPath",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@3"
+        },
+        {
+          "command": "taskWorkspaces.startNative",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "2_agent@1"
+        },
+        {
+          "command": "taskWorkspaces.startChat",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "2_agent@2"
+        },
+        {
+          "command": "taskWorkspaces.startTerminal",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "2_agent@3"
+        },
+        {
+          "command": "taskWorkspaces.stopAgent",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "2_agent@4"
+        },
+        {
+          "command": "taskWorkspaces.archive",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /archivable/",
+          "group": "3_lifecycle@1"
+        },
+        {
+          "command": "taskWorkspaces.unarchive",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /archived/",
+          "group": "3_lifecycle@1"
+        },
+        {
+          "command": "taskWorkspaces.remove",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "3_lifecycle@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Task Workspaces",
+      "properties": {
+        "taskWorkspaces.worktreeParentDir": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Directory in which new worktrees are created. If empty, worktrees are created as siblings of the repository (`<repoParent>/<repoName>-<slug>`). Supports absolute paths."
+        },
+        "taskWorkspaces.branchPrefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "feature",
+            "bug",
+            "fix",
+            "perf",
+            "refactor",
+            "chore"
+          ],
+          "scope": "resource",
+          "description": "Allowed branch type prefixes offered when creating a task workspace."
+        },
+        "taskWorkspaces.defaultBaseBranch": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Default base branch for new worktrees. If empty, the repository's current HEAD branch is used."
+        },
+        "taskWorkspaces.claudeCommand": {
+          "type": "string",
+          "default": "claude",
+          "scope": "machine-overridable",
+          "description": "Command used to launch the Claude Code CLI."
+        },
+        "taskWorkspaces.agentMode": {
+          "type": "string",
+          "enum": ["native", "chat", "terminal"],
+          "enumDescriptions": [
+            "Open the task's worktree in a new window and launch Claude Code's own chat UI (requires the anthropic.claude-code extension).",
+            "Run Claude headless and show a built-in chat panel inside this window.",
+            "Run Claude in an integrated terminal."
+          ],
+          "default": "native",
+          "scope": "resource",
+          "description": "How to start Claude for a task. 'native' uses the official Claude Code extension's chat in the worktree window; 'chat' uses the built-in panel; 'terminal' uses an integrated terminal."
+        },
+        "taskWorkspaces.trackNativeActivity": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Show best-effort live activity (working / awaiting input) for **native**-mode tasks by watching Claude Code's session transcripts. This reads an undocumented on-disk layout and may lag or miss; disable to only track built-in chat sessions."
+        },
+        "taskWorkspaces.permissionMode": {
+          "type": "string",
+          "enum": ["default", "acceptEdits", "plan", "bypassPermissions"],
+          "enumDescriptions": [
+            "Prompt according to your normal Claude settings.",
+            "Auto-accept file edits; prompt for other actions.",
+            "Planning only — no changes are made.",
+            "Skip all permission checks (use with care)."
+          ],
+          "default": "acceptEdits",
+          "scope": "resource",
+          "markdownDescription": "Permission mode for chat-panel sessions. Because the headless panel cannot yet show interactive per-action prompts, `acceptEdits` or `plan` are recommended."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package --allow-missing-repository --baseContentUrl https://local.invalid --baseImagesUrl https://local.invalid"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.29.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

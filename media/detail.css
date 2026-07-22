@@ -1,0 +1,49 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  padding: 16px 20px;
+}
+/* Docked sidebar view: tighter, transparent background. */
+body.view { padding: 12px 14px; background: transparent; }
+body.view h1 { font-size: 1.1em; }
+body.view .actions button { padding: 5px 9px; font-size: 0.85em; }
+.empty { color: var(--vscode-descriptionForeground); font-size: 0.9em; padding: 8px 2px; }
+
+.head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.head .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--phase-color, var(--vscode-descriptionForeground)); flex: none; }
+h1 { font-size: 1.35em; margin: 0; }
+.phase { color: var(--phase-color, var(--vscode-descriptionForeground)); font-weight: 600; font-size: 0.9em; margin: 0 0 14px 21px; }
+.desc { color: var(--vscode-foreground); margin: 0 0 18px; line-height: 1.5; opacity: 0.9; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+button {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: none; border-radius: 5px; padding: 6px 12px; cursor: pointer;
+  font-family: inherit; font-size: 0.9em;
+}
+button:hover { background: var(--vscode-button-hoverBackground); }
+button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+button.danger { background: transparent; color: var(--vscode-errorForeground); border: 1px solid var(--vscode-errorForeground); }
+button.danger:hover { background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent); }
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+dt { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+dd { margin: 0; font-size: 0.9em; overflow-wrap: anywhere; }
+dd code, .mono { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+
+.section-title { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; margin: 22px 0 8px; }
+.pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { font-size: 0.82em; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--vscode-panel-border); }
+.pill.warn { color: var(--vscode-editorWarning-foreground, #e0b341); border-color: currentColor; }
+.pill.ok { color: var(--vscode-charts-green, #3fb950); border-color: currentColor; }
+.warnbox {
+  margin-top: 14px; padding: 8px 12px; border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  color: var(--vscode-errorForeground); font-size: 0.88em;
+}
