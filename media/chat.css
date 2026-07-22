@@ -103,6 +103,7 @@ button.ghost:hover { background: var(--vscode-toolbar-hoverBackground, rgba(127,
 .turn.user .bubble {
   background: var(--accent, var(--vscode-textLink-foreground));
   color: #fff;
+  white-space: pre-wrap; /* preserve the user's line breaks */
 }
 .turn.assistant .bubble {
   background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.12));
