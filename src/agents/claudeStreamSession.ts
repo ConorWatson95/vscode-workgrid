@@ -167,6 +167,14 @@ export class ClaudeStreamSession {
     const sid = sessionIdOf(event);
     if (sid) this.sessionId = sid;
 
+    // Any assistant/tool activity means Claude is working — flip back to
+    // "running" even if a previous turn just completed (e.g. a queued
+    // follow-up message is now being processed).
+    if (event.type === "assistant" || event.type === "user") {
+      this.busy = true;
+      this.setStatus("running");
+    }
+
     for (const item of toChatItems(event)) {
       this.pushItem(item);
     }
