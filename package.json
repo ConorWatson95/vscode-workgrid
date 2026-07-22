@@ -6,6 +6,14 @@
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ConorWatson95/vscode-workgrid.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ConorWatson95/vscode-workgrid/issues"
+  },
+  "homepage": "https://github.com/ConorWatson95/vscode-workgrid#readme",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -334,7 +342,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "vsce package --allow-missing-repository --baseContentUrl https://local.invalid --baseImagesUrl https://local.invalid"
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
