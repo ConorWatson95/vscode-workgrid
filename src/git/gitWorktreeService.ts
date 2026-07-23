@@ -7,7 +7,8 @@ import { Result, ok, err } from "../utilities/result";
 export type WorktreeError =
   | { kind: "git"; error: GitError }
   | { kind: "validation"; message: string }
-  | { kind: "dirty"; message: string };
+  | { kind: "dirty"; message: string }
+  | { kind: "unmerged"; message: string };
 
 function gitErr(error: GitError): Result<never, WorktreeError> {
   return err({ kind: "git", error });
@@ -137,6 +138,32 @@ export class GitWorktreeService {
     const result = await this.git.run(args, { cwd: repositoryRoot, signal });
     if (!result.ok) return gitErr(result.error);
     return ok(undefined);
+  }
+
+  /**
+   * Deletes a local branch. A safe delete (`-d`) refuses branches with commits
+   * not merged into their upstream/HEAD, surfaced as an `unmerged` error so the
+   * caller can offer a forced delete (`-D`). The branch must not be checked out
+   * in any worktree — remove the worktree first.
+   */
+  async deleteBranch(
+    repositoryRoot: string,
+    branchName: string,
+    options: { force?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<Result<void, WorktreeError>> {
+    const result = await this.git.run(
+      ["branch", options.force ? "-D" : "-d", branchName],
+      { cwd: repositoryRoot, signal },
+    );
+    if (result.ok) return ok(undefined);
+    if (!options.force && /not fully merged/i.test(result.error.stderr)) {
+      return err({
+        kind: "unmerged",
+        message: `Branch "${branchName}" has commits not merged elsewhere.`,
+      });
+    }
+    return gitErr(result.error);
   }
 
   /** Checks whether a local branch already exists. */

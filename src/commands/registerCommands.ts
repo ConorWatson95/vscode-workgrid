@@ -231,23 +231,26 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   if (!task) return;
 
   const live = await ctx.service.getLiveState(task);
-  let force = false;
-  if (live.isDirty) {
-    const choice = await vscode.window.showWarningMessage(
-      `"${task.name}" has ${live.changedFileCount} uncommitted change(s). Removing the worktree will discard them.`,
-      { modal: true },
-      "Remove Anyway",
-    );
-    if (choice !== "Remove Anyway") return;
-    force = true;
-  } else {
-    const choice = await vscode.window.showWarningMessage(
-      `Remove worktree for "${task.name}"? The branch "${task.branchName}" is kept.`,
-      { modal: true },
-      "Remove",
-    );
-    if (choice !== "Remove") return;
-  }
+  const keepBranch = "Remove worktree";
+  const withBranch = "Remove worktree + branch";
+
+  // Offer branch deletion as an extra choice in the confirmation box.
+  const choice = live.isDirty
+    ? await vscode.window.showWarningMessage(
+        `"${task.name}" has ${live.changedFileCount} uncommitted change(s). Removing the worktree will discard them.`,
+        { modal: true, detail: `Branch: ${task.branchName}` },
+        keepBranch,
+        withBranch,
+      )
+    : await vscode.window.showWarningMessage(
+        `Remove worktree for "${task.name}"?`,
+        { modal: true, detail: `Branch: ${task.branchName}` },
+        keepBranch,
+        withBranch,
+      );
+  if (choice !== keepBranch && choice !== withBranch) return;
+  const force = live.isDirty;
+  const deleteBranch = choice === withBranch;
 
   // Preserve Claude history before the worktree (and its transcripts) vanish.
   const archived = ctx.archive.archiveWorktree(os.homedir(), task.worktreePath, task.id);
@@ -272,10 +275,48 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
       result.error.kind === "worktree" && "error" in result.error
         ? describeWorktreeError(result.error.error)
         : "Failed to remove task workspace.";
-    void vscode.window.showErrorMessage(message);
+    // The git worktree removal failed (e.g. a locked file on Windows). Offer to
+    // stop tracking the task anyway so it doesn't linger in the list.
+    const pick = await vscode.window.showErrorMessage(
+      `${message}`,
+      { modal: true, detail: "The worktree folder may still exist on disk. You can stop tracking this task here and remove the folder manually." },
+      "Untrack task anyway",
+    );
+    if (pick === "Untrack task anyway") {
+      await ctx.repository.delete(task.id);
+      ctx.tree.refresh();
+    }
     return;
   }
+
+  if (deleteBranch) {
+    await deleteTaskBranch(ctx, task);
+  }
   ctx.tree.refresh();
+}
+
+/**
+ * Deletes a removed task's branch, prompting for a forced delete when it holds
+ * commits not merged elsewhere. Non-fatal: the worktree is already gone.
+ */
+async function deleteTaskBranch(ctx: CommandContext, task: TaskWorkspace): Promise<void> {
+  let res = await ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: false });
+  if (!res.ok && res.error.kind === "unmerged") {
+    const choice = await vscode.window.showWarningMessage(
+      `Branch "${task.branchName}" has commits not merged elsewhere. Delete it anyway?`,
+      { modal: true, detail: "These commits will be lost." },
+      "Delete Branch",
+    );
+    if (choice !== "Delete Branch") return;
+    res = await ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: true });
+  }
+  if (!res.ok) {
+    void vscode.window.showErrorMessage(
+      `Worktree removed, but branch "${task.branchName}" could not be deleted: ${describeWorktreeError(res.error)}`,
+    );
+    return;
+  }
+  ctx.logger.info(`Deleted branch "${task.branchName}".`);
 }
 
 async function launchAgentCommand(ctx: CommandContext, arg: unknown): Promise<void> {
@@ -499,6 +540,7 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
 function describeWorktreeError(error: unknown): string {
   const e = error as { kind?: string; message?: string; error?: { message?: string } };
   if (e?.kind === "dirty" && e.message) return e.message;
+  if (e?.kind === "unmerged" && e.message) return e.message;
   if (e?.kind === "validation" && e.message) return e.message;
   if (e?.error?.message) return `Git error: ${e.error.message}`;
   return "Failed to remove task workspace.";

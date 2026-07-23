@@ -127,7 +127,7 @@ function describeCreateError(error: ServiceError): string {
     return error.message;
   }
   const inner = error.error;
-  if (inner.kind === "validation" || inner.kind === "dirty") {
+  if (inner.kind === "validation" || inner.kind === "dirty" || inner.kind === "unmerged") {
     return inner.message;
   }
   return `Git error: ${inner.error.message}`;
