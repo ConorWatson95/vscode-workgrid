@@ -215,15 +215,15 @@ export class ClaudeStreamSession {
     }
   }
 
-  /** Emits a transcript note confirming a `/compact` and resets the token gauge. */
+  /** Emits a transcript note confirming a `/compact`. */
   private announceCompaction(preTokens: number | undefined): void {
     if (!this.compacting) return;
     this.compacting = false;
     const before = preTokens ?? this.contextTokens;
     const freed = before > 0 ? ` — freed ~${Math.round(before / 1000)}k tokens` : "";
     this.pushItem({ kind: "system", text: `Context compacted${freed}.` });
-    this.contextTokens = 0;
-    this.emitter.emit("tokens", 0);
+    // Leave the context gauge showing its last value; the next turn's usage
+    // refreshes it to the compacted size. Zeroing it here would hide the chip.
   }
 
   private pushItem(item: ChatItem): void {
