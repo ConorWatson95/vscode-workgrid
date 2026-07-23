@@ -11,6 +11,7 @@ import {
   isTurnComplete,
   encodeUserMessage,
   contextTokensOf,
+  compactInfoOf,
 } from "./streamJson";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -52,6 +53,8 @@ export class ClaudeStreamSession {
   busy = false;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
+  /** True between issuing `/compact` and seeing its result, for feedback. */
+  private compacting = false;
 
   constructor(
     private readonly options: StreamSessionOptions,
@@ -146,6 +149,7 @@ export class ClaudeStreamSession {
 
   /** Asks Claude to compact the conversation context. */
   compact(): void {
+    this.compacting = true;
     this.send("/compact");
   }
 
@@ -176,6 +180,14 @@ export class ClaudeStreamSession {
     const sid = sessionIdOf(event);
     if (sid) this.sessionId = sid;
 
+    // A compaction boundary: confirm it and drop the context indicator — the
+    // next turn's usage repopulates it with the compacted size.
+    const compact = compactInfoOf(event);
+    if (compact) {
+      this.announceCompaction(compact.preTokens);
+      return;
+    }
+
     // Any assistant/tool activity means Claude is working — flip back to
     // "running" even if a previous turn just completed (e.g. a queued
     // follow-up message is now being processed).
@@ -195,9 +207,23 @@ export class ClaudeStreamSession {
     }
 
     if (isTurnComplete(event)) {
+      // Fallback: some CLI builds don't emit a compact_boundary event, so
+      // confirm the compaction here if one is still pending.
+      if (this.compacting) this.announceCompaction(undefined);
       this.busy = false;
       this.setStatus("waiting");
     }
+  }
+
+  /** Emits a transcript note confirming a `/compact` and resets the token gauge. */
+  private announceCompaction(preTokens: number | undefined): void {
+    if (!this.compacting) return;
+    this.compacting = false;
+    const before = preTokens ?? this.contextTokens;
+    const freed = before > 0 ? ` — freed ~${Math.round(before / 1000)}k tokens` : "";
+    this.pushItem({ kind: "system", text: `Context compacted${freed}.` });
+    this.contextTokens = 0;
+    this.emitter.emit("tokens", 0);
   }
 
   private pushItem(item: ChatItem): void {

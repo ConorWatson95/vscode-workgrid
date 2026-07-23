@@ -7,7 +7,23 @@ import {
   summariseToolInput,
   encodeUserMessage,
   contextTokensOf,
+  compactInfoOf,
 } from "./streamJson";
+
+describe("compactInfoOf", () => {
+  it("recognises a compact_boundary and reads pre_tokens", () => {
+    const event = {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { pre_tokens: 52000, trigger: "manual" },
+    };
+    expect(compactInfoOf(event)).toEqual({ preTokens: 52000 });
+  });
+  it("returns undefined for non-compaction events", () => {
+    expect(compactInfoOf({ type: "system", subtype: "init" })).toBeUndefined();
+    expect(compactInfoOf({ type: "assistant" })).toBeUndefined();
+  });
+});
 
 describe("contextTokensOf", () => {
   it("sums input, cache-read and cache-creation tokens from a message", () => {

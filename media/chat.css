@@ -171,6 +171,18 @@ details.tool-result pre { white-space: pre-wrap; margin: 4px 0 0; opacity: 0.9; 
 .tool-result.error summary, .result.error { color: var(--vscode-errorForeground); }
 .result { font-size: 0.9em; opacity: 0.85; margin: 6px 0; }
 
+/* System note (e.g. compaction confirmation) — centred, quiet, with a rule. */
+.system-note {
+  align-self: center;
+  text-align: center;
+  font-size: 0.8em;
+  color: var(--vscode-descriptionForeground);
+  margin: 10px auto;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgba(127,127,127,0.1);
+}
+
 /* Typing indicator */
 #typing { display: none; padding: 0 var(--gap) 8px; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
 #typing.on { display: flex; align-items: center; gap: 6px; }

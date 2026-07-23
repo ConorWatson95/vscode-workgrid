@@ -41,6 +41,8 @@ interface StreamEvent {
   /** Synthetic/meta entries (slash-command expansions, caveats) — not shown. */
   isMeta?: boolean;
   usage?: Usage;
+  /** Present on a system/compact_boundary event emitted after `/compact`. */
+  compact_metadata?: { pre_tokens?: number; trigger?: string };
   message?: {
     role?: string;
     content?: ContentBlock[] | string;
@@ -81,6 +83,18 @@ export function parseStreamLine(line: string): StreamEvent | null {
 export function sessionIdOf(event: StreamEvent): string | undefined {
   if (event.type === "system" && event.subtype === "init") {
     return event.session_id;
+  }
+  return undefined;
+}
+
+/**
+ * Recognises the `system`/`compact_boundary` event Claude emits after a
+ * `/compact`. Returns the pre-compaction context size (if reported), else
+ * undefined for non-compaction events.
+ */
+export function compactInfoOf(event: StreamEvent): { preTokens?: number } | undefined {
+  if (event.type === "system" && event.subtype === "compact_boundary") {
+    return { preTokens: event.compact_metadata?.pre_tokens };
   }
   return undefined;
 }
