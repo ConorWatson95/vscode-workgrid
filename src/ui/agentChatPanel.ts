@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { ClaudeStreamSession } from "../agents/claudeStreamSession";
 import { ChatItem } from "../agents/streamJson";
 import { AgentSessionStatus } from "../domain/agentSession";
@@ -26,6 +27,10 @@ export interface ChatPanelOptions {
   provider: ProviderVisual;
   completions: { slash: string[]; files: string[] };
   controller: ChatController;
+  /** Worktree root, used to scope the Attach-file picker and @-mention paths. */
+  worktreePath: string;
+  /** Prompt to compact once context exceeds this many tokens (0 = never). */
+  compactThreshold: number;
   /** When set, the panel opens read-only showing these items (archived view). */
   initialReadOnly?: { title: string; items: ChatItem[] };
 }
@@ -45,6 +50,8 @@ export class AgentChatPanel {
     void this.panel.webview.postMessage({ type: "item", item });
   private readonly onStatus = (status: AgentSessionStatus) =>
     void this.panel.webview.postMessage({ type: "status", status, busy: this.session?.busy ?? false });
+  private readonly onTokens = (tokens: number) =>
+    void this.panel.webview.postMessage({ type: "tokens", tokens });
 
   static show(
     taskId: string,
@@ -111,11 +118,13 @@ export class AgentChatPanel {
     this.session = session;
     session.on("item", this.onItem);
     session.on("status", this.onStatus);
+    session.on("tokens", this.onTokens);
   }
 
   private unbind(): void {
     this.session?.off("item", this.onItem);
     this.session?.off("status", this.onStatus);
+    this.session?.off("tokens", this.onTokens);
   }
 
   /** Swaps in a new live session and refreshes the view. */
@@ -136,6 +145,12 @@ export class AgentChatPanel {
         break;
       case "stop":
         this.session?.stop();
+        break;
+      case "compact":
+        this.session?.compact();
+        break;
+      case "attach":
+        await this.attachFiles();
         break;
       case "setMode": {
         if (!msg.mode) break;
@@ -182,7 +197,26 @@ export class AgentChatPanel {
       busy: this.session?.busy ?? false,
       currentMode: this.options.controller.currentMode(),
       readOnly: this.readOnly,
+      tokens: this.session?.contextTokens ?? 0,
+      compactThreshold: this.options.compactThreshold,
     });
+  }
+
+  /** Opens a file picker in the worktree and inserts @-mention references. */
+  private async attachFiles(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      defaultUri: vscode.Uri.file(this.options.worktreePath),
+      openLabel: "Attach to context",
+      title: "Attach files to Claude's context",
+    });
+    if (!uris || uris.length === 0) return;
+    const refs = uris.map((u) => {
+      const rel = path.relative(this.options.worktreePath, u.fsPath).replace(/\\/g, "/");
+      // Files outside the worktree fall back to an absolute path.
+      return "@" + (rel && !rel.startsWith("..") ? rel : u.fsPath.replace(/\\/g, "/"));
+    });
+    void this.panel.webview.postMessage({ type: "insert", text: refs.join(" ") + " " });
   }
 
   private render(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -214,12 +248,16 @@ export class AgentChatPanel {
       <option value="bypassPermissions">Auto</option>
     </select>
     <button id="history" class="ghost" title="Session history">History</button>
+    <span id="tokens" class="tokens" title="Approximate context size"></span>
     <span id="pill" class="pill"><span class="dot"></span><span id="pill-label">Starting</span></span>
   </div>
+  <div id="compact-banner"><span id="compact-text"></span><button id="compact-now">Compact now</button></div>
   <div id="log"></div>
   <div id="typing"><span class="d"></span><span class="d"></span><span class="d"></span> Claude is working…</div>
   <div id="composer">
+    <button id="attach" class="icon" title="Attach files to context">＋</button>
     <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
+    <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
     <button id="send">Send</button>
     <button id="stop">Stop</button>
   </div>

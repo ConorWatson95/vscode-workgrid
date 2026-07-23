@@ -6,7 +6,21 @@ import {
   isTurnComplete,
   summariseToolInput,
   encodeUserMessage,
+  contextTokensOf,
 } from "./streamJson";
+
+describe("contextTokensOf", () => {
+  it("sums input, cache-read and cache-creation tokens from a message", () => {
+    const event = { message: { usage: { input_tokens: 2, cache_read_input_tokens: 1000, cache_creation_input_tokens: 32000 } } };
+    expect(contextTokensOf(event)).toBe(33002);
+  });
+  it("reads top-level usage on result events", () => {
+    expect(contextTokensOf({ usage: { input_tokens: 5, cache_read_input_tokens: 40000 } })).toBe(40005);
+  });
+  it("returns undefined when there is no usage", () => {
+    expect(contextTokensOf({ message: {} })).toBeUndefined();
+  });
+});
 
 describe("parseStreamLine", () => {
   it("parses a JSON line", () => {

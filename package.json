@@ -319,6 +319,12 @@
           "scope": "resource",
           "markdownDescription": "Show best-effort live activity (working / awaiting input) for **native**-mode tasks by watching Claude Code's session transcripts. This reads an undocumented on-disk layout and may lag or miss; disable to only track built-in chat sessions."
         },
+        "taskWorkspaces.compactPromptThreshold": {
+          "type": "number",
+          "default": 150000,
+          "scope": "resource",
+          "markdownDescription": "When a chat session's context grows beyond this many tokens, the panel prompts you to compact it. Set to `0` to disable the prompt."
+        },
         "taskWorkspaces.permissionMode": {
           "type": "string",
           "enum": ["default", "acceptEdits", "plan", "bypassPermissions"],

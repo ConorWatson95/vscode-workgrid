@@ -25,6 +25,13 @@ interface ContentBlock {
   is_error?: boolean;
 }
 
+interface Usage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 interface StreamEvent {
   type?: string;
   subtype?: string;
@@ -33,10 +40,30 @@ interface StreamEvent {
   is_error?: boolean;
   /** Synthetic/meta entries (slash-command expansions, caveats) — not shown. */
   isMeta?: boolean;
+  usage?: Usage;
   message?: {
     role?: string;
     content?: ContentBlock[] | string;
+    usage?: Usage;
   };
+}
+
+/**
+ * Approximate size of the model's current context from an event's usage: new
+ * input + cached (read) + cache-creation input tokens. Returns undefined when
+ * the event carries no usage.
+ */
+export function contextTokensOf(event: {
+  usage?: Usage;
+  message?: { usage?: Usage };
+}): number | undefined {
+  const u = event.message?.usage ?? event.usage;
+  if (!u) return undefined;
+  const total =
+    (u.input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0);
+  return total > 0 ? total : undefined;
 }
 
 /** Parses a single NDJSON line; returns null for blank or malformed lines. */

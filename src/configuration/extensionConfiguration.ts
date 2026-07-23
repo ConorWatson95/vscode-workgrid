@@ -52,4 +52,8 @@ export class ExtensionConfiguration {
   trackNativeActivity(scope?: vscode.Uri): boolean {
     return this.config(scope).get<boolean>("trackNativeActivity", true);
   }
+
+  compactPromptThreshold(scope?: vscode.Uri): number {
+    return this.config(scope).get<number>("compactPromptThreshold", 150000);
+  }
 }

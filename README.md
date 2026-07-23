@@ -55,7 +55,12 @@ inline code), shows tool activity as cards, and includes:
   (project + user, namespaced as `/dir:cmd`) plus common built-ins.
 - **`@` file mentions** — autocomplete over the worktree's tracked/untracked
   files (`git ls-files`).
-- **Input history** (Up/Down), auto-growing composer, Stop button.
+- **Attach files** (＋) — pick files from the worktree to add to Claude's
+  context (inserted as `@` references).
+- **Compact** — a button (and an over-threshold banner) to compact the
+  conversation via `/compact`; a header **context-size** indicator warns when it
+  grows past `taskWorkspaces.compactPromptThreshold` (default 150k tokens).
+- **Input history** (Up/Down), auto-growing composer, mid-turn sending, Stop.
 - **Provider accent theming** — the panel is colour-coded per provider
   (Claude = clay), so multiple providers stay visually distinct. New providers
   are one entry in `agentProviderMeta.ts`.

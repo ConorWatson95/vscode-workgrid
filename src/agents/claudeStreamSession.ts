@@ -10,6 +10,7 @@ import {
   sessionIdOf,
   isTurnComplete,
   encodeUserMessage,
+  contextTokensOf,
 } from "./streamJson";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -27,6 +28,7 @@ export interface StreamSessionOptions {
 type SessionEvents = {
   item: [ChatItem];
   status: [AgentSessionStatus];
+  tokens: [number];
 };
 
 /**
@@ -48,6 +50,8 @@ export class ClaudeStreamSession {
   sessionId?: string;
   /** True while a turn is in flight (input should be disabled). */
   busy = false;
+  /** Approximate current context size in tokens (from the latest usage). */
+  contextTokens = 0;
 
   constructor(
     private readonly options: StreamSessionOptions,
@@ -140,6 +144,11 @@ export class ClaudeStreamSession {
     this.child.stdin.write(encodeUserMessage(trimmed));
   }
 
+  /** Asks Claude to compact the conversation context. */
+  compact(): void {
+    this.send("/compact");
+  }
+
   /** Terminates the session process. */
   stop(): void {
     if (this.child && this.child.exitCode === null) {
@@ -173,6 +182,12 @@ export class ClaudeStreamSession {
     if (event.type === "assistant" || event.type === "user") {
       this.busy = true;
       this.setStatus("running");
+    }
+
+    const tokens = contextTokensOf(event);
+    if (tokens !== undefined && tokens !== this.contextTokens) {
+      this.contextTokens = tokens;
+      this.emitter.emit("tokens", tokens);
     }
 
     for (const item of toChatItems(event)) {

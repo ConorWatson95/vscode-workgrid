@@ -100,6 +100,8 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
       provider: providerVisual("claude-chat"),
       completions: { slash: [], files: [] },
       controller: readOnlyController,
+      worktreePath: "",
+      compactThreshold: 0,
       initialReadOnly: { title: `${taskPick.rec.name} · ${sessPick.session.title}`, items },
     },
   );
@@ -416,6 +418,8 @@ async function buildChatOptions(
     provider: providerVisual("claude-chat"),
     completions: { slash, files },
     controller: buildController(ctx, task),
+    worktreePath: task.worktreePath,
+    compactThreshold: ctx.configuration.compactPromptThreshold(ctx.repositoryUri()),
   };
 }
 
