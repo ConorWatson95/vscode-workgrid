@@ -54,6 +54,6 @@ export class ExtensionConfiguration {
   }
 
   compactPromptThreshold(scope?: vscode.Uri): number {
-    return this.config(scope).get<number>("compactPromptThreshold", 150000);
+    return this.config(scope).get<number>("compactPromptThreshold", 120000);
   }
 }

@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -321,7 +321,7 @@
         },
         "taskWorkspaces.compactPromptThreshold": {
           "type": "number",
-          "default": 150000,
+          "default": 120000,
           "scope": "resource",
           "markdownDescription": "When a chat session's context grows beyond this many tokens, the panel prompts you to compact it. Set to `0` to disable the prompt."
         },

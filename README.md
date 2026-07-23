@@ -59,7 +59,7 @@ inline code), shows tool activity as cards, and includes:
   context (inserted as `@` references).
 - **Compact** — a button (and an over-threshold banner) to compact the
   conversation via `/compact`; a header **context-size** indicator warns when it
-  grows past `taskWorkspaces.compactPromptThreshold` (default 150k tokens).
+  grows past `taskWorkspaces.compactPromptThreshold` (default 120k tokens).
 - **Input history** (Up/Down), auto-growing composer, mid-turn sending, Stop.
 - **Provider accent theming** — the panel is colour-coded per provider
   (Claude = clay), so multiple providers stay visually distinct. New providers
