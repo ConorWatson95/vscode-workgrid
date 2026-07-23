@@ -248,7 +248,8 @@ export class AgentChatPanel {
       <option value="bypassPermissions">Auto</option>
     </select>
     <button id="history" class="ghost" title="Session history">History</button>
-    <span id="tokens" class="tokens" title="Approximate context size"></span>
+    <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
+    <span id="tokens" class="tokens" title="Approximate context size (input + cache)"></span>
     <span id="pill" class="pill"><span class="dot"></span><span id="pill-label">Starting</span></span>
   </div>
   <div id="compact-banner"><span id="compact-text"></span><button id="compact-now">Compact now</button></div>
@@ -257,7 +258,6 @@ export class AgentChatPanel {
   <div id="composer">
     <button id="attach" class="icon" title="Attach files to context">＋</button>
     <textarea id="input" rows="1" placeholder="Message Claude…"></textarea>
-    <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
     <button id="send">Send</button>
     <button id="stop">Stop</button>
   </div>

@@ -27,7 +27,8 @@ body {
   background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }
 #badge { font-size: 1.05em; line-height: 1; }
-#title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#title { font-weight: 600; flex: 1; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#header > button.ghost { flex: none; }
 #mode {
   font-family: inherit; font-size: 0.85em;
   color: var(--vscode-dropdown-foreground);
@@ -49,8 +50,18 @@ button.icon {
 }
 button.icon:hover { background: var(--vscode-toolbar-hoverBackground, rgba(127,127,127,0.15)); }
 
-.tokens { font-size: 0.78em; color: var(--vscode-descriptionForeground); white-space: nowrap; }
-.tokens.warn { color: var(--vscode-editorWarning-foreground, #e0b341); font-weight: 600; }
+.tokens {
+  font-size: 0.75em; color: var(--vscode-descriptionForeground);
+  white-space: nowrap; flex: none;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--vscode-panel-border);
+  background: rgba(127,127,127,0.08);
+}
+.tokens:empty { display: none; }
+.tokens.warn {
+  color: var(--vscode-editorWarning-foreground, #e0b341); font-weight: 600;
+  border-color: var(--vscode-editorWarning-foreground, #e0b341);
+}
 
 /* Compact prompt banner */
 #compact-banner {
