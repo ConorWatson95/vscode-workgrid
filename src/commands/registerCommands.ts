@@ -13,7 +13,7 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
 import { scanSlashCommands } from "../agents/slashCommands";
-import { loadTranscriptItems, listSessions } from "../agents/transcriptReader";
+import { loadTranscriptItems, listSessions, transcriptExists } from "../agents/transcriptReader";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -411,9 +411,13 @@ async function startChatSession(
   }
   if (existing) ctx.sessions.stop(task.id); // clear a dead session before restarting
 
-  // Continue a prior Claude session for this task if we have one.
-  const resumeSessionId =
+  // Continue a prior Claude session for this task if one was persisted to disk.
+  // Resuming an id with no transcript fails permanently, so only pass it when
+  // the transcript actually exists.
+  const priorSessionId =
     task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined;
+  const resumeSessionId =
+    priorSessionId && transcriptExists(os.homedir(), priorSessionId) ? priorSessionId : undefined;
 
   // No initial prompt is required — the panel opens ready and the user types
   // the first message there.
@@ -472,11 +476,19 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
   const startResumed = (resumeSessionId: string | undefined) => {
     const prior = ctx.sessions.get(task.id);
     const carried = prior ? [...prior.items] : [];
+    // Only resume a session that was actually persisted. Resuming an id with no
+    // transcript on disk fails permanently ("No conversation found"), which is
+    // exactly what happens when the very first turn errored before any save —
+    // so fall back to a fresh session, carrying the in-memory transcript.
+    const resumable =
+      resumeSessionId && transcriptExists(os.homedir(), resumeSessionId)
+        ? resumeSessionId
+        : undefined;
     const session = ctx.sessions.create(task.id, {
       worktreePath: task.worktreePath,
       permissionMode: mode,
       addDirs: [task.repositoryRoot],
-      resumeSessionId,
+      resumeSessionId: resumable,
     });
     if (session.items.length === 0) {
       const fromDisk = resumeSessionId ? loadTranscriptItems(os.homedir(), resumeSessionId) : [];

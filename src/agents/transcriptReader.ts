@@ -93,6 +93,11 @@ export function listSessions(
   return summaries.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, max);
 }
 
+/** True when a transcript file exists on disk for the given session id. */
+export function transcriptExists(homeDir: string, sessionId: string): boolean {
+  return findTranscript(homeDir, sessionId) !== undefined;
+}
+
 function findTranscript(homeDir: string, sessionId: string): string | undefined {
   const projects = path.join(homeDir, ".claude", "projects");
   let dirs: string[];
