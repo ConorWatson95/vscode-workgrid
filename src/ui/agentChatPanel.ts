@@ -17,6 +17,8 @@ export interface ChatController {
   currentMode(): string;
   /** Restart at a new permission mode; returns the new session, or undefined if unsupported (read-only). */
   setMode(mode: string): ClaudeStreamSession | undefined;
+  /** Resume the current session after its process has ended, or undefined if unsupported (read-only). */
+  resume(): ClaudeStreamSession | undefined;
   listHistory(): Promise<HistoryEntry[]>;
   openHistory(
     entry: HistoryEntry,
@@ -135,13 +137,33 @@ export class AgentChatPanel {
     this.postInit();
   }
 
+  /**
+   * Sends a user turn. If the session's process has ended (failed/stopped),
+   * transparently resume it first so a crashed or stopped chat can continue
+   * instead of silently swallowing the message.
+   */
+  private sendOrResume(text: string): void {
+    const dead =
+      !this.session ||
+      this.session.status === "failed" ||
+      this.session.status === "stopped";
+    if (dead) {
+      const resumed = this.options.controller.resume();
+      if (!resumed) return;
+      this.attach(resumed);
+      resumed.send(text);
+      return;
+    }
+    this.session?.send(text);
+  }
+
   private async handleMessage(msg: { type: string; text?: string; mode?: string; entry?: HistoryEntry }): Promise<void> {
     switch (msg.type) {
       case "ready":
         this.postInit();
         break;
       case "send":
-        if (msg.text && !this.readOnly) this.session?.send(msg.text);
+        if (msg.text && !this.readOnly) this.sendOrResume(msg.text);
         break;
       case "stop":
         this.session?.stop();

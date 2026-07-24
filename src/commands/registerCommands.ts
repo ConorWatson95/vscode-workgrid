@@ -83,6 +83,7 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
   const readOnlyController: ChatController = {
     currentMode: () => "default",
     setMode: () => undefined,
+    resume: () => undefined,
     listHistory: async () =>
       taskPick.rec.sessions.map((s) => ({ id: s.id, title: s.title, mtimeMs: s.mtimeMs, archived: true })),
     openHistory: async (entry) => {
@@ -496,6 +497,10 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       mode = m as typeof mode;
       // Persist so subsequent chats in this project default to the chosen mode.
       void ctx.configuration.setPermissionMode(mode, ctx.repositoryUri());
+      const current = ctx.sessions.get(task.id);
+      return startResumed(current?.id ?? (task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined));
+    },
+    resume: () => {
       const current = ctx.sessions.get(task.id);
       return startResumed(current?.id ?? (task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined));
     },
