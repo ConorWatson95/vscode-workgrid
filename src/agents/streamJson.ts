@@ -135,10 +135,11 @@ export function toChatItems(
     case "result": {
       const text = typeof event.result === "string" ? event.result : "";
       // The final result text duplicates the last assistant message, so we
-      // surface it only when it is an error.
-      return event.is_error
-        ? [{ kind: "result", text: text || "Session ended with an error.", isError: true }]
-        : [];
+      // surface it only when it is an error. Fall back to the subtype (e.g.
+      // "error_max_turns") so the cause isn't hidden behind a generic string.
+      if (!event.is_error) return [];
+      const detail = text || event.subtype || "Session ended with an error.";
+      return [{ kind: "result", text: detail, isError: true }];
     }
 
     default:

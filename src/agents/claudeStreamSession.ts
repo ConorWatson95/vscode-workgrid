@@ -44,6 +44,8 @@ export class ClaudeStreamSession {
   private child?: ChildProcessWithoutNullStreams;
   private stdoutBuffer = "";
   private readonly emitter = new EventEmitter();
+  /** Rolling tail of recent stderr, surfaced when a turn errors with no detail. */
+  private stderrTail = "";
 
   readonly id: string;
   readonly items: ChatItem[] = [];
@@ -118,6 +120,8 @@ export class ClaudeStreamSession {
     this.child.stderr.setEncoding("utf8");
     this.child.stderr.on("data", (chunk: string) => {
       this.logger.debug(`claude stderr: ${chunk.trimEnd()}`);
+      // Keep the last ~2KB so an error result can report the underlying cause.
+      this.stderrTail = (this.stderrTail + chunk).slice(-2000);
     });
     this.child.on("error", (error) => {
       this.logger.error("Claude session process error", error);
@@ -150,6 +154,7 @@ export class ClaudeStreamSession {
     this.pushItem({ kind: "user", text: trimmed });
     this.busy = true;
     this.lastTurnErrored = false;
+    this.stderrTail = "";
     this.setStatus("running");
     this.child.stdin.write(encodeUserMessage(trimmed));
   }
@@ -219,7 +224,11 @@ export class ClaudeStreamSession {
       if (this.compacting) this.announceCompaction(undefined);
       // Remember an errored turn so the next send resumes a fresh process
       // rather than writing into a CLI that has stopped responding.
-      if (event.type === "result" && event.is_error) this.lastTurnErrored = true;
+      if (event.type === "result" && event.is_error) {
+        this.lastTurnErrored = true;
+        const detail = this.stderrTail.trim();
+        if (detail) this.pushItem({ kind: "tool-result", text: detail, isError: true });
+      }
       this.busy = false;
       this.setStatus("waiting");
     }
