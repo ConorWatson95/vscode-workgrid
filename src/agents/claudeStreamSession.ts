@@ -24,12 +24,16 @@ export interface StreamSessionOptions {
   addDirs?: string[];
   /** Resume this existing Claude session id instead of starting a new one. */
   resumeSessionId?: string;
+  /** Auto-compact once context exceeds this many tokens (0 = never). */
+  autoCompactThreshold?: number;
 }
 
 type SessionEvents = {
   item: [ChatItem];
   status: [AgentSessionStatus];
   tokens: [number];
+  /** Fired when a `/compact` completes; the gauge should show a placeholder. */
+  compacted: [];
 };
 
 /**
@@ -231,6 +235,19 @@ export class ClaudeStreamSession {
       }
       this.busy = false;
       this.setStatus("waiting");
+      this.maybeAutoCompact();
+    }
+  }
+
+  /** Auto-issues `/compact` when the context exceeds the configured threshold. */
+  private maybeAutoCompact(): void {
+    const threshold = this.options.autoCompactThreshold ?? 0;
+    if (threshold > 0 && !this.compacting && this.contextTokens > threshold) {
+      this.logger.info(
+        `Auto-compacting: context ${this.contextTokens} > threshold ${threshold}.`,
+      );
+      this.pushItem({ kind: "system", text: "Context over threshold — compacting automatically…" });
+      this.compact();
     }
   }
 
@@ -241,8 +258,12 @@ export class ClaudeStreamSession {
     const before = preTokens ?? this.contextTokens;
     const freed = before > 0 ? ` — freed ~${Math.round(before / 1000)}k tokens` : "";
     this.pushItem({ kind: "system", text: `Context compacted${freed}.` });
-    // Leave the context gauge showing its last value; the next turn's usage
-    // refreshes it to the compacted size. Zeroing it here would hide the chip.
+    // Reset the counter so the next turn's usage (any value) refreshes the
+    // gauge, and signal the panel to show a "compacted" placeholder in the
+    // meantime — otherwise the chip sits on the stale pre-compact number and
+    // looks like the compaction never happened.
+    this.contextTokens = 0;
+    this.emitter.emit("compacted");
   }
 
   private pushItem(item: ChatItem): void {

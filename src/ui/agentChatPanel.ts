@@ -54,6 +54,8 @@ export class AgentChatPanel {
     void this.panel.webview.postMessage({ type: "status", status, busy: this.session?.busy ?? false });
   private readonly onTokens = (tokens: number) =>
     void this.panel.webview.postMessage({ type: "tokens", tokens });
+  private readonly onCompacted = () =>
+    void this.panel.webview.postMessage({ type: "compacted" });
 
   static show(
     taskId: string,
@@ -121,12 +123,14 @@ export class AgentChatPanel {
     session.on("item", this.onItem);
     session.on("status", this.onStatus);
     session.on("tokens", this.onTokens);
+    session.on("compacted", this.onCompacted);
   }
 
   private unbind(): void {
     this.session?.off("item", this.onItem);
     this.session?.off("status", this.onStatus);
     this.session?.off("tokens", this.onTokens);
+    this.session?.off("compacted", this.onCompacted);
   }
 
   /** Swaps in a new live session and refreshes the view. */

@@ -427,6 +427,7 @@ async function startChatSession(
     permissionMode,
     addDirs: [task.repositoryRoot],
     resumeSessionId,
+    autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
   });
 
   // Replay the prior transcript into the panel so history is visible.
@@ -489,6 +490,7 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       permissionMode: mode,
       addDirs: [task.repositoryRoot],
       resumeSessionId: resumable,
+      autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
     });
     if (session.items.length === 0) {
       const fromDisk = resumeSessionId ? loadTranscriptItems(os.homedir(), resumeSessionId) : [];
