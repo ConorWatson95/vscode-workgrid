@@ -51,6 +51,12 @@ export class ClaudeStreamSession {
   sessionId?: string;
   /** True while a turn is in flight (input should be disabled). */
   busy = false;
+  /**
+   * True when the last completed turn ended in an error `result`. The CLI often
+   * stays alive (status "waiting") after such a turn but won't produce useful
+   * output on further input, so the next send should resume a fresh process.
+   */
+  lastTurnErrored = false;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
   /** True between issuing `/compact` and seeing its result, for feedback. */
@@ -143,6 +149,7 @@ export class ClaudeStreamSession {
     }
     this.pushItem({ kind: "user", text: trimmed });
     this.busy = true;
+    this.lastTurnErrored = false;
     this.setStatus("running");
     this.child.stdin.write(encodeUserMessage(trimmed));
   }
@@ -210,6 +217,9 @@ export class ClaudeStreamSession {
       // Fallback: some CLI builds don't emit a compact_boundary event, so
       // confirm the compaction here if one is still pending.
       if (this.compacting) this.announceCompaction(undefined);
+      // Remember an errored turn so the next send resumes a fresh process
+      // rather than writing into a CLI that has stopped responding.
+      if (event.type === "result" && event.is_error) this.lastTurnErrored = true;
       this.busy = false;
       this.setStatus("waiting");
     }

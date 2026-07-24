@@ -146,7 +146,10 @@ export class AgentChatPanel {
     const dead =
       !this.session ||
       this.session.status === "failed" ||
-      this.session.status === "stopped";
+      this.session.status === "stopped" ||
+      // The process may still be "waiting" after an errored turn but won't
+      // respond; resume a fresh one against the same transcript.
+      this.session.lastTurnErrored;
     if (dead) {
       const resumed = this.options.controller.resume();
       if (!resumed) return;
