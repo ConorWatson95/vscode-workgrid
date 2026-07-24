@@ -67,14 +67,38 @@ button.icon:hover { background: var(--vscode-toolbar-hoverBackground, rgba(127,1
 #compact-banner {
   display: none;
   align-items: center; gap: 10px;
-  padding: 8px 12px;
-  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #e0b341) 14%, transparent);
-  border-bottom: 1px solid var(--vscode-panel-border);
-  font-size: 0.85em;
+  padding: 10px 12px;
+  background: var(--vscode-inputValidation-warningBackground,
+    color-mix(in srgb, var(--vscode-editorWarning-foreground, #e0b341) 30%, transparent));
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+  border-bottom: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground, #e0b341));
+  border-left: 4px solid var(--vscode-editorWarning-foreground, #e0b341);
+  font-size: 0.9em; font-weight: 500;
 }
-#compact-banner.on { display: flex; }
+#compact-banner.on { display: flex; animation: banner-attn 0.7s ease-in-out 3; }
+/* Brief glow pulse (3x) so the banner catches the eye when it first appears. */
+@keyframes banner-attn {
+  0%, 100% { box-shadow: none; }
+  50% { box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--vscode-editorWarning-foreground, #e0b341) 22%, transparent); }
+}
+#compact-banner::before {
+  content: "⚠"; font-size: 1.15em; flex: none;
+  color: var(--vscode-editorWarning-foreground, #e0b341);
+}
 #compact-banner #compact-text { flex: 1; }
-#compact-banner button { padding: 4px 10px; font-size: 0.85em; }
+#compact-banner button {
+  padding: 5px 12px; font-size: 0.85em; font-weight: 600; flex: none;
+  background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  border: none; border-radius: 3px; cursor: pointer;
+}
+#compact-banner button:hover { background: var(--vscode-button-hoverBackground); }
+
+/* Gentle pulse on the context chip once it crosses the threshold. */
+@keyframes tokens-warn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.tokens.warn { animation: tokens-warn-pulse 1.6s ease-in-out infinite; }
 
 /* Session history overlay */
 #history-overlay {
