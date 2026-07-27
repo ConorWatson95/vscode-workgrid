@@ -184,6 +184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(PlanUsageViewProvider.viewId, usageView),
+    { dispose: () => usageView.dispose() }, // stops the refresh ticker
   );
 
   // Update the detail view as the tree selection changes.

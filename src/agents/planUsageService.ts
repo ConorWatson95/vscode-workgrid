@@ -2,8 +2,12 @@ import { EventEmitter } from "node:events";
 import { Logger } from "../logging/logger";
 import { PlanUsage, fetchPlanUsage } from "./planUsage";
 
-/** How long a usage snapshot is considered current before a re-probe. */
-const STALE_AFTER_MS = 5 * 60_000;
+/**
+ * How long a usage snapshot is considered current before a re-probe. The view
+ * checks every minute while visible, so this is what actually paces the CLI
+ * spawns. Kept short enough that the panel tracks a working session.
+ */
+const STALE_AFTER_MS = 2 * 60_000;
 
 /**
  * Caches plan usage so the details view can show it without spawning a CLI

@@ -2,6 +2,19 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.12.1
+
+- **Plan usage now actually refreshes on its own.** It only re-probed when the
+  view became visible or when you clicked `refresh`, so leaving the sidebar open
+  left it frozen — including the relative reset labels, which are rendered
+  server-side and so stayed on whatever they said when the view was built. The
+  visible view now ticks every minute, and the snapshot is treated as stale
+  after 2 minutes rather than 5.
+- The tick only runs while the view is visible, and re-renders only when the
+  content actually changed — writing the webview HTML reloads it, which would
+  otherwise collapse any Drivers window you had expanded and flicker once a
+  minute.
+
 ## 0.12.0
 
 - **Added a "Drivers" section beneath plan usage**, showing what the CLI
