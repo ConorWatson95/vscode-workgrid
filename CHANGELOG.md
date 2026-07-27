@@ -2,6 +2,22 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.8.0
+
+- **Plan usage is now always visible in the chat panel and updates live.** The
+  CLI pushes a `rate_limit_event` unprompted on the normal stream, so the header
+  shows the current window (e.g. `5h`), a `resets in 2h 15m` countdown that
+  ticks on its own, and an overage flag — with no polling, no extra turns and no
+  cost. Anything other than `allowed`, or an active overage, is highlighted.
+- **Session cost is shown** alongside it, read from `total_cost_usd` on the
+  turn's result event.
+- **Reordered the task buttons** so Chat comes before the Claude-extension
+  button.
+- **Removed the duplicate "Open Workspace" button** from the task row and
+  context menu — the Claude-extension button already opens the worktree in a new
+  window. The command itself is retained (the create flow and the details view
+  still call it) and remains available from the Command Palette.
+
 ## 0.7.0
 
 - **Sessions are now discovered from `claude agents --json` (query → reuse →

@@ -67,6 +67,8 @@ export class AgentChatPanel {
     void this.panel.webview.postMessage({ type: "compacted" });
   private readonly onModel = (model: string) =>
     void this.panel.webview.postMessage({ type: "model", model });
+  private readonly onUsage = (usage: { rateLimit?: unknown; costUsd?: number }) =>
+    void this.panel.webview.postMessage({ type: "usage", ...usage });
 
   static show(
     taskId: string,
@@ -136,6 +138,7 @@ export class AgentChatPanel {
     session.on("tokens", this.onTokens);
     session.on("compacted", this.onCompacted);
     session.on("model", this.onModel);
+    session.on("usage", this.onUsage);
   }
 
   private unbind(): void {
@@ -144,6 +147,7 @@ export class AgentChatPanel {
     this.session?.off("tokens", this.onTokens);
     this.session?.off("compacted", this.onCompacted);
     this.session?.off("model", this.onModel);
+    this.session?.off("usage", this.onUsage);
   }
 
   /** Swaps in a new live session and refreshes the view. */
@@ -264,6 +268,8 @@ export class AgentChatPanel {
       currentMode: this.options.controller.currentMode(),
       currentModel: this.options.controller.currentModel(),
       activeModel: this.session?.activeModel ?? "",
+      rateLimit: this.session?.rateLimit,
+      costUsd: this.session?.costUsd,
       readOnly: this.readOnly,
       tokens: this.session?.contextTokens ?? 0,
       compactThreshold: this.options.compactThreshold,
@@ -328,6 +334,8 @@ export class AgentChatPanel {
     <button id="new-session" class="ghost" title="Abandon this conversation and start a fresh session">New</button>
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
+    <span id="usage" class="tokens" title="Plan usage"></span>
+    <span id="cost" class="tokens" title="Cost of this session so far"></span>
     <span id="active-model" class="tokens" title="Model this session is actually running on"></span>
     <span id="tokens" class="tokens" title="Approximate context size (input + cache)"></span>
     <span id="pill" class="pill"><span class="dot"></span><span id="pill-label">Starting</span></span>

@@ -10,6 +10,9 @@ import {
   sessionIdOf,
   modelOf,
   shortModelName,
+  rateLimitOf,
+  costUsdOf,
+  RateLimitStatus,
   isTurnComplete,
   encodeUserMessage,
   contextTokensOf,
@@ -40,6 +43,8 @@ type SessionEvents = {
   compacted: [];
   /** The model the CLI resolved for this session, for display. */
   model: [string];
+  /** Plan usage / rate-limit state, pushed by the CLI as it changes. */
+  usage: [{ rateLimit?: RateLimitStatus; costUsd?: number }];
 };
 
 /**
@@ -73,6 +78,10 @@ export class ClaudeStreamSession {
   contextTokens = 0;
   /** Model the CLI reported for this session (short form), once known. */
   activeModel?: string;
+  /** Latest plan usage / rate-limit state reported by the CLI. */
+  rateLimit?: RateLimitStatus;
+  /** Cumulative cost of this session in USD. */
+  costUsd?: number;
   /** True between issuing `/compact` and seeing its result, for feedback. */
   private compacting = false;
 
@@ -228,6 +237,16 @@ export class ClaudeStreamSession {
     if (event.type === "assistant" || event.type === "user") {
       this.busy = true;
       this.setStatus("running");
+    }
+
+    // Usage arrives unprompted (rate_limit_event) or on turn completion
+    // (total_cost_usd), so the panel can show it live without polling.
+    const rateLimit = rateLimitOf(event);
+    const costUsd = costUsdOf(event);
+    if (rateLimit || costUsd !== undefined) {
+      if (rateLimit) this.rateLimit = rateLimit;
+      if (costUsd !== undefined) this.costUsd = costUsd;
+      this.emitter.emit("usage", { rateLimit: this.rateLimit, costUsd: this.costUsd });
     }
 
     const tokens = contextTokensOf(event);

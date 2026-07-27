@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -183,12 +183,12 @@
       ],
       "view/item/context": [
         {
-          "command": "taskWorkspaces.startNative",
+          "command": "taskWorkspaces.startChat",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "inline@1"
         },
         {
-          "command": "taskWorkspaces.startChat",
+          "command": "taskWorkspaces.startNative",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "inline@2"
         },
@@ -196,11 +196,6 @@
           "command": "taskWorkspaces.startTerminal",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "inline@3"
-        },
-        {
-          "command": "taskWorkspaces.open",
-          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
-          "group": "inline@4"
         },
         {
           "command": "taskWorkspaces.adopt",
@@ -211,11 +206,6 @@
           "command": "taskWorkspaces.detail",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "1_open@1"
-        },
-        {
-          "command": "taskWorkspaces.open",
-          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
-          "group": "1_open@2"
         },
         {
           "command": "taskWorkspaces.showDiff",

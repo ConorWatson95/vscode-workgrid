@@ -45,6 +45,17 @@ interface StreamEvent {
   usage?: Usage;
   /** Present on a system/compact_boundary event emitted after `/compact`. */
   compact_metadata?: { pre_tokens?: number; trigger?: string };
+  /** Present on a `rate_limit_event`, pushed unprompted as limits change. */
+  rate_limit_info?: {
+    status?: string;
+    /** Epoch *seconds* (not ms) when the current window resets. */
+    resetsAt?: number;
+    rateLimitType?: string;
+    overageStatus?: string;
+    isUsingOverage?: boolean;
+  };
+  /** Cumulative session cost, on the `result` event. */
+  total_cost_usd?: number;
   message?: {
     role?: string;
     content?: ContentBlock[] | string;
@@ -99,6 +110,40 @@ export function modelOf(event: StreamEvent): string | undefined {
     return event.model;
   }
   return undefined;
+}
+
+/** Plan usage / rate-limit state, as the UI needs it. */
+export interface RateLimitStatus {
+  /** e.g. "allowed", "rejected". */
+  status: string;
+  /** e.g. "five_hour", "weekly". */
+  windowType: string;
+  /** Epoch milliseconds when the window resets, or undefined if unreported. */
+  resetsAtMs?: number;
+  isUsingOverage: boolean;
+}
+
+/**
+ * Reads the `rate_limit_event` the CLI pushes as usage changes. This arrives
+ * unprompted on the normal stream, so usage can be shown live without polling
+ * or spending a turn on `/usage`.
+ */
+export function rateLimitOf(event: StreamEvent): RateLimitStatus | undefined {
+  if (event.type !== "rate_limit_event" || !event.rate_limit_info) return undefined;
+  const info = event.rate_limit_info;
+  return {
+    status: info.status ?? "unknown",
+    windowType: info.rateLimitType ?? "unknown",
+    // The CLI reports seconds; the UI works in milliseconds.
+    resetsAtMs: typeof info.resetsAt === "number" ? info.resetsAt * 1000 : undefined,
+    isUsingOverage: info.isUsingOverage === true,
+  };
+}
+
+/** Cumulative session cost in USD, reported on the `result` event. */
+export function costUsdOf(event: StreamEvent): number | undefined {
+  if (event.type !== "result") return undefined;
+  return typeof event.total_cost_usd === "number" ? event.total_cost_usd : undefined;
 }
 
 /** Trims the vendor prefix for display: `claude-opus-5[1m]` -> `opus-5[1m]`. */

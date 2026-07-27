@@ -5,6 +5,8 @@ import {
   sessionIdOf,
   modelOf,
   shortModelName,
+  rateLimitOf,
+  costUsdOf,
   isTurnComplete,
   summariseToolInput,
   encodeUserMessage,
@@ -79,6 +81,59 @@ describe("modelOf / shortModelName", () => {
     expect(shortModelName("claude-haiku-4-5-20251001")).toBe("haiku-4-5-20251001");
     // Leaves an already-short or unexpected name alone.
     expect(shortModelName("opus-5")).toBe("opus-5");
+  });
+});
+
+describe("rateLimitOf / costUsdOf", () => {
+  // Payload copied verbatim from a real stream.
+  const event = {
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      resetsAt: 1785150000,
+      rateLimitType: "five_hour",
+      overageStatus: "allowed",
+      isUsingOverage: false,
+    },
+  };
+
+  it("reads a real rate_limit_event", () => {
+    expect(rateLimitOf(event)).toEqual({
+      status: "allowed",
+      windowType: "five_hour",
+      // Converted from the CLI's epoch *seconds* to milliseconds.
+      resetsAtMs: 1785150000_000,
+      isUsingOverage: false,
+    });
+  });
+
+  it("ignores other event types and missing info", () => {
+    expect(rateLimitOf({ type: "assistant" })).toBeUndefined();
+    expect(rateLimitOf({ type: "rate_limit_event" })).toBeUndefined();
+  });
+
+  it("defaults unreported fields rather than throwing", () => {
+    const r = rateLimitOf({ type: "rate_limit_event", rate_limit_info: {} });
+    expect(r).toEqual({
+      status: "unknown",
+      windowType: "unknown",
+      resetsAtMs: undefined,
+      isUsingOverage: false,
+    });
+  });
+
+  it("flags overage", () => {
+    const r = rateLimitOf({
+      type: "rate_limit_event",
+      rate_limit_info: { status: "allowed", isUsingOverage: true },
+    });
+    expect(r?.isUsingOverage).toBe(true);
+  });
+
+  it("reads cost only from result events", () => {
+    expect(costUsdOf({ type: "result", total_cost_usd: 0.0953135 })).toBeCloseTo(0.0953135);
+    expect(costUsdOf({ type: "assistant", total_cost_usd: 1 })).toBeUndefined();
+    expect(costUsdOf({ type: "result" })).toBeUndefined();
   });
 });
 
