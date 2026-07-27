@@ -3,6 +3,8 @@ import {
   parseStreamLine,
   toChatItems,
   sessionIdOf,
+  modelOf,
+  shortModelName,
   isTurnComplete,
   summariseToolInput,
   encodeUserMessage,
@@ -57,6 +59,26 @@ describe("sessionIdOf / isTurnComplete", () => {
   it("detects a result event", () => {
     expect(isTurnComplete({ type: "result" })).toBe(true);
     expect(isTurnComplete({ type: "assistant" })).toBe(false);
+  });
+});
+
+describe("modelOf / shortModelName", () => {
+  it("extracts the resolved model from init", () => {
+    expect(modelOf({ type: "system", subtype: "init", model: "claude-opus-5[1m]" }))
+      .toBe("claude-opus-5[1m]");
+  });
+  it("ignores non-init events", () => {
+    expect(modelOf({ type: "assistant", model: "claude-opus-5" })).toBeUndefined();
+    expect(modelOf({ type: "system", subtype: "compact_boundary" })).toBeUndefined();
+  });
+  it("is undefined when init carries no model", () => {
+    expect(modelOf({ type: "system", subtype: "init" })).toBeUndefined();
+  });
+  it("trims the vendor prefix for display", () => {
+    expect(shortModelName("claude-opus-5[1m]")).toBe("opus-5[1m]");
+    expect(shortModelName("claude-haiku-4-5-20251001")).toBe("haiku-4-5-20251001");
+    // Leaves an already-short or unexpected name alone.
+    expect(shortModelName("opus-5")).toBe("opus-5");
   });
 });
 

@@ -8,6 +8,8 @@ import {
   parseStreamLine,
   toChatItems,
   sessionIdOf,
+  modelOf,
+  shortModelName,
   isTurnComplete,
   encodeUserMessage,
   contextTokensOf,
@@ -36,6 +38,8 @@ type SessionEvents = {
   tokens: [number];
   /** Fired when a `/compact` completes; the gauge should show a placeholder. */
   compacted: [];
+  /** The model the CLI resolved for this session, for display. */
+  model: [string];
 };
 
 /**
@@ -67,6 +71,8 @@ export class ClaudeStreamSession {
   lastTurnErrored = false;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
+  /** Model the CLI reported for this session (short form), once known. */
+  activeModel?: string;
   /** True between issuing `/compact` and seeing its result, for feedback. */
   private compacting = false;
 
@@ -200,6 +206,13 @@ export class ClaudeStreamSession {
 
     const sid = sessionIdOf(event);
     if (sid) this.sessionId = sid;
+
+    const model = modelOf(event);
+    if (model) {
+      this.activeModel = shortModelName(model);
+      this.logger.info(`Session model: ${model}`);
+      this.emitter.emit("model", this.activeModel);
+    }
 
     // A compaction boundary: confirm it and drop the context indicator — the
     // next turn's usage repopulates it with the compacted size.

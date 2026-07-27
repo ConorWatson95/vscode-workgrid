@@ -59,6 +59,8 @@ export class AgentChatPanel {
     void this.panel.webview.postMessage({ type: "tokens", tokens });
   private readonly onCompacted = () =>
     void this.panel.webview.postMessage({ type: "compacted" });
+  private readonly onModel = (model: string) =>
+    void this.panel.webview.postMessage({ type: "model", model });
 
   static show(
     taskId: string,
@@ -127,6 +129,7 @@ export class AgentChatPanel {
     session.on("status", this.onStatus);
     session.on("tokens", this.onTokens);
     session.on("compacted", this.onCompacted);
+    session.on("model", this.onModel);
   }
 
   private unbind(): void {
@@ -134,6 +137,7 @@ export class AgentChatPanel {
     this.session?.off("status", this.onStatus);
     this.session?.off("tokens", this.onTokens);
     this.session?.off("compacted", this.onCompacted);
+    this.session?.off("model", this.onModel);
   }
 
   /** Swaps in a new live session and refreshes the view. */
@@ -235,6 +239,7 @@ export class AgentChatPanel {
       busy: this.session?.busy ?? false,
       currentMode: this.options.controller.currentMode(),
       currentModel: this.options.controller.currentModel(),
+      activeModel: this.session?.activeModel ?? "",
       readOnly: this.readOnly,
       tokens: this.session?.contextTokens ?? 0,
       compactThreshold: this.options.compactThreshold,
@@ -298,6 +303,7 @@ export class AgentChatPanel {
     </select>
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
+    <span id="active-model" class="tokens" title="Model this session is actually running on"></span>
     <span id="tokens" class="tokens" title="Approximate context size (input + cache)"></span>
     <span id="pill" class="pill"><span class="dot"></span><span id="pill-label">Starting</span></span>
   </div>

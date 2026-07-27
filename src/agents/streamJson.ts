@@ -36,6 +36,8 @@ interface StreamEvent {
   type?: string;
   subtype?: string;
   session_id?: string;
+  /** Present on a system/init event: the model the CLI actually resolved to. */
+  model?: string;
   result?: string;
   is_error?: boolean;
   /** Synthetic/meta entries (slash-command expansions, caveats) — not shown. */
@@ -85,6 +87,23 @@ export function sessionIdOf(event: StreamEvent): string | undefined {
     return event.session_id;
   }
   return undefined;
+}
+
+/**
+ * The model the CLI resolved for this session, from its system/init event.
+ * Worth surfacing: `--model` is deterministic, but resuming without one can
+ * report a different model than a fresh session would.
+ */
+export function modelOf(event: StreamEvent): string | undefined {
+  if (event.type === "system" && event.subtype === "init") {
+    return event.model;
+  }
+  return undefined;
+}
+
+/** Trims the vendor prefix for display: `claude-opus-5[1m]` -> `opus-5[1m]`. */
+export function shortModelName(model: string): string {
+  return model.replace(/^claude-/, "");
 }
 
 /**
