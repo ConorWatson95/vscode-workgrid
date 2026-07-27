@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -333,13 +333,13 @@
         },
         "taskWorkspaces.model": {
           "type": "string",
-          "enum": ["", "opus", "sonnet", "haiku", "fable"],
+          "enum": ["", "fable", "opus", "sonnet", "haiku"],
           "enumDescriptions": [
             "Use the Claude CLI's default model.",
-            "Claude Opus — most capable.",
-            "Claude Sonnet — balanced.",
-            "Claude Haiku — fastest.",
-            "Claude Fable."
+            "Claude Fable 5 — most capable model.",
+            "Claude Opus 4.8 — most capable Opus (there is no Opus 5).",
+            "Claude Sonnet 5 — balanced, near-Opus quality.",
+            "Claude Haiku 4.5 — fastest and cheapest."
           ],
           "default": "",
           "scope": "resource",
