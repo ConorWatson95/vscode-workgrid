@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { PlanUsage, parseResetAt, formatResetIn } from "../agents/planUsage";
+import { PlanUsage, UsagePeriod, parseResetAt, formatResetIn } from "../agents/planUsage";
 
 /** Data access the usage view needs, injected to keep it decoupled. */
 export interface UsageViewDeps {
@@ -136,9 +136,71 @@ ${this.body()}
 
     return `${header}
       <div class="usage">${bars}</div>
+      ${driversSection(usage.periods)}
       <div class="usage-note">Approximate — local sessions on this machine only.
         Checked ${escapeHtml(new Date(usage.fetchedAt).toLocaleTimeString())}.</div>`;
   }
+}
+
+/**
+ * What the CLI attributes usage to, per window.
+ *
+ * Called "Drivers" rather than a "split" or "breakdown" deliberately: the CLI
+ * states these are independent characteristics, and they regularly sum past
+ * 100% because one request can be long-context *and* subagent-heavy *and*
+ * running in parallel. Bars would imply a partition, so these are plain
+ * percentages.
+ */
+function driversSection(periods: UsagePeriod[]): string {
+  if (periods.length === 0) return "";
+
+  const blocks = periods
+    .map((period, index) => {
+      const counts = [
+        period.requests === undefined ? "" : `${period.requests.toLocaleString()} requests`,
+        period.sessions === undefined ? "" : `${period.sessions.toLocaleString()} sessions`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      const factors = period.factors
+        .map(
+          (f) => `<div class="driver">
+            <span class="driver-pct">${f.percent}%</span>
+            <span class="driver-label">${escapeHtml(f.label)}</span>
+          </div>`,
+        )
+        .join("");
+
+      const lists = period.lists
+        .map(
+          (l) => `<div class="driver-list">
+            <div class="driver-list-kind">Top ${escapeHtml(l.kind)}</div>
+            ${l.entries
+              .map(
+                (e) => `<div class="driver">
+                  <span class="driver-pct">${e.percent}%</span>
+                  <span class="driver-label mono">${escapeHtml(e.name)}</span>
+                </div>`,
+              )
+              .join("")}
+          </div>`,
+        )
+        .join("");
+
+      // The most recent window is the one usually wanted, so open it by default.
+      return `<details class="driver-period" ${index === 0 ? "open" : ""}>
+        <summary>${escapeHtml(period.label)}${counts ? `<span class="driver-counts">${escapeHtml(counts)}</span>` : ""}</summary>
+        ${factors}${lists}
+      </details>`;
+    })
+    .join("");
+
+  return `<div class="drivers">
+    <div class="drivers-title">Drivers</div>
+    ${blocks}
+    <div class="drivers-note">Independent characteristics, not a breakdown — these overlap and can total over 100%.</div>
+  </div>`;
 }
 
 /** "in 2 days" where the CLI's text can be understood, else the text itself. */

@@ -1,5 +1,102 @@
 import { describe, it, expect } from "vitest";
-import { parseUsageOutput, assistantTextOf, parseResetAt, formatResetIn } from "./planUsage";
+import {
+  parseUsageOutput,
+  assistantTextOf,
+  parseResetAt,
+  formatResetIn,
+  parseContributors,
+  tidyFactorLabel,
+} from "./planUsage";
+
+/** Verbatim from a real `/usage` reply, contributing-factors section included. */
+const REAL_CONTRIBUTORS = `You are currently using your subscription to power your Claude Code usage
+
+Current session: 32% used · resets Jul 27, 4:59pm (Europe/London)
+Current week (all models): 30% used · resets Jul 30, 2pm (Europe/London)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 1240 requests · 16 sessions
+  53% of your usage was at >150k context
+  51% of your usage came from sessions active for 8+ hours
+  29% of your usage was while 4+ sessions ran in parallel
+  Top skills: /superpowers:subagent-driven-development 6%, /claude-api 2%
+  Top plugins: superpowers 9%
+
+Last 7d · 5586 requests · 42 sessions
+  64% of your usage was at >150k context
+  Top MCP servers: qube-sftp 1%, atlassian 1%`;
+
+describe("parseContributors", () => {
+  it("splits real output into reporting windows", () => {
+    const periods = parseContributors(REAL_CONTRIBUTORS);
+    expect(periods.map((p) => p.label)).toEqual(["Last 24h", "Last 7d"]);
+    expect(periods[0].requests).toBe(1240);
+    expect(periods[0].sessions).toBe(16);
+    expect(periods[1].requests).toBe(5586);
+  });
+
+  it("reads the behaviour lines, shortening the sentence", () => {
+    const [first] = parseContributors(REAL_CONTRIBUTORS);
+    expect(first.factors).toEqual([
+      { label: ">150k context", percent: 53 },
+      { label: "sessions active for 8+ hours", percent: 51 },
+      { label: "4+ sessions ran in parallel", percent: 29 },
+    ]);
+  });
+
+  it("reads the ranked lists, keeping names intact", () => {
+    const [first, second] = parseContributors(REAL_CONTRIBUTORS);
+    expect(first.lists).toEqual([
+      {
+        kind: "skills",
+        entries: [
+          { name: "/superpowers:subagent-driven-development", percent: 6 },
+          { name: "/claude-api", percent: 2 },
+        ],
+      },
+      { kind: "plugins", entries: [{ name: "superpowers", percent: 9 }] },
+    ]);
+    expect(second.lists[0].kind).toBe("MCP servers");
+  });
+
+  it("does not confuse driver lines with limit windows", () => {
+    // Both sections contain percentages; the limit parser must ignore these.
+    const limits = parseUsageOutput(REAL_CONTRIBUTORS);
+    expect(limits.map((l) => l.label)).toEqual([
+      "Current session",
+      "Current week (all models)",
+    ]);
+  });
+
+  it("returns empty when the section is absent or unrecognised", () => {
+    expect(parseContributors("Current session: 1% used")).toEqual([]);
+    expect(parseContributors("")).toEqual([]);
+  });
+
+  it("ignores entries it cannot read rather than inventing them", () => {
+    const periods = parseContributors(
+      "Last 24h · 5 requests · 1 sessions\n  Top skills: broken, /ok 3%\n  240% of your usage was at nonsense",
+    );
+    expect(periods[0].lists[0].entries).toEqual([{ name: "/ok", percent: 3 }]);
+    expect(periods[0].factors).toEqual([]);
+  });
+});
+
+describe("tidyFactorLabel", () => {
+  it("strips the sentence connectives the CLI uses", () => {
+    expect(tidyFactorLabel("was at >150k context")).toBe(">150k context");
+    expect(tidyFactorLabel("came from subagent-heavy sessions")).toBe("subagent-heavy sessions");
+    expect(tidyFactorLabel("was while 4+ sessions ran in parallel")).toBe(
+      "4+ sessions ran in parallel",
+    );
+  });
+
+  it("leaves an already-short label alone", () => {
+    expect(tidyFactorLabel("something new")).toBe("something new");
+  });
+});
 
 /** Verbatim from a real `/usage` reply. */
 const REAL_USAGE = `You are currently using your subscription to power your Claude Code usage

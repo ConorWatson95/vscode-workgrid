@@ -2,6 +2,21 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.12.0
+
+- **Added a "Drivers" section beneath plan usage**, showing what the CLI
+  attributes your usage to — per window (Last 24h, Last 7d) with its request and
+  session counts, the behaviours it flags (`53% >150k context`,
+  `51% sessions active for 8+ hours`), and the ranked Top skills / subagents /
+  plugins / MCP servers. The most recent window is expanded; older ones collapse.
+- Named "Drivers" rather than "Split" or "Breakdown" on purpose. The CLI states
+  these are *"independent characteristics, not a breakdown"*, and they routinely
+  total over 100% — one request can be long-context *and* subagent-heavy *and*
+  running in parallel. They are shown as plain percentages, not bars, for the
+  same reason, with a note saying so.
+- Parsing skips anything it can't read rather than guessing, so a wording change
+  upstream shows less instead of showing something wrong.
+
 ## 0.11.0
 
 - **Added an "Open in Visual Studio" button**, shown in the details view only

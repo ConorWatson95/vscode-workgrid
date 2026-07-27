@@ -11,8 +11,39 @@ export interface UsageLine {
   resets?: string;
 }
 
+/**
+ * One behaviour the CLI attributes usage to, e.g. 53% "at >150k context".
+ *
+ * These are independent characteristics, not a partition — the CLI says so
+ * explicitly, and they routinely sum well past 100%. A single request can be
+ * long-context *and* subagent-heavy *and* in a parallel session.
+ */
+export interface UsageFactor {
+  label: string;
+  percent: number;
+}
+
+/** A ranked list, e.g. "Top skills: /foo 6%, /bar 2%". */
+export interface UsageTopList {
+  /** e.g. "skills", "subagents", "plugins", "MCP servers". */
+  kind: string;
+  entries: { name: string; percent: number }[];
+}
+
+/** A reporting window from the contributing-factors section. */
+export interface UsagePeriod {
+  /** e.g. "Last 24h". */
+  label: string;
+  requests?: number;
+  sessions?: number;
+  factors: UsageFactor[];
+  lists: UsageTopList[];
+}
+
 export interface PlanUsage {
   lines: UsageLine[];
+  /** What the CLI attributes the usage to, per reporting window. */
+  periods: UsagePeriod[];
   /** When this snapshot was taken (epoch ms). */
   fetchedAt: number;
 }
@@ -42,6 +73,73 @@ export function parseUsageOutput(text: string): UsageLine[] {
     lines.push({ label: m[1].trim(), percent, resets: m[3]?.trim() });
   }
   return lines;
+}
+
+/** `Last 24h · 1240 requests · 16 sessions` */
+const PERIOD_RE = /^Last\s+(\S+)\s*·\s*([\d,]+)\s+requests\s*·\s*([\d,]+)\s+sessions\s*$/i;
+/** `53% of your usage was at >150k context` */
+const FACTOR_RE = /^(\d{1,3})%\s+of your usage\s+(.+?)\s*$/i;
+/** `Top skills: /foo 6%, /bar 2%` */
+const TOP_RE = /^Top\s+([^:]{1,40}):\s*(.+?)\s*$/i;
+
+/**
+ * Shortens a factor description for display. The CLI writes full sentences
+ * ("53% of your usage was at >150k context"); the percentage is rendered
+ * separately, so only the distinguishing part is wanted.
+ */
+export function tidyFactorLabel(text: string): string {
+  return text.replace(/^(was while|came from|was in|was at|was|while|from|in|at)\s+/i, "").trim();
+}
+
+/**
+ * Parses the "What's contributing to your limits usage?" section into one entry
+ * per reporting window. Unrecognised lines are skipped rather than guessed at,
+ * so a wording change degrades to showing less instead of showing nonsense.
+ */
+export function parseContributors(text: string): UsagePeriod[] {
+  const periods: UsagePeriod[] = [];
+  let current: UsagePeriod | undefined;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+
+    const period = PERIOD_RE.exec(line);
+    if (period) {
+      current = {
+        label: `Last ${period[1]}`,
+        requests: Number(period[2].replace(/,/g, "")),
+        sessions: Number(period[3].replace(/,/g, "")),
+        factors: [],
+        lists: [],
+      };
+      periods.push(current);
+      continue;
+    }
+    if (!current) continue; // preamble, before any window
+
+    const factor = FACTOR_RE.exec(line);
+    if (factor) {
+      const percent = Number(factor[1]);
+      const label = tidyFactorLabel(factor[2]);
+      if (percent >= 0 && percent <= 100 && label) current.factors.push({ label, percent });
+      continue;
+    }
+
+    const top = TOP_RE.exec(line);
+    if (top) {
+      const entries: { name: string; percent: number }[] = [];
+      for (const part of top[2].split(",")) {
+        // Each entry ends with its share: "general-purpose 4%".
+        const entry = /^(.+?)\s+(\d{1,3})%$/.exec(part.trim());
+        if (!entry) continue;
+        const percent = Number(entry[2]);
+        if (percent >= 0 && percent <= 100) entries.push({ name: entry[1].trim(), percent });
+      }
+      if (entries.length > 0) current.lists.push({ kind: top[1].trim(), entries });
+    }
+  }
+  return periods;
 }
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -140,13 +238,14 @@ export function fetchPlanUsage(
           resolve(undefined);
           return;
         }
-        const lines = parseUsageOutput(assistantTextOf(stdout));
+        const text = assistantTextOf(stdout);
+        const lines = parseUsageOutput(text);
         if (lines.length === 0) {
           logger.debug("/usage probe returned no parseable lines.");
           resolve(undefined);
           return;
         }
-        resolve({ lines, fetchedAt: Date.now() });
+        resolve({ lines, periods: parseContributors(text), fetchedAt: Date.now() });
       },
     );
   });
