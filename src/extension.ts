@@ -17,6 +17,7 @@ import * as os from "node:os";
 import { TaskWorkspaceTreeProvider } from "./ui/taskWorkspaceTreeProvider";
 import { TaskWorkspaceTreeItem } from "./ui/taskWorkspaceTreeItem";
 import { TaskDetailViewProvider } from "./ui/taskDetailViewProvider";
+import { PlanUsageViewProvider } from "./ui/planUsageViewProvider";
 import { PlanUsageService } from "./agents/planUsageService";
 import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
@@ -141,11 +142,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const session = sessions.get(taskId);
       return session ? deriveAgentActivity(session.status, session.busy) : undefined;
     },
-    getUsage: () => planUsage.current(),
-    isUsageRefreshing: () => planUsage.isRefreshing(),
-    refreshUsage: (force) => {
-      void (force ? planUsage.refresh() : planUsage.refreshIfStale());
-    },
     run: (taskId, action) => {
       const map: Record<string, string> = {
         open: "taskWorkspaces.open",
@@ -165,6 +161,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerWebviewViewProvider(TaskDetailViewProvider.viewId, detailView),
   );
 
+  // --- Plan usage view --------------------------------------------------
+  // Its own view rather than a details section: usage is account-wide, so it
+  // shouldn't come and go with the tree selection.
+  const usageView = new PlanUsageViewProvider(context.extensionUri, {
+    getUsage: () => planUsage.current(),
+    isUsageRefreshing: () => planUsage.isRefreshing(),
+    refreshUsage: (force) => {
+      void (force ? planUsage.refresh() : planUsage.refreshIfStale());
+    },
+  });
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(PlanUsageViewProvider.viewId, usageView),
+  );
+
   // Update the detail view as the tree selection changes.
   context.subscriptions.push(
     treeView.onDidChangeSelection((e) => {
@@ -177,7 +187,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // reconciliation, session/native changes all flow through here).
   context.subscriptions.push(tree.onDidChangeTreeData(() => detailView.refresh()));
   // Re-render once a usage probe lands.
-  context.subscriptions.push(planUsage.onDidChange(() => detailView.refresh()));
+  context.subscriptions.push(planUsage.onDidChange(() => usageView.refresh()));
 
   // Live-update the tree as sessions or native transcripts change.
   context.subscriptions.push(sessions.onDidChange(() => tree.refresh()));

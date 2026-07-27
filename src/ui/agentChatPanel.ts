@@ -269,7 +269,6 @@ export class AgentChatPanel {
       currentModel: this.options.controller.currentModel(),
       activeModel: this.session?.activeModel ?? "",
       rateLimit: this.session?.rateLimit,
-      costUsd: this.session?.costUsd,
       readOnly: this.readOnly,
       tokens: this.session?.contextTokens ?? 0,
       compactThreshold: this.options.compactThreshold,
@@ -335,7 +334,6 @@ export class AgentChatPanel {
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
     <span id="usage" class="tokens" title="Plan usage"></span>
-    <span id="cost" class="tokens" title="Cost of this session so far"></span>
     <span id="active-model" class="tokens" title="Model this session is actually running on"></span>
     <span id="tokens" class="tokens" title="Approximate context size (input + cache)"></span>
     <span id="pill" class="pill"><span class="dot"></span><span id="pill-label">Starting</span></span>

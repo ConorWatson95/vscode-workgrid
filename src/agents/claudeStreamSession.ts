@@ -175,6 +175,10 @@ export class ClaudeStreamSession {
       this.logger.warn("Cannot send message: session is not running.");
       return;
     }
+    // Typing "/compact" is the same request as the Compact button, so track it
+    // the same way — otherwise the marker is skipped and the context chip sits
+    // on its stale pre-compact number.
+    if (/^\/compact\b/.test(trimmed)) this.compacting = true;
     this.pushItem({ kind: "user", text: trimmed });
     this.busy = true;
     this.lastTurnErrored = false;

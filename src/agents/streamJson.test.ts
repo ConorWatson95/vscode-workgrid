@@ -23,9 +23,63 @@ describe("compactInfoOf", () => {
     };
     expect(compactInfoOf(event)).toEqual({ preTokens: 52000 });
   });
+  it("reads the camelCase metadata the saved transcript uses", () => {
+    // Verbatim shape from a real ~/.claude/projects transcript.
+    const event = {
+      type: "system",
+      subtype: "compact_boundary",
+      compactMetadata: { trigger: "manual", preTokens: 473867, postTokens: 14500 },
+    };
+    expect(compactInfoOf(event)).toEqual({ preTokens: 473867, postTokens: 14500 });
+  });
   it("returns undefined for non-compaction events", () => {
     expect(compactInfoOf({ type: "system", subtype: "init" })).toBeUndefined();
     expect(compactInfoOf({ type: "assistant" })).toBeUndefined();
+  });
+});
+
+describe("compact entries on replay", () => {
+  it("suppresses the injected /compact summary instead of showing it as a user turn", () => {
+    // A real compacted transcript: type "user", isCompactSummary true, and
+    // notably NOT isMeta — so it has to be recognised on its own.
+    const event = {
+      type: "user",
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+      message: {
+        role: "user",
+        content: "This session is being continued from a previous conversation…",
+      },
+    };
+    expect(toChatItems(event, true)).toEqual([]);
+  });
+
+  it("marks the boundary where history was cut", () => {
+    const event = {
+      type: "system",
+      subtype: "compact_boundary",
+      compactMetadata: { preTokens: 473867, postTokens: 14500 },
+    };
+    expect(toChatItems(event, true)).toEqual([
+      { kind: "system", text: "Context compacted — 474k → 15k tokens" },
+    ]);
+  });
+
+  it("still shows nothing for other system events", () => {
+    expect(toChatItems({ type: "system", subtype: "init", model: "x" }, true)).toEqual([]);
+  });
+
+  it("collapses the /compact invocation and drops its local output", () => {
+    const invocation = {
+      type: "user",
+      message: { role: "user", content: "<command-name>/compact</command-name><command-message>compact</command-message>" },
+    };
+    const output = {
+      type: "user",
+      message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" },
+    };
+    expect(toChatItems(invocation, true)).toEqual([{ kind: "user", text: "/compact" }]);
+    expect(toChatItems(output, true)).toEqual([]);
   });
 });
 

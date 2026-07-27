@@ -2,6 +2,25 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.10.0
+
+- **Plan usage is now its own sidebar view**, alongside Task Workspaces and
+  Details, rather than a section inside Details. Usage is account-wide, so it
+  shouldn't appear and disappear with the tree selection. It re-probes whenever
+  the view becomes visible.
+- **Removed the session cost chip** from the chat header. On a subscription the
+  dollar figure is notional — you aren't billed per token — so it sat next to
+  the real limits implying a cost that isn't charged.
+- **The `/compact` summary no longer replays as a giant user message.** Compact
+  injects its summary as an ordinary `user` transcript entry flagged
+  `isCompactSummary` but *not* `isMeta`, so reopening a compacted session
+  rendered the whole summary as something you had typed. It is suppressed, and
+  the compaction boundary now shows as a divider instead — `Context compacted —
+  474k → 15k tokens`.
+- **Typing `/compact` now behaves like the Compact button.** Only the button set
+  the internal flag, so a typed `/compact` produced no marker and left the
+  context chip on its stale pre-compact number.
+
 ## 0.9.1
 
 - **Fixed usage bars always rendering full.** The fill width was set via a

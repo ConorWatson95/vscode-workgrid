@@ -57,6 +57,9 @@ dd code, .mono { font-family: var(--vscode-editor-font-family, monospace); font-
 }
 .linklike:hover:not(:disabled) { text-decoration: underline; }
 .linklike:disabled { opacity: 0.6; cursor: default; }
+/* The standalone Plan Usage view has no section titles to sit under. */
+.usage-view { padding-top: 10px; }
+.usage-header { display: flex; justify-content: flex-end; margin-bottom: 6px; }
 .usage { display: flex; flex-direction: column; gap: 10px; }
 .usage-row { display: flex; flex-direction: column; gap: 3px; }
 .usage-head { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85em; }

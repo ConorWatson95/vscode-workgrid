@@ -42,9 +42,17 @@ interface StreamEvent {
   is_error?: boolean;
   /** Synthetic/meta entries (slash-command expansions, caveats) — not shown. */
   isMeta?: boolean;
+  /**
+   * Set on the summary `/compact` injects as the new conversation head. It is
+   * a `user` entry but is *not* flagged `isMeta`, so it has to be recognised
+   * explicitly or the whole summary renders as a giant user message on replay.
+   */
+  isCompactSummary?: boolean;
   usage?: Usage;
   /** Present on a system/compact_boundary event emitted after `/compact`. */
   compact_metadata?: { pre_tokens?: number; trigger?: string };
+  /** The same metadata as written to the saved transcript, in camelCase. */
+  compactMetadata?: { preTokens?: number; postTokens?: number; trigger?: string };
   /** Present on a `rate_limit_event`, pushed unprompted as limits change. */
   rate_limit_info?: {
     status?: string;
@@ -156,11 +164,27 @@ export function shortModelName(model: string): string {
  * `/compact`. Returns the pre-compaction context size (if reported), else
  * undefined for non-compaction events.
  */
-export function compactInfoOf(event: StreamEvent): { preTokens?: number } | undefined {
+export function compactInfoOf(
+  event: StreamEvent,
+): { preTokens?: number; postTokens?: number } | undefined {
   if (event.type === "system" && event.subtype === "compact_boundary") {
-    return { preTokens: event.compact_metadata?.pre_tokens };
+    // The live stream uses snake_case; the saved transcript uses camelCase.
+    return {
+      preTokens: event.compact_metadata?.pre_tokens ?? event.compactMetadata?.preTokens,
+      postTokens: event.compactMetadata?.postTokens,
+    };
   }
   return undefined;
+}
+
+/** Renders a compact boundary as a one-line divider, e.g. `474k → 15k`. */
+export function compactMarkerText(info: { preTokens?: number; postTokens?: number }): string {
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+  if (info.preTokens && info.postTokens) {
+    return `Context compacted — ${k(info.preTokens)} → ${k(info.postTokens)} tokens`;
+  }
+  if (info.preTokens) return `Context compacted — was ${k(info.preTokens)} tokens`;
+  return "Context compacted";
 }
 
 /** True once a `result` event has been seen (the current turn is complete). */
@@ -185,10 +209,18 @@ export function toChatItems(
   // caveats, etc. — these are noise in a human-readable transcript.
   if (event.isMeta) return [];
 
+  // The `/compact` summary is injected as an ordinary `user` entry, so replaying
+  // a compacted transcript would otherwise show the entire summary as something
+  // the human typed. Suppress it; the boundary below marks the same spot.
+  if (event.isCompactSummary) return [];
+
   switch (event.type) {
-    case "system":
-      // Init/system events are not shown as transcript lines by default.
-      return [];
+    case "system": {
+      // Init/system events are not shown as transcript lines, except the
+      // compaction boundary, which is worth a divider where history was cut.
+      const compact = compactInfoOf(event);
+      return compact ? [{ kind: "system", text: compactMarkerText(compact) }] : [];
+    }
 
     case "assistant":
       return blocksToItems(event.message?.content, "assistant");
