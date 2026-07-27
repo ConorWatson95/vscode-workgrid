@@ -2,6 +2,24 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.7.0
+
+- **Sessions are now discovered from `claude agents --json` (query → reuse →
+  create).** Opening a chat first asks the CLI what is actually live. If this
+  window already owns a session for the task it is reused as before; if a
+  session we don't own is running in that worktree — left over from a previous
+  window, a terminal-mode session, or one you started yourself — you are offered
+  the choice to continue it or start a separate one, instead of silently running
+  two agents in the same directory.
+- **Discovered sessions are never terminated automatically.** Your own
+  interactive Claude sessions legitimately run in these directories, so the
+  extension only ever offers to adopt or to start alongside.
+- Worktree matching is exact and done client-side rather than via the CLI's
+  `--cwd` flag, which matches descendants recursively; a repo-root query would
+  otherwise sweep in sessions from every worktree nested beneath it. Matching is
+  case-insensitive and separator-agnostic because the CLI reports drive letters
+  inconsistently (`c:\` and `C:\` both appear in a single listing).
+
 ## 0.6.0
 
 - **Added a "New" button to the chat panel — start a fresh session.** Every

@@ -14,6 +14,7 @@ import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "
 import { providerVisual } from "../agents/agentProviderMeta";
 import { scanSlashCommands } from "../agents/slashCommands";
 import { loadTranscriptItems, listSessions, transcriptExists } from "../agents/transcriptReader";
+import { LiveAgentSession } from "../agents/claudeAgents";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -400,27 +401,80 @@ async function launchNativeChat(
   );
 }
 
+/**
+ * Asks what to do about Claude sessions already live in this worktree that we
+ * don't own. Returns a session id to adopt, "" to start a fresh session
+ * alongside, or undefined to cancel.
+ *
+ * Never offers to kill anything: these are just as likely to be the user's own
+ * terminal sessions as a leftover from a previous window, and terminating one
+ * by pid would silently destroy in-flight work.
+ */
+async function promptForeignSession(
+  sessions: LiveAgentSession[],
+): Promise<string | undefined> {
+  const describe = (s: LiveAgentSession) =>
+    `${s.name} · ${s.kind} · started ${new Date(s.startedAt).toLocaleTimeString()}`;
+
+  const startNew = "Start a separate session";
+  const items = [
+    ...sessions.map((s) => ({
+      label: `$(debug-continue) Continue "${s.name}"`,
+      description: describe(s),
+      detail: "Resume this conversation in the chat panel.",
+      sessionId: s.sessionId,
+    })),
+    {
+      label: `$(add) ${startNew}`,
+      description: "Leave the existing session running",
+      detail: "Starts a new conversation alongside it in the same worktree.",
+      sessionId: "",
+    },
+  ];
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title:
+      sessions.length === 1
+        ? "A Claude session is already running in this worktree"
+        : `${sessions.length} Claude sessions are already running in this worktree`,
+    placeHolder: "Continue an existing conversation, or start a separate one",
+    ignoreFocusOut: true,
+  });
+  return picked?.sessionId;
+}
+
 async function startChatSession(
   ctx: CommandContext,
   task: TaskWorkspace,
 ): Promise<void> {
   const options = await buildChatOptions(ctx, task);
 
-  // Reveal a still-alive session's panel rather than starting a new one.
-  const existing = ctx.sessions.get(task.id);
-  if (existing && existing.status !== "stopped" && existing.status !== "failed") {
-    AgentChatPanel.show(task.id, task.name, existing, ctx.extensionUri, options);
+  // Query -> reuse -> create. Reusing our own live session just reveals its
+  // panel; a session we don't own is surfaced so the user can adopt it instead
+  // of unknowingly running two agents in the same worktree.
+  const resolved = await ctx.sessions.resolveSession(task.id, task.worktreePath);
+  if (resolved.kind === "reuse") {
+    AgentChatPanel.show(task.id, task.name, resolved.session, ctx.extensionUri, options);
     return;
   }
-  if (existing) ctx.sessions.stop(task.id); // clear a dead session before restarting
+  if (ctx.sessions.get(task.id)) ctx.sessions.stop(task.id); // clear a dead session
+
+  let adoptSessionId: string | undefined;
+  if (resolved.kind === "foreign") {
+    const choice = await promptForeignSession(resolved.sessions);
+    if (choice === undefined) return; // cancelled
+    adoptSessionId = choice;
+  }
 
   // Continue a prior Claude session for this task if one was persisted to disk.
   // Resuming an id with no transcript fails permanently, so only pass it when
   // the transcript actually exists.
   const priorSessionId =
     task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined;
+  // Adopting a discovered session takes precedence over the recorded one.
+  const candidateId = adoptSessionId ?? priorSessionId;
   const resumeSessionId =
-    priorSessionId && transcriptExists(os.homedir(), priorSessionId) ? priorSessionId : undefined;
+    candidateId && transcriptExists(os.homedir(), candidateId) ? candidateId : undefined;
 
   // No initial prompt is required — the panel opens ready and the user types
   // the first message there.
