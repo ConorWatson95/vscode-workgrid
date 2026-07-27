@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import { AgentActivity } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
+import { VisualStudioProject } from "../projects/visualStudio";
 
 export type DetailAction =
   | "open"
@@ -12,7 +13,9 @@ export type DetailAction =
   | "copy"
   | "archive"
   | "unarchive"
-  | "remove";
+  | "remove"
+  | "visualStudio"
+  | "explorer";
 
 /** Data access the detail view needs, injected to keep it decoupled. */
 export interface DetailViewDeps {
@@ -20,6 +23,11 @@ export interface DetailViewDeps {
   getLiveState(task: TaskWorkspace): Promise<TaskWorkspaceLiveState>;
   getActivity(taskId: string): AgentActivity | undefined;
   run(taskId: string, action: DetailAction): void;
+  /**
+   * Detects a Visual Studio solution in the worktree so the button can be
+   * offered only where it makes sense. Cached by the service.
+   */
+  detectVisualStudio(worktreePath: string): Promise<VisualStudioProject | undefined>;
 }
 
 const PHASE_HEX: Record<string, string> = {
@@ -88,7 +96,10 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const live = await this.deps.getLiveState(task);
+    const [live, vs] = await Promise.all([
+      this.deps.getLiveState(task),
+      this.deps.detectVisualStudio(task.worktreePath),
+    ]);
     const phase = deriveTaskPhase({
       activity: this.deps.getActivity(task.id),
       dirty: live.isDirty,
@@ -97,7 +108,7 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
     const p = taskPhasePresentation(phase);
     const color = p.colorId ? PHASE_HEX[p.colorId] : undefined;
 
-    webview.html = this.wrap(webview, this.body(task, live, p.label, color), color);
+    webview.html = this.wrap(webview, this.body(task, live, p.label, color, vs), color);
   }
 
   private body(
@@ -105,6 +116,7 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
     live: TaskWorkspaceLiveState,
     phaseLabel: string,
     _color: string | undefined,
+    vs: VisualStudioProject | undefined,
   ): string {
     const esc = escapeHtml;
     const fmt = (iso: string) => {
@@ -140,11 +152,14 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
       <div class="section-title">Workspace</div>
       <div class="actions">
         <button class="secondary" data-action="open">Open Folder</button>
+        ${vsButton(vs)}
+        <button class="secondary" data-action="explorer" title="Reveal the worktree in File Explorer">File Explorer</button>
         <button class="secondary" data-action="diff">Show Diff</button>
         <button class="secondary" data-action="copy">Copy Path</button>
         ${lifecycle}
         <button class="danger" data-action="remove">Remove</button>
       </div>
+      ${vs?.solution ? `<div class="hint mono">${esc(vs.solution)}${vs.flavour === "framework" ? " · .NET Framework" : vs.flavour === "modern" ? " · .NET" : ""}</div>` : ""}
 
       <div class="section-title">Git</div>
       <div class="pills">${changePill}${aheadPill}</div>
@@ -195,6 +210,17 @@ ${inner}
 </script>
 </body></html>`;
   }
+}
+
+/**
+ * The Visual Studio button, shown only where a solution or project was found —
+ * on a Node or Python worktree it would be noise.
+ */
+function vsButton(vs: VisualStudioProject | undefined): string {
+  if (!vs) return "";
+  const what = vs.solution ? "solution" : "project";
+  return `<button class="secondary" data-action="visualStudio"
+    title="Open this ${what} in Visual Studio">Visual Studio</button>`;
 }
 
 function escapeHtml(s: string): string {

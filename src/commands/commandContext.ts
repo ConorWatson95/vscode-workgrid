@@ -13,6 +13,7 @@ import { TaskWorkspaceTreeProvider } from "../ui/taskWorkspaceTreeProvider";
 import { TaskDetailViewProvider } from "../ui/taskDetailViewProvider";
 import { DiffContentProvider } from "../ui/diffContentProvider";
 import { Logger } from "../logging/logger";
+import { VisualStudioService } from "../projects/visualStudioService";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -28,6 +29,7 @@ export interface CommandContext {
   archivedHistory: ArchivedHistoryRepository;
   diffProvider: DiffContentProvider;
   detailView: TaskDetailViewProvider;
+  visualStudio: VisualStudioService;
   tree: TaskWorkspaceTreeProvider;
   logger: Logger;
   extensionUri: vscode.Uri;

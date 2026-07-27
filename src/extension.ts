@@ -18,6 +18,7 @@ import { TaskWorkspaceTreeProvider } from "./ui/taskWorkspaceTreeProvider";
 import { TaskWorkspaceTreeItem } from "./ui/taskWorkspaceTreeItem";
 import { TaskDetailViewProvider } from "./ui/taskDetailViewProvider";
 import { PlanUsageViewProvider } from "./ui/planUsageViewProvider";
+import { VisualStudioService } from "./projects/visualStudioService";
 import { PlanUsageService } from "./agents/planUsageService";
 import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
@@ -95,6 +96,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => repositoryRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
   );
 
+  // Detects Visual Studio solutions so the details view can offer to open them.
+  // Reuses the git file listing the chat panel already relies on.
+  const visualStudio = new VisualStudioService(logger, async (worktreePath) => {
+    const result = await worktreeService.listFiles(worktreePath);
+    return result.ok ? result.value : [];
+  });
+
   const nativeWatcher = new NativeSessionWatcher(os.homedir(), logger);
   nativeWatcher.start();
   context.subscriptions.push({ dispose: () => nativeWatcher.dispose() });
@@ -142,9 +150,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const session = sessions.get(taskId);
       return session ? deriveAgentActivity(session.status, session.busy) : undefined;
     },
+    detectVisualStudio: (worktreePath) => visualStudio.detect(worktreePath),
     run: (taskId, action) => {
       const map: Record<string, string> = {
         open: "taskWorkspaces.open",
+        visualStudio: "taskWorkspaces.openInVisualStudio",
+        explorer: "taskWorkspaces.revealInExplorer",
         startNative: "taskWorkspaces.startNative",
         startChat: "taskWorkspaces.startChat",
         startTerminal: "taskWorkspaces.startTerminal",
@@ -229,6 +240,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     archivedHistory,
     diffProvider,
     detailView,
+    visualStudio,
     tree,
     logger,
     extensionUri: context.extensionUri,

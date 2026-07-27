@@ -17,6 +17,7 @@ import { loadTranscriptItems, listSessions, transcriptExists } from "../agents/t
 import { LiveAgentSession } from "../agents/claudeAgents";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 
 /** Registers all extension commands and returns their disposables. */
 export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
@@ -44,6 +45,8 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.startTerminal", (arg) => launchInModeCommand(ctx, arg, "terminal")),
     register("taskWorkspaces.stopAgent", (arg) => stopAgentCommand(ctx, arg)),
     register("taskWorkspaces.adopt", (arg) => adoptCommand(ctx, arg)),
+    register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
+    register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
     register("taskWorkspaces.sessionHistory", () => sessionHistoryCommand(ctx)),
   ];
 }
@@ -110,6 +113,51 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
       initialReadOnly: { title: `${taskPick.rec.name} · ${sessPick.session.title}`, items },
     },
   );
+}
+
+/** Opens the worktree's solution in Visual Studio. */
+async function openInVisualStudioCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+
+  const detected = await ctx.visualStudio.detect(task.worktreePath);
+  // Fall back to the worktree itself: VS can open a folder, and this keeps the
+  // command useful if detection came up empty but the user knows better.
+  const target = detected?.solution
+    ? path.join(task.worktreePath, detected.solution)
+    : task.worktreePath;
+
+  const devenv = await ctx.visualStudio.findDevenv();
+  if (!devenv) {
+    // No Visual Studio found — offer the shell's own association rather than
+    // failing outright, since .sln may still be registered to something.
+    const open = "Open with default app";
+    const choice = await vscode.window.showWarningMessage(
+      "Visual Studio was not found on this machine.",
+      open,
+    );
+    if (choice === open) await vscode.env.openExternal(vscode.Uri.file(target));
+    return;
+  }
+
+  try {
+    // Detached and unref'd: Visual Studio outlives this window, and we must not
+    // hold the extension host open waiting on it.
+    const child = spawn(devenv, [target], { detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+    ctx.logger.info(`Opened ${target} in ${devenv}`);
+  } catch (error) {
+    ctx.logger.error("Failed to launch Visual Studio", error);
+    void vscode.window.showErrorMessage("Failed to launch Visual Studio.");
+  }
+}
+
+/** Reveals the worktree folder in the OS file manager. */
+async function revealInExplorerCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+  // VS Code's own command, so it uses the right file manager per platform.
+  await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(task.worktreePath));
 }
 
 async function adoptCommand(ctx: CommandContext, arg: unknown): Promise<void> {

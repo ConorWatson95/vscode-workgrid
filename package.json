@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -84,6 +84,18 @@
         "title": "Task Details",
         "category": "Task Workspaces",
         "icon": "$(info)"
+      },
+      {
+        "command": "taskWorkspaces.openInVisualStudio",
+        "title": "Open in Visual Studio",
+        "category": "Task Workspaces",
+        "icon": "$(vm)"
+      },
+      {
+        "command": "taskWorkspaces.revealInExplorer",
+        "title": "Reveal in File Explorer",
+        "category": "Task Workspaces",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "taskWorkspaces.showDiff",
@@ -221,6 +233,16 @@
           "command": "taskWorkspaces.copyPath",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "1_open@3"
+        },
+        {
+          "command": "taskWorkspaces.revealInExplorer",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@4"
+        },
+        {
+          "command": "taskWorkspaces.openInVisualStudio",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@5"
         },
         {
           "command": "taskWorkspaces.startNative",

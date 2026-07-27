@@ -48,6 +48,9 @@ dd code, .mono { font-family: var(--vscode-editor-font-family, monospace); font-
   color: var(--vscode-errorForeground); font-size: 0.88em;
 }
 
+/* Which solution the Visual Studio button will open. */
+.hint { margin-top: -2px; font-size: 0.78em; opacity: 0.55; }
+
 /* Plan usage (from the CLI's /usage) */
 .section-title { display: flex; align-items: baseline; gap: 8px; }
 .linklike {

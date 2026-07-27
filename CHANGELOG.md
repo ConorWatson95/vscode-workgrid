@@ -2,6 +2,28 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.11.0
+
+- **Added an "Open in Visual Studio" button**, shown in the details view only
+  when the worktree actually contains a solution or project — it stays out of
+  the way on a Node or Python task. The solution it will open is named beneath
+  the buttons, annotated `.NET Framework` or `.NET`.
+- Detection reads the file listing git already provides, then classifies the
+  target framework from the project files: old-style
+  `<TargetFrameworkVersion>v4.x</TargetFrameworkVersion>` and SDK-style
+  `<TargetFramework>net48</TargetFramework>` are both .NET Framework, `net8.0`
+  and `netcoreapp*` are modern, and multi-targeting counts as Framework if any
+  target is. Results are cached per worktree.
+- Visual Studio is located with `vswhere`, requiring `devenv.exe` specifically.
+  `vswhere -latest -products *` is not trustworthy: other products build on the
+  Visual Studio shell and are listed alongside it — on this machine SQL Server
+  Management Studio 22 was returned as "latest", ahead of Visual Studio, so a
+  solution would have opened in SSMS. If no install is found you're offered the
+  shell's default association instead.
+- **Added a "File Explorer" button** to every task, which reveals the worktree
+  in the OS file manager. Also available from the task's context menu, along
+  with Open in Visual Studio.
+
 ## 0.10.1
 
 - **Fixed the chat panel hanging on open.** Replaying a prior conversation read
