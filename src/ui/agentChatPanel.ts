@@ -286,12 +286,15 @@ export class AgentChatPanel {
       <option value="plan">Plan</option>
       <option value="bypassPermissions">Auto</option>
     </select>
-    <select id="model" title="Model">
+    <!-- Values are CLI aliases: each resolves to the latest model in that
+         family, so these stay correct as new versions ship. Don't hardcode
+         version numbers here — they go stale. -->
+    <select id="model" title="Model (each option uses the latest in that family)">
       <option value="">Default (CLI setting)</option>
-      <option value="fable">Fable 5 (most capable)</option>
-      <option value="opus">Opus 4.8</option>
-      <option value="sonnet">Sonnet 5</option>
-      <option value="haiku">Haiku 4.5 (fastest)</option>
+      <option value="fable">Fable</option>
+      <option value="opus">Opus</option>
+      <option value="sonnet">Sonnet</option>
+      <option value="haiku">Haiku</option>
     </select>
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
