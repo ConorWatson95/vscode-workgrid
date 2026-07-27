@@ -86,6 +86,7 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
     currentModel: () => "",
     setModel: () => undefined,
     resume: () => undefined,
+    newSession: () => undefined,
     listHistory: async () =>
       taskPick.rec.sessions.map((s) => ({ id: s.id, title: s.title, mtimeMs: s.mtimeMs, archived: true })),
     openHistory: async (entry) => {
@@ -530,6 +531,24 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
     resume: () => {
       const current = ctx.sessions.get(task.id);
       return startResumed(current?.id ?? (task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined));
+    },
+    // Deliberately does not go through startResumed: no --resume and no
+    // carried-over items, so a wedged session can't poison the new one.
+    newSession: () => {
+      const session = ctx.sessions.create(task.id, {
+        worktreePath: task.worktreePath,
+        permissionMode: mode,
+        addDirs: [task.repositoryRoot],
+        autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
+        model,
+      });
+      void ctx.repository.save({
+        ...task,
+        agent: { provider: "claude-chat", sessionId: session.id, status: "running", startedAt: new Date().toISOString() },
+        updatedAt: new Date().toISOString(),
+      });
+      ctx.tree.refresh();
+      return session;
     },
     listHistory: async () => {
       const live: HistoryEntry[] = listSessions(os.homedir(), task.worktreePath).map((s) => ({

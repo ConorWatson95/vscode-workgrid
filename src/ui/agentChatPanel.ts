@@ -22,6 +22,12 @@ export interface ChatController {
   setModel(model: string): ClaudeStreamSession | undefined;
   /** Resume the current session after its process has ended, or undefined if unsupported (read-only). */
   resume(): ClaudeStreamSession | undefined;
+  /**
+   * Abandon the current conversation and start a brand-new session with an
+   * empty transcript. The escape hatch when a session is wedged and resuming
+   * keeps failing. Undefined if unsupported (read-only).
+   */
+  newSession(): ClaudeStreamSession | undefined;
   listHistory(): Promise<HistoryEntry[]>;
   openHistory(
     entry: HistoryEntry,
@@ -200,6 +206,24 @@ export class AgentChatPanel {
         if (s) this.attach(s);
         break;
       }
+      case "newSession": {
+        if (this.readOnly) break;
+        // The old transcript stays on disk and remains open-able from History,
+        // so this is recoverable — but confirm, since the live context is lost.
+        const go = await vscode.window.showWarningMessage(
+          "Start a new Claude session for this task?",
+          {
+            modal: true,
+            detail:
+              "The current conversation is abandoned and a fresh session starts with an empty transcript. The old session stays available under History.",
+          },
+          "New Session",
+        );
+        if (go !== "New Session") break;
+        const s = this.options.controller.newSession();
+        if (s) this.attach(s);
+        break;
+      }
       case "history": {
         const entries = await this.options.controller.listHistory();
         void this.panel.webview.postMessage({
@@ -301,6 +325,7 @@ export class AgentChatPanel {
       <option value="sonnet">Sonnet</option>
       <option value="haiku">Haiku</option>
     </select>
+    <button id="new-session" class="ghost" title="Abandon this conversation and start a fresh session">New</button>
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>
     <span id="active-model" class="tokens" title="Model this session is actually running on"></span>

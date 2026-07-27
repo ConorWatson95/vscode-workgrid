@@ -2,6 +2,15 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.6.0
+
+- **Added a "New" button to the chat panel — start a fresh session.** Every
+  existing path resumed the same Claude session id, so a wedged session was
+  sticky and deleting the worktree was the only escape. "New" abandons the
+  conversation and starts a session with an empty transcript (no `--resume`, no
+  carried-over messages). Confirms first; the old session stays open-able under
+  History.
+
 ## 0.5.2
 
 - **Show the model a session is actually running on.** The panel header now
