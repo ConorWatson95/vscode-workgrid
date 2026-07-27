@@ -91,7 +91,10 @@ export function queryLiveSessions(
     execFile(
       command,
       ["agents", "--json"],
-      { windowsHide: true, timeout: 10_000, shell: process.platform === "win32" },
+      // Opening a chat waits on this, so the timeout bounds how long a click can
+      // appear to do nothing. The query is advisory and typically well under a
+      // second; failing fast and starting a session beats a long stall.
+      { windowsHide: true, timeout: 5_000, shell: process.platform === "win32" },
       (error, stdout) => {
         if (error) {
           logger.debug(`claude agents --json failed: ${error.message}`);

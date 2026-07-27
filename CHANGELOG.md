@@ -2,6 +2,20 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.10.1
+
+- **Fixed the chat panel hanging on open.** Replaying a prior conversation read
+  the entire transcript synchronously — and transcripts reach tens of MB (9.3 MB
+  locally), so the whole window froze while it parsed. Only the last 300 entries
+  are ever shown, so it now reads just the tail (capped at 2 MB), discarding the
+  leading partial line.
+- **Opening now reports what it is doing** in the status bar — *checking for a
+  running session…*, *loading conversation history…* — instead of looking
+  ignored until the panel appears.
+- The session scan and the file/slash-command scan now run concurrently rather
+  than one after the other, and the `claude agents --json` timeout is 5s rather
+  than 10s: it is advisory, so failing fast and starting beats a long stall.
+
 ## 0.10.0
 
 - **Plan usage is now its own sidebar view**, alongside Task Workspaces and

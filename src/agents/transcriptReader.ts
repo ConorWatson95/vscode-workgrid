@@ -28,14 +28,18 @@ export function resolveProjectDir(
   return undefined;
 }
 
+/**
+ * Cap on how much of a transcript is read. Transcripts reach tens of MB, and
+ * this runs synchronously on the extension host — reading one whole freezes the
+ * window. Only the last `maxItems` are kept anyway, so reading the tail is
+ * enough; the cap just has to comfortably exceed that many entries.
+ */
+const MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+
 /** Parses a transcript file into renderable chat items (most recent capped). */
 export function loadItemsFromFile(file: string, maxItems = 300): ChatItem[] {
-  let content: string;
-  try {
-    content = fs.readFileSync(file, "utf8");
-  } catch {
-    return [];
-  }
+  const content = readTail(file, MAX_TRANSCRIPT_BYTES);
+  if (content === undefined) return [];
   const items: ChatItem[] = [];
   for (const line of content.split("\n")) {
     const event = parseStreamLine(line);
@@ -173,6 +177,35 @@ function firstUserText(head: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Reads at most the last `maxBytes` of a file as UTF-8, returning undefined if
+ * it can't be read. When truncated, the leading partial line is dropped so the
+ * caller never sees a half-JSON line (and a multi-byte character can't be split
+ * across the boundary).
+ */
+function readTail(file: string, maxBytes: number): string | undefined {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    const text = buffer.toString("utf8");
+    if (length === size) return text;
+    const firstBreak = text.indexOf("\n");
+    return firstBreak === -1 ? "" : text.slice(firstBreak + 1);
+  } catch {
+    return undefined;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** Reads the first or last 64KB of a file as UTF-8. */

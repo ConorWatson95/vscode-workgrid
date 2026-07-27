@@ -447,13 +447,35 @@ async function startChatSession(
   ctx: CommandContext,
   task: TaskWorkspace,
 ): Promise<void> {
-  const options = await buildChatOptions(ctx, task);
+  // Opening involves a CLI query, a file scan and a transcript read, none of
+  // which show anything until the panel appears — so report progress rather
+  // than leaving the click looking ignored.
+  const progress = new OpenProgress(`Opening chat — ${task.name}`);
+  try {
+    await openChatSession(ctx, task, progress);
+  } finally {
+    // Never leave the indicator spinning if a step throws.
+    progress.done();
+  }
+}
 
-  // Query -> reuse -> create. Reusing our own live session just reveals its
-  // panel; a session we don't own is surfaced so the user can adopt it instead
-  // of unknowingly running two agents in the same worktree.
-  const resolved = await ctx.sessions.resolveSession(task.id, task.worktreePath);
+async function openChatSession(
+  ctx: CommandContext,
+  task: TaskWorkspace,
+  progress: OpenProgress,
+): Promise<void> {
+  // Independent work: the options scan doesn't depend on which session we end
+  // up using, so don't pay for it serially.
+  progress.report("checking for a running session…");
+  const [options, resolved] = await Promise.all([
+    buildChatOptions(ctx, task),
+    // Query -> reuse -> create. Reusing our own live session just reveals its
+    // panel; a session we don't own is surfaced so the user can adopt it instead
+    // of unknowingly running two agents in the same worktree.
+    ctx.sessions.resolveSession(task.id, task.worktreePath),
+  ]);
   if (resolved.kind === "reuse") {
+    progress.done();
     AgentChatPanel.show(task.id, task.name, resolved.session, ctx.extensionUri, options);
     return;
   }
@@ -461,9 +483,12 @@ async function startChatSession(
 
   let adoptSessionId: string | undefined;
   if (resolved.kind === "foreign") {
+    // The prompt is the user's turn — don't spin behind their own dialog.
+    progress.done();
     const choice = await promptForeignSession(resolved.sessions);
     if (choice === undefined) return; // cancelled
     adoptSessionId = choice;
+    progress.restart("starting…");
   }
 
   // Continue a prior Claude session for this task if one was persisted to disk.
@@ -490,6 +515,7 @@ async function startChatSession(
 
   // Replay the prior transcript into the panel so history is visible.
   if (resumeSessionId && session.items.length === 0) {
+    progress.report("loading conversation history…");
     const prior = loadTranscriptItems(os.homedir(), resumeSessionId);
     if (prior.length > 0) session.items.unshift(...prior);
   }
@@ -503,7 +529,53 @@ async function startChatSession(
   await ctx.repository.save({ ...task, agent: agentSession, updatedAt: new Date().toISOString() });
   ctx.tree.refresh();
 
+  progress.done();
   AgentChatPanel.show(task.id, task.name, session, ctx.extensionUri, options);
+}
+
+/**
+ * A status-bar progress indicator for opening a chat, with a message that can
+ * be updated as the steps run.
+ *
+ * Status-bar rather than a notification: opening is usually quick, and a toast
+ * for every click would be worse than the silence it replaces. It resolves on
+ * `done()`, which every exit path must call.
+ */
+class OpenProgress {
+  private update: ((message: string) => void) | undefined;
+  private finish: (() => void) | undefined;
+
+  constructor(private readonly title: string) {
+    this.start("");
+  }
+
+  private start(message: string): void {
+    void vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: this.title },
+      (p) =>
+        new Promise<void>((resolve) => {
+          this.update = (m) => p.report({ message: m });
+          this.finish = resolve;
+          if (message) p.report({ message });
+        }),
+    );
+  }
+
+  report(message: string): void {
+    this.update?.(message);
+  }
+
+  /** Shows the indicator again after it was dismissed for a user prompt. */
+  restart(message: string): void {
+    if (!this.finish) this.start(message);
+    else this.report(message);
+  }
+
+  done(): void {
+    this.finish?.();
+    this.finish = undefined;
+    this.update = undefined;
+  }
 }
 
 /** Gathers provider visuals, completions and the live controller for the panel. */
