@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import { AgentActivity } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
-import { PlanUsage } from "../agents/planUsage";
+import { PlanUsage, parseResetAt, formatResetIn } from "../agents/planUsage";
 
 export type DetailAction =
   | "open"
@@ -201,7 +201,7 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
 
     const bars = usage.lines
       .map((l) => {
-        const pct = Math.max(0, Math.min(100, l.percent));
+        const pct = Math.max(0, Math.min(100, Math.round(l.percent)));
         // Warn as the window fills; these thresholds are display-only.
         const tone = pct >= 90 ? " danger" : pct >= 75 ? " warn" : "";
         return `<div class="usage-row">
@@ -209,8 +209,8 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
             <span class="usage-label">${escapeHtml(l.label)}</span>
             <span class="usage-pct${tone}">${pct}%</span>
           </div>
-          <div class="usage-bar"><div class="usage-fill${tone}" style="width:${pct}%"></div></div>
-          ${l.resets ? `<div class="usage-resets">resets ${escapeHtml(l.resets)}</div>` : ""}
+          <div class="usage-bar"><div class="usage-fill${tone}" data-pct="${pct}"></div></div>
+          ${l.resets ? `<div class="usage-resets" title="${escapeHtml(l.resets)}">resets ${escapeHtml(resetLabel(l.resets))}</div>` : ""}
         </div>`;
       })
       .join("");
@@ -221,12 +221,27 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
         Checked ${escapeHtml(new Date(usage.fetchedAt).toLocaleTimeString())}.</div>`;
   }
 
+  /**
+   * Per-render CSS. The CSP has no `'unsafe-inline'`, so `style="..."`
+   * attributes are dropped — dynamic values (bar widths, phase colour) have to
+   * go through a nonce'd stylesheet instead. Without this every bar rendered
+   * full, because an unset width falls back to `auto`.
+   */
+  private dynamicStyles(color: string | undefined): string {
+    const pcts = new Set(
+      (this.deps.getUsage()?.lines ?? []).map((l) => Math.max(0, Math.min(100, Math.round(l.percent)))),
+    );
+    const rules = [...pcts].map((pct) => `.usage-fill[data-pct="${pct}"]{width:${pct}%}`);
+    if (color) rules.unshift(`body.view{--phase-color:${color}}`);
+    return rules.join("\n");
+  }
+
   private wrap(webview: vscode.Webview, inner: string, color?: string): string {
     const nonce = getNonce();
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "detail.css"));
     const csp = [
       "default-src 'none'",
-      `style-src ${webview.cspSource}`,
+      `style-src ${webview.cspSource} 'nonce-${nonce}'`,
       `script-src 'nonce-${nonce}'`,
     ].join("; ");
     return `<!DOCTYPE html>
@@ -234,8 +249,9 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <link rel="stylesheet" href="${styleUri}" />
+<style nonce="${nonce}">${this.dynamicStyles(color)}</style>
 </head>
-<body class="view" style="${color ? `--phase-color:${color}` : ""}">
+<body class="view">
 ${inner}
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -246,6 +262,12 @@ ${inner}
 </script>
 </body></html>`;
   }
+}
+
+/** "in 2 days" where the CLI's text can be understood, else the text itself. */
+function resetLabel(resets: string): string {
+  const at = parseResetAt(resets);
+  return at === undefined ? resets : `in ${formatResetIn(at)}`;
 }
 
 function escapeHtml(s: string): string {

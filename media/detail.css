@@ -69,7 +69,8 @@ dd code, .mono { font-family: var(--vscode-editor-font-family, monospace); font-
   background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent);
 }
 .usage-fill {
-  height: 100%; border-radius: 999px;
+  /* Width comes from a nonce'd per-render rule; default to empty, never full. */
+  width: 0; height: 100%; border-radius: 999px;
   background: var(--phase-color, var(--vscode-charts-blue, #4aa3ff));
   transition: width 0.3s ease;
 }

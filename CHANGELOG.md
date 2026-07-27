@@ -2,6 +2,20 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.9.1
+
+- **Fixed usage bars always rendering full.** The fill width was set via a
+  `style="width:N%"` attribute, but the view's CSP specifies `style-src` without
+  `'unsafe-inline'`, so inline style attributes were dropped entirely — an unset
+  width falls back to `auto`, i.e. a full bar, so every window looked maxed out.
+  Dynamic widths now come from a nonce'd `<style>` block, and `.usage-fill`
+  defaults to zero width so a missing rule can never read as 100% again. The
+  same bug silently discarded the phase colour on `<body>`; that is fixed too.
+- **Reset times are now relative**, matching the Claude extension's style —
+  `resets in 2 days`, `in 7 hrs`, `in 45 mins` — instead of an absolute
+  `Jul 30, 2pm (Europe/London)`. The original text is kept as the tooltip. If a
+  reset clause can't be parsed it is shown verbatim rather than guessed at.
+
 ## 0.9.0
 
 - **Plan usage percentages now show in the Details view**, below the task

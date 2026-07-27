@@ -44,6 +44,58 @@ export function parseUsageOutput(text: string): UsageLine[] {
   return lines;
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * Turns the CLI's reset text (`Jul 30, 2pm (Europe/London)`) into epoch ms.
+ *
+ * The clock is read as local time and the timezone suffix ignored: the CLI
+ * prints the machine's own zone, so they already agree. No year is given, so
+ * the one that lands nearest `now` wins — that keeps a December→January reset
+ * from reading as eleven months in the past.
+ *
+ * Returns undefined for anything unrecognised, so callers fall back to the
+ * literal text rather than showing an invented time.
+ */
+export function parseResetAt(text: string, now: number = Date.now()): number | undefined {
+  const m = /^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text.trim());
+  if (!m) return undefined;
+  const month = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
+  if (month < 0) return undefined;
+
+  const day = Number(m[2]);
+  const minute = m[4] ? Number(m[4]) : 0;
+  const meridiem = m[5]?.toLowerCase();
+  let hour = Number(m[3]);
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (day < 1 || day > 31 || hour > 23 || minute > 59) return undefined;
+
+  const year = new Date(now).getFullYear();
+  let best: number | undefined;
+  for (const y of [year - 1, year, year + 1]) {
+    const candidate = new Date(y, month, day, hour, minute).getTime();
+    if (isNaN(candidate)) continue;
+    if (best === undefined || Math.abs(candidate - now) < Math.abs(best - now)) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * Formats a reset time the way the Claude extension does — `2 days`, `7 hrs`,
+ * `45 mins` — rather than an absolute timestamp.
+ */
+export function formatResetIn(atMs: number, now: number = Date.now()): string {
+  const ms = atMs - now;
+  if (ms <= 0) return "now";
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"}`;
+  const hrs = Math.round(ms / 3_600_000);
+  if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"}`;
+  const days = Math.round(ms / 86_400_000);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
 /** Pulls the assistant text out of a stream-json transcript. */
 export function assistantTextOf(stdout: string): string {
   const parts: string[] = [];
