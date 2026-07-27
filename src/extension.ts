@@ -17,6 +17,7 @@ import * as os from "node:os";
 import { TaskWorkspaceTreeProvider } from "./ui/taskWorkspaceTreeProvider";
 import { TaskWorkspaceTreeItem } from "./ui/taskWorkspaceTreeItem";
 import { TaskDetailViewProvider } from "./ui/taskDetailViewProvider";
+import { PlanUsageService } from "./agents/planUsageService";
 import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
@@ -86,6 +87,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   context.subscriptions.push({ dispose: () => sessions.dispose() });
 
+  // Plan usage is account-wide; probe from the repo root (any directory works).
+  const planUsage = new PlanUsageService(
+    logger,
+    () => configuration.claudeCommand(repositoryUri),
+    () => repositoryRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+  );
+
   const nativeWatcher = new NativeSessionWatcher(os.homedir(), logger);
   nativeWatcher.start();
   context.subscriptions.push({ dispose: () => nativeWatcher.dispose() });
@@ -133,6 +141,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const session = sessions.get(taskId);
       return session ? deriveAgentActivity(session.status, session.busy) : undefined;
     },
+    getUsage: () => planUsage.current(),
+    isUsageRefreshing: () => planUsage.isRefreshing(),
+    refreshUsage: (force) => {
+      void (force ? planUsage.refresh() : planUsage.refreshIfStale());
+    },
     run: (taskId, action) => {
       const map: Record<string, string> = {
         open: "taskWorkspaces.open",
@@ -163,6 +176,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Keep the detail view in sync with every tree refresh (command actions,
   // reconciliation, session/native changes all flow through here).
   context.subscriptions.push(tree.onDidChangeTreeData(() => detailView.refresh()));
+  // Re-render once a usage probe lands.
+  context.subscriptions.push(planUsage.onDidChange(() => detailView.refresh()));
 
   // Live-update the tree as sessions or native transcripts change.
   context.subscriptions.push(sessions.onDidChange(() => tree.refresh()));

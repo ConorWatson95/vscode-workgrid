@@ -2,6 +2,22 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.9.0
+
+- **Plan usage percentages now show in the Details view**, below the task
+  details, with a progress bar per limit window (session, weekly, per-model),
+  its reset time, and a manual `refresh`. Bars turn amber past 75% and red past
+  90%. Also shown when no task is selected, since usage is account-wide.
+- Figures come from the CLI's `/usage`, run in a **throwaway session** so it
+  never appears in your chat transcript. `/usage` is answered locally — the
+  reply is a `<synthetic>` model with zero input and output tokens — so this
+  costs no tokens, only a process spawn. Results are cached for 5 minutes and
+  re-probed when the view is shown.
+- The output is human-readable text with no machine-readable equivalent, so
+  parsing is deliberately tolerant: if the format changes, the section reports
+  "Usage unavailable" rather than showing something wrong, and the live chips
+  added in 0.8.0 keep working.
+
 ## 0.8.0
 
 - **Plan usage is now always visible in the chat panel and updates live.** The

@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import { AgentActivity } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
+import { PlanUsage } from "../agents/planUsage";
 
 export type DetailAction =
   | "open"
@@ -20,6 +21,12 @@ export interface DetailViewDeps {
   getLiveState(task: TaskWorkspace): Promise<TaskWorkspaceLiveState>;
   getActivity(taskId: string): AgentActivity | undefined;
   run(taskId: string, action: DetailAction): void;
+  /** Last known plan usage, or undefined if not probed yet. */
+  getUsage(): PlanUsage | undefined;
+  /** True while a usage probe is in flight. */
+  isUsageRefreshing(): boolean;
+  /** Probes usage (forced, or only when stale) and re-renders on completion. */
+  refreshUsage(force: boolean): void;
 }
 
 const PHASE_HEX: Record<string, string> = {
@@ -53,6 +60,11 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
     };
     view.webview.onDidReceiveMessage((msg: { type: string; action?: DetailAction }) => {
+      if (msg.type === "refreshUsage") {
+        this.deps.refreshUsage(true);
+        void this.render(); // reflect the in-flight state immediately
+        return;
+      }
       if (msg.type === "action" && msg.action && this.currentTaskId) {
         this.deps.run(this.currentTaskId, msg.action);
       }
@@ -75,8 +87,15 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
     if (!this.view) return;
     const webview = this.view.webview;
 
+    // Usage is account-wide, so keep it fresh whenever the view is shown —
+    // including when no task is selected. Re-renders via onDidChange.
+    this.deps.refreshUsage(false);
+
     if (!this.currentTaskId) {
-      webview.html = this.wrap(webview, `<div class="empty">Select a task to see its details.</div>`);
+      webview.html = this.wrap(
+        webview,
+        `<div class="empty">Select a task to see its details.</div>${this.usageSection()}`,
+      );
       return;
     }
     const task = await this.deps.getTask(this.currentTaskId);
@@ -156,7 +175,50 @@ export class TaskDetailViewProvider implements vscode.WebviewViewProvider {
         ${task.agent ? `<dt>Agent</dt><dd>${esc(task.agent.provider)} (${esc(task.agent.status)})</dd>` : ""}
         <dt>Created</dt><dd>${esc(fmt(task.createdAt))}</dd>
         <dt>Updated</dt><dd>${esc(fmt(task.updatedAt))}</dd>
-      </dl>`;
+      </dl>
+
+      ${this.usageSection()}`;
+  }
+
+  /**
+   * Plan usage, rendered from the CLI's `/usage` output. Account-wide rather
+   * than per-task, so it also renders when no task is selected.
+   */
+  private usageSection(): string {
+    const usage = this.deps.getUsage();
+    const refreshing = this.deps.isUsageRefreshing();
+    const title = `<div class="section-title">
+      Plan usage
+      <button class="linklike" data-refresh="usage" ${refreshing ? "disabled" : ""}
+        title="Re-check usage">${refreshing ? "checking…" : "refresh"}</button>
+    </div>`;
+
+    if (!usage) {
+      return `${title}<div class="usage-empty">${
+        refreshing ? "Checking usage…" : "Usage unavailable."
+      }</div>`;
+    }
+
+    const bars = usage.lines
+      .map((l) => {
+        const pct = Math.max(0, Math.min(100, l.percent));
+        // Warn as the window fills; these thresholds are display-only.
+        const tone = pct >= 90 ? " danger" : pct >= 75 ? " warn" : "";
+        return `<div class="usage-row">
+          <div class="usage-head">
+            <span class="usage-label">${escapeHtml(l.label)}</span>
+            <span class="usage-pct${tone}">${pct}%</span>
+          </div>
+          <div class="usage-bar"><div class="usage-fill${tone}" style="width:${pct}%"></div></div>
+          ${l.resets ? `<div class="usage-resets">resets ${escapeHtml(l.resets)}</div>` : ""}
+        </div>`;
+      })
+      .join("");
+
+    return `${title}
+      <div class="usage">${bars}</div>
+      <div class="usage-note">Approximate — local sessions on this machine only.
+        Checked ${escapeHtml(new Date(usage.fetchedAt).toLocaleTimeString())}.</div>`;
   }
 
   private wrap(webview: vscode.Webview, inner: string, color?: string): string {
@@ -179,6 +241,8 @@ ${inner}
   const vscode = acquireVsCodeApi();
   document.querySelectorAll("button[data-action]").forEach((b) =>
     b.addEventListener("click", () => vscode.postMessage({ type: "action", action: b.dataset.action })));
+  document.querySelectorAll("button[data-refresh]").forEach((b) =>
+    b.addEventListener("click", () => vscode.postMessage({ type: "refreshUsage" })));
 </script>
 </body></html>`;
   }

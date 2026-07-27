@@ -47,3 +47,34 @@ dd code, .mono { font-family: var(--vscode-editor-font-family, monospace); font-
   background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
   color: var(--vscode-errorForeground); font-size: 0.88em;
 }
+
+/* Plan usage (from the CLI's /usage) */
+.section-title { display: flex; align-items: baseline; gap: 8px; }
+.linklike {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: 0.95em; text-transform: none; letter-spacing: 0;
+  color: var(--vscode-textLink-foreground);
+}
+.linklike:hover:not(:disabled) { text-decoration: underline; }
+.linklike:disabled { opacity: 0.6; cursor: default; }
+.usage { display: flex; flex-direction: column; gap: 10px; }
+.usage-row { display: flex; flex-direction: column; gap: 3px; }
+.usage-head { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85em; }
+.usage-label { opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-pct { font-variant-numeric: tabular-nums; opacity: 0.9; flex: none; }
+.usage-pct.warn { color: var(--vscode-editorWarning-foreground, #e0b341); font-weight: 600; }
+.usage-pct.danger { color: var(--vscode-errorForeground, #f85149); font-weight: 600; }
+.usage-bar {
+  height: 4px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-foreground) 15%, transparent);
+}
+.usage-fill {
+  height: 100%; border-radius: 999px;
+  background: var(--phase-color, var(--vscode-charts-blue, #4aa3ff));
+  transition: width 0.3s ease;
+}
+.usage-fill.warn { background: var(--vscode-editorWarning-foreground, #e0b341); }
+.usage-fill.danger { background: var(--vscode-errorForeground, #f85149); }
+.usage-resets { font-size: 0.75em; opacity: 0.55; }
+.usage-empty { font-size: 0.85em; opacity: 0.6; }
+.usage-note { margin-top: 10px; font-size: 0.72em; opacity: 0.45; line-height: 1.4; }
