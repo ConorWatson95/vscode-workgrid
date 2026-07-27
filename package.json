@@ -371,6 +371,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "prepackage": "node -e \"const fs=require('fs');for(const f of fs.readdirSync('.'))if(f.endsWith('.vsix'))fs.unlinkSync(f)\"",
     "package": "vsce package"
   },
   "devDependencies": {
