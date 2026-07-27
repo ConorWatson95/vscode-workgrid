@@ -49,6 +49,19 @@ export class ExtensionConfiguration {
     await this.config(scope).update("permissionMode", mode, target);
   }
 
+  /** Model alias/id for chat sessions ("" = CLI default). */
+  model(scope?: vscode.Uri): string {
+    return this.config(scope).get<string>("model", "").trim();
+  }
+
+  /** Persists the chosen model so subsequent chats default to it. */
+  async setModel(model: string, scope?: vscode.Uri): Promise<void> {
+    const target = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    await this.config(scope).update("model", model, target);
+  }
+
   trackNativeActivity(scope?: vscode.Uri): boolean {
     return this.config(scope).get<boolean>("trackNativeActivity", true);
   }

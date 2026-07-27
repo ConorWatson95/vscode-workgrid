@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -330,6 +330,20 @@
           "default": 0,
           "scope": "resource",
           "markdownDescription": "When a chat session's context grows beyond this many tokens, it is compacted automatically at the end of the current turn (no prompt). Set to `0` to disable. Recommended to set this higher than `#taskWorkspaces.compactPromptThreshold#` so you are warned first and only auto-compacted if you keep going — e.g. `160000`."
+        },
+        "taskWorkspaces.model": {
+          "type": "string",
+          "enum": ["", "opus", "sonnet", "haiku", "fable"],
+          "enumDescriptions": [
+            "Use the Claude CLI's default model.",
+            "Claude Opus — most capable.",
+            "Claude Sonnet — balanced.",
+            "Claude Haiku — fastest.",
+            "Claude Fable."
+          ],
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Model for chat-panel sessions, passed to the CLI's `--model`. Empty uses the CLI default. Can also be switched per-session from the chat panel header."
         },
         "taskWorkspaces.permissionMode": {
           "type": "string",

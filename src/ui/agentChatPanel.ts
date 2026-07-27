@@ -17,6 +17,9 @@ export interface ChatController {
   currentMode(): string;
   /** Restart at a new permission mode; returns the new session, or undefined if unsupported (read-only). */
   setMode(mode: string): ClaudeStreamSession | undefined;
+  currentModel(): string;
+  /** Restart on a different model; returns the new session, or undefined if unsupported (read-only). */
+  setModel(model: string): ClaudeStreamSession | undefined;
   /** Resume the current session after its process has ended, or undefined if unsupported (read-only). */
   resume(): ClaudeStreamSession | undefined;
   listHistory(): Promise<HistoryEntry[]>;
@@ -164,7 +167,7 @@ export class AgentChatPanel {
     this.session?.send(text);
   }
 
-  private async handleMessage(msg: { type: string; text?: string; mode?: string; entry?: HistoryEntry }): Promise<void> {
+  private async handleMessage(msg: { type: string; text?: string; mode?: string; model?: string; entry?: HistoryEntry }): Promise<void> {
     switch (msg.type) {
       case "ready":
         this.postInit();
@@ -184,6 +187,12 @@ export class AgentChatPanel {
       case "setMode": {
         if (!msg.mode) break;
         const s = this.options.controller.setMode(msg.mode);
+        if (s) this.attach(s);
+        break;
+      }
+      case "setModel": {
+        if (msg.model === undefined) break;
+        const s = this.options.controller.setModel(msg.model);
         if (s) this.attach(s);
         break;
       }
@@ -225,6 +234,7 @@ export class AgentChatPanel {
       status: this.session?.status ?? "stopped",
       busy: this.session?.busy ?? false,
       currentMode: this.options.controller.currentMode(),
+      currentModel: this.options.controller.currentModel(),
       readOnly: this.readOnly,
       tokens: this.session?.contextTokens ?? 0,
       compactThreshold: this.options.compactThreshold,
@@ -275,6 +285,13 @@ export class AgentChatPanel {
       <option value="acceptEdits">Edit automatically</option>
       <option value="plan">Plan</option>
       <option value="bypassPermissions">Auto</option>
+    </select>
+    <select id="model" title="Model">
+      <option value="">Default model</option>
+      <option value="opus">Opus</option>
+      <option value="sonnet">Sonnet</option>
+      <option value="haiku">Haiku</option>
+      <option value="fable">Fable</option>
     </select>
     <button id="history" class="ghost" title="Session history">History</button>
     <button id="compact" class="ghost" title="Compact the conversation context">Compact</button>

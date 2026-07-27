@@ -83,6 +83,8 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
   const readOnlyController: ChatController = {
     currentMode: () => "default",
     setMode: () => undefined,
+    currentModel: () => "",
+    setModel: () => undefined,
     resume: () => undefined,
     listHistory: async () =>
       taskPick.rec.sessions.map((s) => ({ id: s.id, title: s.title, mtimeMs: s.mtimeMs, archived: true })),
@@ -428,6 +430,7 @@ async function startChatSession(
     addDirs: [task.repositoryRoot],
     resumeSessionId,
     autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
+    model: ctx.configuration.model(ctx.repositoryUri()),
   });
 
   // Replay the prior transcript into the panel so history is visible.
@@ -473,6 +476,7 @@ async function buildChatOptions(
 /** Live controller: mode switching, history listing, and resume. */
 function buildController(ctx: CommandContext, task: TaskWorkspace): ChatController {
   let mode = ctx.configuration.permissionMode(ctx.repositoryUri());
+  let model = ctx.configuration.model(ctx.repositoryUri());
 
   const startResumed = (resumeSessionId: string | undefined) => {
     const prior = ctx.sessions.get(task.id);
@@ -491,6 +495,7 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       addDirs: [task.repositoryRoot],
       resumeSessionId: resumable,
       autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
+      model,
     });
     if (session.items.length === 0) {
       const fromDisk = resumeSessionId ? loadTranscriptItems(os.homedir(), resumeSessionId) : [];
@@ -511,6 +516,14 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       mode = m as typeof mode;
       // Persist so subsequent chats in this project default to the chosen mode.
       void ctx.configuration.setPermissionMode(mode, ctx.repositoryUri());
+      const current = ctx.sessions.get(task.id);
+      return startResumed(current?.id ?? (task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined));
+    },
+    currentModel: () => model,
+    setModel: (m) => {
+      model = m;
+      // Persist so subsequent chats in this project default to the chosen model.
+      void ctx.configuration.setModel(model, ctx.repositoryUri());
       const current = ctx.sessions.get(task.id);
       return startResumed(current?.id ?? (task.agent?.provider === "claude-chat" ? task.agent.sessionId : undefined));
     },

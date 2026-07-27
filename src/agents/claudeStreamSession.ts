@@ -26,6 +26,8 @@ export interface StreamSessionOptions {
   resumeSessionId?: string;
   /** Auto-compact once context exceeds this many tokens (0 = never). */
   autoCompactThreshold?: number;
+  /** Model alias/id passed to `--model` (e.g. "opus"). Empty = CLI default. */
+  model?: string;
 }
 
 type SessionEvents = {
@@ -106,6 +108,9 @@ export class ClaudeStreamSession {
       "--permission-mode",
       this.options.permissionMode,
     ];
+    if (this.options.model && this.options.model.trim().length > 0) {
+      args.push("--model", this.options.model.trim());
+    }
     for (const dir of this.options.addDirs ?? []) {
       args.push("--add-dir", dir);
     }
