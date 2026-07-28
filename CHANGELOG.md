@@ -2,6 +2,15 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.14.0
+
+- **Untracked worktrees can now be removed without adopting them first.**
+  Orphan rows previously offered only "Adopt", so deleting one meant creating a
+  task purely in order to destroy it. There is now a trash button on the row and
+  a "Remove Untracked Worktree" context-menu entry, with the same confirmations
+  as the tracked Remove: it warns about uncommitted changes, offers to delete the
+  branch too, and offers a forced delete if that branch has unmerged commits.
+
 ## 0.13.0
 
 - **Fixed chat history going missing after a window reload.** Replayed

@@ -50,6 +50,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.startTerminal", (arg) => launchInModeCommand(ctx, arg, "terminal")),
     register("taskWorkspaces.stopAgent", (arg) => stopAgentCommand(ctx, arg)),
     register("taskWorkspaces.adopt", (arg) => adoptCommand(ctx, arg)),
+    register("taskWorkspaces.removeOrphan", (arg) => removeOrphanCommand(ctx, arg)),
     register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
     register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
     register("taskWorkspaces.sessionHistory", () => sessionHistoryCommand(ctx)),
@@ -118,6 +119,83 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
       initialReadOnly: { title: `${taskPick.rec.name} · ${sessPick.session.title}`, items },
     },
   );
+}
+
+/**
+ * Removes an untracked worktree, optionally deleting its branch.
+ *
+ * Adopting one just to delete it was the only route before, which meant
+ * creating a task to destroy it. Deliberately mirrors the tracked Remove
+ * command's confirmations — nothing here should be easier to do by accident
+ * just because the worktree isn't tracked.
+ */
+async function removeOrphanCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof OrphanWorktreeTreeItem)) return;
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) return;
+
+  const { worktreePath, branch } = arg;
+  const status = await ctx.status.getStatus(worktreePath);
+  const dirty = status.ok && status.value.isDirty;
+  const changed = status.ok ? status.value.changedFileCount : 0;
+
+  const keepBranch = "Remove worktree";
+  const withBranch = "Remove worktree + branch";
+  const detail = [
+    branch ? `Branch: ${branch}` : "(detached HEAD)",
+    `Path: ${worktreePath}`,
+  ].join("\n");
+
+  const choice = await vscode.window.showWarningMessage(
+    dirty
+      ? `This worktree has ${changed} uncommitted change(s). Removing it will discard them.`
+      : `Remove untracked worktree "${branch ?? worktreePath}"?`,
+    { modal: true, detail },
+    // Only offer branch deletion when there is a branch to delete.
+    ...(branch ? [keepBranch, withBranch] : [keepBranch]),
+  );
+  if (choice !== keepBranch && choice !== withBranch) return;
+
+  const removed = await ctx.worktrees.removeWorktree(repositoryRoot, worktreePath, {
+    force: dirty,
+  });
+  if (!removed.ok) {
+    void vscode.window.showErrorMessage(
+      `Failed to remove worktree: ${describeWorktreeError(removed.error)}`,
+    );
+    return;
+  }
+  ctx.logger.info(`Removed untracked worktree ${worktreePath}`);
+
+  // The branch can only be deleted once its worktree is gone.
+  if (choice === withBranch && branch) {
+    await deleteOrphanBranch(ctx, repositoryRoot, branch);
+  }
+  ctx.tree.refresh();
+}
+
+/** Deletes an orphan's branch, offering a forced delete if it is unmerged. */
+async function deleteOrphanBranch(
+  ctx: CommandContext,
+  repositoryRoot: string,
+  branch: string,
+): Promise<void> {
+  let res = await ctx.worktrees.deleteBranch(repositoryRoot, branch, { force: false });
+  if (!res.ok && res.error.kind === "unmerged") {
+    const del = "Delete anyway";
+    const confirm = await vscode.window.showWarningMessage(
+      `Branch "${branch}" has commits not merged elsewhere. Delete it anyway?`,
+      { modal: true, detail: "These commits will be lost." },
+      del,
+    );
+    if (confirm !== del) return;
+    res = await ctx.worktrees.deleteBranch(repositoryRoot, branch, { force: true });
+  }
+  if (!res.ok) {
+    void vscode.window.showErrorMessage(
+      `Worktree removed, but branch "${branch}" could not be deleted: ${describeWorktreeError(res.error)}`,
+    );
+  }
 }
 
 /** Opens the worktree's solution in Visual Studio. */

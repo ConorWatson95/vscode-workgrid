@@ -95,7 +95,7 @@ export class OrphanWorktreeTreeItem extends vscode.TreeItem {
         branch ? `Branch: \`${branch}\`` : "(detached)",
         `Path: \`${worktreePath}\``,
         "",
-        "Adopt it to track it as a task.",
+        "Adopt it to track it as a task, or remove it without tracking it.",
       ].join("\n"),
     );
     this.command = {
