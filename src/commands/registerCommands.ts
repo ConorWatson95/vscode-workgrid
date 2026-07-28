@@ -20,6 +20,7 @@ import {
   transcriptExists,
 } from "../agents/transcriptReader";
 import { LiveAgentSession } from "../agents/claudeAgents";
+import { ChatItem } from "../agents/streamJson";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -118,6 +119,22 @@ async function sessionHistoryCommand(ctx: CommandContext): Promise<void> {
       compactThreshold: 0,
       initialReadOnly: { title: `${taskPick.rec.name} · ${sessPick.session.title}`, items },
     },
+  );
+}
+
+/**
+ * Records what a replay actually recovered from disk.
+ *
+ * Missing history is otherwise impossible to attribute: the transcript trails
+ * the live conversation (the CLI writes a reply when the turn completes), so
+ * "it was on screen but gone after reload" and "it never reached the file" look
+ * identical from the UI. Logging the tail distinguishes them.
+ */
+function logReplay(ctx: CommandContext, sessionId: string, items: ChatItem[]): void {
+  const last = items[items.length - 1];
+  const tail = last && "text" in last ? last.text.replace(/\s+/g, " ").slice(0, 120) : "(none)";
+  ctx.logger.info(
+    `Replayed ${items.length} item(s) from session ${sessionId}; last item [${last?.kind ?? "-"}]: ${tail}`,
   );
 }
 
@@ -649,6 +666,9 @@ async function openChatSession(
     progress.report("loading conversation history…");
     const prior = await loadTranscriptItems(os.homedir(), resumeSessionId);
     if (prior.length > 0) session.items.unshift(...prior);
+    // Logged so a "history is missing" report can be checked against what was
+    // actually on disk, rather than guessed at.
+    logReplay(ctx, resumeSessionId, prior);
   }
 
   const agentSession = {

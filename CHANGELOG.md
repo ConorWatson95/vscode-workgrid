@@ -2,6 +2,14 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.14.1
+
+- Log what a replay recovered from disk (item count, and the last item) when a
+  chat resumes. Missing history is otherwise unattributable: because the CLI
+  writes a reply only once the turn completes, "it was on screen and vanished on
+  reload" and "it never reached the transcript" look identical from the UI.
+  Check the Task Workspaces output channel next time it happens.
+
 ## 0.14.0
 
 - **Untracked worktrees can now be removed without adopting them first.**
