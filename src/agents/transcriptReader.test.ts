@@ -66,6 +66,46 @@ describe("loadItemsFromFile", () => {
     }
   });
 
+  it("does not replay entries the transcript repeats on resume", async () => {
+    // Resuming re-appends earlier entries verbatim: same uuid, same timestamp.
+    // A real 555-entry transcript had 196 such repeats, so the conversation's
+    // opening messages rendered again partway through.
+    const entry = (uuid: string, text: string) =>
+      JSON.stringify({
+        type: "assistant",
+        uuid,
+        timestamp: "2026-07-27T09:04:32.455Z",
+        message: { content: [{ type: "text", text }] },
+      });
+    const file = write("resumed.jsonl", [
+      entry("a", "first"),
+      entry("b", "second"),
+      entry("c", "third"),
+      // The resume re-append, byte-identical to the entries above.
+      entry("a", "first"),
+      entry("b", "second"),
+      entry("d", "fourth"),
+    ]);
+    expect(await loadItemsFromFile(file)).toEqual([
+      { kind: "assistant", text: "first" },
+      { kind: "assistant", text: "second" },
+      { kind: "assistant", text: "third" },
+      { kind: "assistant", text: "fourth" },
+    ]);
+  });
+
+  it("keeps genuinely repeated messages that have their own uuid", async () => {
+    // Identical text is not itself proof of a repeat — asking the same thing
+    // twice must still show twice.
+    const say2 = (uuid: string, text: string) =>
+      JSON.stringify({ type: "user", uuid, message: { content: text } });
+    const file = write("twice.jsonl", [say2("x", "run it again"), say2("y", "run it again")]);
+    expect(await loadItemsFromFile(file)).toEqual([
+      { kind: "user", text: "run it again" },
+      { kind: "user", text: "run it again" },
+    ]);
+  });
+
   it("returns empty for a missing file", async () => {
     expect(await loadItemsFromFile(path.join(dir, "nope.jsonl"))).toEqual([]);
   });

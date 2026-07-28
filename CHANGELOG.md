@@ -2,6 +2,18 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.15.0
+
+- **Fixed the conversation replaying its opening messages partway through.**
+  Resuming a session re-appends its earlier entries to the same transcript —
+  verbatim, keeping their original `uuid` and timestamp — so replaying the file
+  as written showed the first message and the replies after it a second time. One
+  real 555-entry transcript contained 196 such repeats; across the transcripts on
+  this machine it was roughly doubling the replayed conversation. Entries are now
+  de-duplicated by `uuid`, keeping the first occurrence.
+- Messages that genuinely repeat still show twice: identical text is not treated
+  as a repeat, only an identical entry id.
+
 ## 0.14.1
 
 - Log what a replay recovered from disk (item count, and the last item) when a

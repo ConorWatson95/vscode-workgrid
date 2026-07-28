@@ -32,10 +32,16 @@ interface Usage {
   cache_creation_input_tokens?: number;
 }
 
-interface StreamEvent {
+export interface StreamEvent {
   type?: string;
   subtype?: string;
   session_id?: string;
+  /**
+   * Stable per-entry id in a saved transcript. Resuming re-appends earlier
+   * entries verbatim — same uuid, same timestamp — so this is what identifies a
+   * repeat when replaying.
+   */
+  uuid?: string;
   /** Present on a system/init event: the model the CLI actually resolved to. */
   model?: string;
   result?: string;

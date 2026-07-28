@@ -64,9 +64,18 @@ function parseItems(
   maxItems: number,
 ): ChatItem[] {
   const items: ChatItem[] = [];
+  // Resuming a conversation re-appends its earlier entries to the same
+  // transcript, verbatim and with their original uuid and timestamp. Rendering
+  // the file as-is therefore replays the opening messages partway through. Keep
+  // the first occurrence of each uuid and skip repeats.
+  const seen = new Set<string>();
   for (const line of tail.text.split("\n")) {
     const event = parseStreamLine(line);
     if (!event) continue;
+    if (event.uuid) {
+      if (seen.has(event.uuid)) continue;
+      seen.add(event.uuid);
+    }
     // Replaying a saved transcript: include the user's typed turns.
     for (const item of toChatItems(event, true)) items.push(item);
   }
