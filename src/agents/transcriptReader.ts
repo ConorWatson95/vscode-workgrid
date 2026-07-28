@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { ChatItem, parseStreamLine, toChatItems } from "./streamJson";
 import { normaliseKey } from "./nativeSessionWatcher";
@@ -29,38 +30,106 @@ export function resolveProjectDir(
 }
 
 /**
- * Cap on how much of a transcript is read. Transcripts reach tens of MB, and
- * this runs synchronously on the extension host — reading one whole freezes the
- * window. Only the last `maxItems` are kept anyway, so reading the tail is
- * enough; the cap just has to comfortably exceed that many entries.
+ * Cap on how much of a transcript is read.
+ *
+ * Transcripts reach tens of MB, so reading one whole is expensive; the read is
+ * async precisely so that cost isn't paid on the extension host's thread. The
+ * cap only exists as a backstop against a pathologically large file — it has to
+ * comfortably exceed a full session, since undershooting silently hides
+ * history.
  */
-const MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES = 24 * 1024 * 1024;
 
-/** Parses a transcript file into renderable chat items (most recent capped). */
-export function loadItemsFromFile(file: string, maxItems = 300): ChatItem[] {
-  const content = readTail(file, MAX_TRANSCRIPT_BYTES);
-  if (content === undefined) return [];
+/**
+ * How many renderable items a replayed conversation keeps.
+ *
+ * Generous on purpose: a real 3,600-entry session produced 2,040 items, so the
+ * previous cap of 300 dropped ~85% of the conversation — which read as history
+ * going missing. When it does bind, `truncationNotice` says so rather than
+ * leaving a silent gap.
+ */
+const MAX_ITEMS = 4000;
+
+/** Marks where dropped history would have been, so a gap is never silent. */
+function truncationNotice(dropped: number): ChatItem {
+  return {
+    kind: "system",
+    text: `${dropped.toLocaleString()} earlier message${dropped === 1 ? "" : "s"} not shown — open the session in the CLI for the full history.`,
+  };
+}
+
+/** Turns raw transcript text into capped chat items, flagging any gap. */
+function parseItems(
+  tail: { text: string; truncated: boolean },
+  maxItems: number,
+): ChatItem[] {
   const items: ChatItem[] = [];
-  for (const line of content.split("\n")) {
+  for (const line of tail.text.split("\n")) {
     const event = parseStreamLine(line);
     if (!event) continue;
     // Replaying a saved transcript: include the user's typed turns.
     for (const item of toChatItems(event, true)) items.push(item);
   }
-  return items.slice(-maxItems);
+
+  const kept = items.slice(-maxItems);
+  const droppedByCount = items.length - kept.length;
+  // Either cap can bite: too many items, or a file bigger than the byte cap.
+  if (droppedByCount > 0) kept.unshift(truncationNotice(droppedByCount));
+  else if (tail.truncated) {
+    kept.unshift({
+      kind: "system",
+      text: "Earlier messages not shown — this conversation is too large to replay in full.",
+    });
+  }
+  return kept;
+}
+
+/**
+ * Parses a transcript file into renderable chat items (most recent capped).
+ *
+ * Async so a multi-MB read doesn't block the extension host; opening a chat
+ * awaits this behind a progress indicator.
+ */
+export async function loadItemsFromFile(
+  file: string,
+  maxItems = MAX_ITEMS,
+): Promise<ChatItem[]> {
+  const tail = await readTail(file, MAX_TRANSCRIPT_BYTES);
+  return tail === undefined ? [] : parseItems(tail, maxItems);
+}
+
+/**
+ * Synchronous variant, for the in-window paths (switching mode or model,
+ * resuming, opening an old session) whose callers must return a session
+ * immediately. Those normally carry the transcript in memory and only fall back
+ * to disk, so the read is rare.
+ */
+export function loadItemsFromFileSync(file: string, maxItems = MAX_ITEMS): ChatItem[] {
+  const tail = readTailSync(file, MAX_TRANSCRIPT_BYTES);
+  return tail === undefined ? [] : parseItems(tail, maxItems);
 }
 
 /**
  * Loads a prior Claude session transcript from `~/.claude/projects` by id and
  * maps it to renderable chat items, so a resumed session's history shows.
  */
-export function loadTranscriptItems(
+export async function loadTranscriptItems(
   homeDir: string,
   sessionId: string,
-  maxItems = 300,
-): ChatItem[] {
+  maxItems = MAX_ITEMS,
+): Promise<ChatItem[]> {
   const file = findTranscript(homeDir, sessionId);
   return file ? loadItemsFromFile(file, maxItems) : [];
+}
+
+/** Synchronous counterpart of {@link loadTranscriptItems}. */
+export function loadTranscriptItemsSync(
+  homeDir: string,
+  sessionId: string,
+  maxItems = MAX_ITEMS,
+): ChatItem[] {
+  const file = findTranscript(homeDir, sessionId);
+  return file ? loadItemsFromFileSync(file, maxItems) : [];
 }
 
 /** Lists prior sessions for a worktree, newest first, with their titles. */
@@ -183,9 +252,42 @@ function firstUserText(head: string): string | undefined {
  * Reads at most the last `maxBytes` of a file as UTF-8, returning undefined if
  * it can't be read. When truncated, the leading partial line is dropped so the
  * caller never sees a half-JSON line (and a multi-byte character can't be split
- * across the boundary).
+ * across the boundary), and `truncated` says so.
  */
-function readTail(file: string, maxBytes: number): string | undefined {
+async function readTail(
+  file: string,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean } | undefined> {
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(file, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const size = (await handle.stat()).size;
+    const length = Math.min(size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    const text = buffer.toString("utf8");
+    if (length === size) return { text, truncated: false };
+    const firstBreak = text.indexOf("\n");
+    return {
+      text: firstBreak === -1 ? "" : text.slice(firstBreak + 1),
+      truncated: true,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Synchronous counterpart of {@link readTail}, sharing its truncation rules. */
+function readTailSync(
+  file: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } | undefined {
   let fd: number;
   try {
     fd = fs.openSync(file, "r");
@@ -198,9 +300,9 @@ function readTail(file: string, maxBytes: number): string | undefined {
     const buffer = Buffer.alloc(length);
     fs.readSync(fd, buffer, 0, length, size - length);
     const text = buffer.toString("utf8");
-    if (length === size) return text;
+    if (length === size) return { text, truncated: false };
     const firstBreak = text.indexOf("\n");
-    return firstBreak === -1 ? "" : text.slice(firstBreak + 1);
+    return { text: firstBreak === -1 ? "" : text.slice(firstBreak + 1), truncated: true };
   } catch {
     return undefined;
   } finally {

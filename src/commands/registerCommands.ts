@@ -13,7 +13,12 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
 import { scanSlashCommands } from "../agents/slashCommands";
-import { loadTranscriptItems, listSessions, transcriptExists } from "../agents/transcriptReader";
+import {
+  loadTranscriptItems,
+  loadTranscriptItemsSync,
+  listSessions,
+  transcriptExists,
+} from "../agents/transcriptReader";
 import { LiveAgentSession } from "../agents/claudeAgents";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -564,7 +569,7 @@ async function openChatSession(
   // Replay the prior transcript into the panel so history is visible.
   if (resumeSessionId && session.items.length === 0) {
     progress.report("loading conversation history…");
-    const prior = loadTranscriptItems(os.homedir(), resumeSessionId);
+    const prior = await loadTranscriptItems(os.homedir(), resumeSessionId);
     if (prior.length > 0) session.items.unshift(...prior);
   }
 
@@ -673,7 +678,7 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       model,
     });
     if (session.items.length === 0) {
-      const fromDisk = resumeSessionId ? loadTranscriptItems(os.homedir(), resumeSessionId) : [];
+      const fromDisk = resumeSessionId ? loadTranscriptItemsSync(os.homedir(), resumeSessionId) : [];
       const items = fromDisk.length > 0 ? fromDisk : carried;
       if (items.length > 0) session.items.unshift(...items);
     }

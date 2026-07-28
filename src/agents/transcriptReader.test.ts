@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { readTranscriptTitle, fallbackTitle, loadItemsFromFile } from "./transcriptReader";
+import {
+  readTranscriptTitle,
+  fallbackTitle,
+  loadItemsFromFile,
+  loadItemsFromFileSync,
+} from "./transcriptReader";
 
 describe("loadItemsFromFile", () => {
   let dir: string;
@@ -12,45 +17,63 @@ describe("loadItemsFromFile", () => {
   const say = (text: string) =>
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } });
 
-  it("reads a small transcript whole", () => {
-    const file = path.join(dir, "s.jsonl");
-    fs.writeFileSync(file, [say("one"), say("two")].join("\n") + "\n");
-    expect(loadItemsFromFile(file)).toEqual([
+  function write(name: string, lines: string[]): string {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, lines.join("\n") + "\n");
+    return file;
+  }
+
+  it("reads a small transcript whole", async () => {
+    const file = write("s.jsonl", [say("one"), say("two")]);
+    expect(await loadItemsFromFile(file)).toEqual([
       { kind: "assistant", text: "one" },
       { kind: "assistant", text: "two" },
     ]);
   });
 
-  it("keeps the most recent turns from a transcript far larger than the read cap", () => {
-    // Transcripts reach tens of MB; reading one whole froze the extension host.
-    const file = path.join(dir, "big.jsonl");
-    const padding = "x".repeat(20_000);
-    const lines: string[] = [];
-    for (let i = 0; i < 400; i++) lines.push(say(`${padding}-${i}`));
-    lines.push(say("the last thing said"));
-    fs.writeFileSync(file, lines.join("\n") + "\n");
-    expect(fs.statSync(file).size).toBeGreaterThan(4 * 1024 * 1024);
-
-    const items = loadItemsFromFile(file);
-    expect(items.length).toBeGreaterThan(0);
-    expect(items[items.length - 1]).toEqual({ kind: "assistant", text: "the last thing said" });
+  it("keeps a full-length real-world session rather than truncating it", async () => {
+    // A real 3,600-entry session produced 2,040 items; a 300 cap dropped ~85%
+    // of it, which is what read as history going missing.
+    const file = write("long.jsonl", Array.from({ length: 2040 }, (_, i) => say(`turn ${i}`)));
+    const items = await loadItemsFromFile(file);
+    expect(items).toHaveLength(2040);
+    expect(items[0]).toEqual({ kind: "assistant", text: "turn 0" });
   });
 
-  it("drops the partial leading line rather than yielding half-parsed JSON", () => {
-    // Every surviving entry must be intact — a truncated head must be discarded.
-    const file = path.join(dir, "big.jsonl");
-    const lines: string[] = [];
-    for (let i = 0; i < 300; i++) lines.push(say("y".repeat(20_000) + `-${i}`));
-    fs.writeFileSync(file, lines.join("\n") + "\n");
+  it("says so when the item cap drops earlier messages", async () => {
+    const file = write("over.jsonl", Array.from({ length: 12 }, (_, i) => say(`turn ${i}`)));
+    const items = await loadItemsFromFile(file, 5);
+    expect(items).toHaveLength(6); // 5 kept + the notice
+    expect(items[0].kind).toBe("system");
+    expect((items[0] as { text: string }).text).toContain("7 earlier messages not shown");
+    expect(items[items.length - 1]).toEqual({ kind: "assistant", text: "turn 11" });
+  });
 
-    for (const item of loadItemsFromFile(file)) {
+  it("keeps the newest turns and never yields half-parsed JSON when byte-capped", async () => {
+    // Exceeding the byte cap must discard the partial leading line intact.
+    const file = write("big.jsonl", [
+      ...Array.from({ length: 1500 }, (_, i) => say("y".repeat(20_000) + `-${i}`)),
+      say("the last thing said"),
+    ]);
+    expect(fs.statSync(file).size).toBeGreaterThan(24 * 1024 * 1024);
+
+    const items = await loadItemsFromFile(file);
+    expect(items[items.length - 1]).toEqual({ kind: "assistant", text: "the last thing said" });
+    expect(items[0].kind).toBe("system"); // the truncation notice
+    for (const item of items.slice(1)) {
       expect(item.kind).toBe("assistant");
-      expect((item as { text: string }).text).toMatch(/^y+-\d+$/);
+      expect((item as { text: string }).text).toMatch(/^(y+-\d+|the last thing said)$/);
     }
   });
 
-  it("returns empty for a missing file", () => {
-    expect(loadItemsFromFile(path.join(dir, "nope.jsonl"))).toEqual([]);
+  it("returns empty for a missing file", async () => {
+    expect(await loadItemsFromFile(path.join(dir, "nope.jsonl"))).toEqual([]);
+  });
+
+  it("the sync variant agrees with the async one", async () => {
+    const file = write("both.jsonl", [say("one"), say("two"), say("three")]);
+    expect(loadItemsFromFileSync(file)).toEqual(await loadItemsFromFile(file));
+    expect(loadItemsFromFileSync(path.join(dir, "nope.jsonl"))).toEqual([]);
   });
 });
 

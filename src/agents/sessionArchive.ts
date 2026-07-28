@@ -5,7 +5,7 @@ import {
   resolveProjectDir,
   readTranscriptTitle,
   fallbackTitle,
-  loadItemsFromFile,
+  loadItemsFromFileSync,
 } from "./transcriptReader";
 
 export interface ArchivedSession {
@@ -69,7 +69,7 @@ export class SessionArchive {
     return archived.sort((a, b) => b.mtimeMs - a.mtimeMs);
   }
 
-  loadItems(file: string, maxItems = 300): ChatItem[] {
-    return loadItemsFromFile(file, maxItems);
+  loadItems(file: string, maxItems?: number): ChatItem[] {
+    return loadItemsFromFileSync(file, maxItems);
   }
 }

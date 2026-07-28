@@ -2,6 +2,20 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.13.0
+
+- **Fixed chat history going missing after a window reload.** Replayed
+  conversations were capped at the most recent 300 items — a real 3,600-entry
+  session produces 2,040, so roughly 85% of it silently vanished, including most
+  user turns. Longer sessions lost more, which is why it looked intermittent. The
+  cap is now 4,000 items and the transcript read allows 24 MB rather than 2 MB.
+- **Truncation is no longer silent.** If either cap does bite, the replay starts
+  with a note saying how many earlier messages are not shown, instead of leaving
+  a gap that looks like data loss.
+- The read is asynchronous now, so raising the caps doesn't reintroduce the
+  freeze fixed in 0.10.1 — a multi-MB transcript no longer blocks the extension
+  host while it loads.
+
 ## 0.12.1
 
 - **Plan usage now actually refreshes on its own.** It only re-probed when the
