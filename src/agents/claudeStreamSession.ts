@@ -25,6 +25,7 @@ import {
   isEmptyHandoff,
   parseHandoff,
 } from "./handoff";
+import { buildCliArgs } from "./claudeCliArgs";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 
@@ -34,6 +35,13 @@ export interface StreamSessionOptions {
   permissionMode: PermissionMode;
   /** Extra directories the agent may access (e.g. the main repo root). */
   addDirs?: string[];
+  /**
+   * Absolute path to an MCP config to load explicitly (`--mcp-config`).
+   *
+   * Needed because every task worktree is a directory the CLI has never seen, so
+   * the project's `.mcp.json` is unapproved there and none of its servers start.
+   */
+  mcpConfigPath?: string;
   /** Resume this existing Claude session id instead of starting a new one. */
   resumeSessionId?: string;
   /** Auto-compact once context exceeds this many tokens (0 = never). */
@@ -141,34 +149,27 @@ export class ClaudeStreamSession {
 
   /** Spawns the CLI. If an initial prompt is given, sends it as the first turn. */
   start(initialPrompt?: string): void {
-    const args = [
-      "-p",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      // Resume the existing session, or create one with a known id.
-      ...(this.resumeSessionId
-        ? ["--resume", this.resumeSessionId]
-        : ["--session-id", this.id]),
-      "--permission-mode",
-      this.options.permissionMode,
-    ];
-    if (this.options.model && this.options.model.trim().length > 0) {
-      args.push("--model", this.options.model.trim());
-    }
-    for (const dir of this.options.addDirs ?? []) {
-      args.push("--add-dir", dir);
-    }
+    // On Windows the CLI is resolved via the shell (PATHEXT), which means the
+    // shell re-parses the command line, so path arguments have to be quoted.
+    const useShell = process.platform === "win32";
+    const args = buildCliArgs({
+      sessionId: this.id,
+      resumeSessionId: this.resumeSessionId,
+      permissionMode: this.options.permissionMode,
+      model: this.options.model,
+      addDirs: this.options.addDirs,
+      mcpConfigPath: this.options.mcpConfigPath,
+      useShell,
+    });
 
     this.logger.info(`Starting Claude stream session in ${this.options.worktreePath}`);
+    if (this.options.mcpConfigPath) {
+      this.logger.info(`MCP servers from ${this.options.mcpConfigPath}`);
+    }
     this.child = spawn(this.options.command, args, {
       cwd: this.options.worktreePath,
       windowsHide: true,
-      // On Windows the CLI is resolved via the shell (PATHEXT). Args are all
-      // static flags + a generated UUID — no free text — so this is safe.
-      shell: process.platform === "win32",
+      shell: useShell,
     }) as ChildProcessWithoutNullStreams;
 
     this.child.stdout.setEncoding("utf8");

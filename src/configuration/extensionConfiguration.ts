@@ -115,6 +115,18 @@ export class ExtensionConfiguration {
   }
 
   /**
+   * MCP config to load explicitly into every session, relative to the
+   * repository root (or absolute). Empty disables it.
+   *
+   * Read from the **repository root**, never the worktree, for the same reason
+   * review rules are: MCP servers grant tool access, and a branch must not be
+   * able to hand itself new capabilities by editing a file.
+   */
+  mcpConfigPath(scope?: vscode.Uri): string {
+    return this.config(scope).get<string>("mcpConfigPath", ".mcp.json").trim();
+  }
+
+  /**
    * Hard stop for one subtask, so a hung CLI cannot stall a route forever.
    *
    * Generous by default: a planning stage on a large repository legitimately

@@ -27,6 +27,8 @@ import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadReviewRules } from "./services/reviewRulesService";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
+import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
+import * as fs from "node:fs";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
 import {
   CommandContext,
@@ -251,6 +253,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       worktreePath: task.worktreePath,
       permissionMode: configuration.permissionMode(repositoryUri),
       addDirs: [task.repositoryRoot],
+      // A stage session runs in a worktree the CLI has never seen, so the
+      // project's MCP servers are unapproved there and silently absent — which
+      // is how a planning stage loses the ability to read its own ticket.
+      mcpConfigPath: resolveMcpConfigPath(
+        task.repositoryRoot,
+        configuration.mcpConfigPath(repositoryUri),
+        (p) => fs.existsSync(p),
+      ),
       autoCompactThreshold: configuration.autoCompactThreshold(repositoryUri),
       contextStrategy: configuration.contextStrategy(repositoryUri),
       model: configuration.model(repositoryUri),

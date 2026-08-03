@@ -35,6 +35,7 @@ import {
 } from "../agents/transcriptReader";
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
+import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -693,6 +694,13 @@ async function adoptCommand(ctx: CommandContext, arg: unknown): Promise<void> {
 function contextOptions(ctx: CommandContext, task: TaskWorkspace) {
   return {
     contextStrategy: ctx.configuration.contextStrategy(ctx.repositoryUri()),
+    // Worktrees are unapproved directories, so the project's .mcp.json has to be
+    // passed explicitly or none of its servers start.
+    mcpConfigPath: resolveMcpConfigPath(
+      task.repositoryRoot,
+      ctx.configuration.mcpConfigPath(ctx.repositoryUri()),
+      (p) => fs.existsSync(p),
+    ),
     taskName: task.name,
     onCheckpoint: ({ raw, brief }: { raw: string; brief: string }) => {
       ctx.logger.info(

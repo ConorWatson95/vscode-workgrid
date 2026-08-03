@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -484,6 +484,12 @@
           "default": 0,
           "scope": "resource",
           "markdownDescription": "When a chat session's context grows beyond this many tokens, `#taskWorkspaces.contextStrategy#` is applied automatically at the end of the current turn (no prompt). Set to `0` to disable. Recommended to set this higher than `#taskWorkspaces.compactPromptThreshold#` so you are warned first and only acted on if you keep going — e.g. `160000`."
+        },
+        "taskWorkspaces.mcpConfigPath": {
+          "type": "string",
+          "default": ".mcp.json",
+          "scope": "resource",
+          "markdownDescription": "MCP server config loaded explicitly into every agent session, via the CLI's `--mcp-config`. Relative to the repository root, or absolute. Set to empty to disable.\n\nEach task worktree is a directory the CLI has never seen, so a project-scoped `.mcp.json` inside it is unapproved — `enabledMcpjsonServers` stays empty and none of its servers start. Non-interactive sessions skip the trust *dialog*, which is not the same as granting trust, and a route's headless sessions have nobody to answer a prompt. Passing the config explicitly is what actually loads the servers.\n\nRead from the **repository root**, never a task worktree, so a branch cannot grant itself new tool access. Existing user-scope MCP servers are unaffected (`--strict-mcp-config` is not used)."
         },
         "taskWorkspaces.stageTimeoutMinutes": {
           "type": "number",

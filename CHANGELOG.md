@@ -2,6 +2,25 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.16.2
+
+- **Fixed: MCP servers were silently missing in every task worktree.** A worktree
+  is a directory the CLI has never seen, so a project-scoped `.mcp.json` in it is
+  unapproved — `enabledMcpjsonServers` stays empty and none of its servers start.
+  Non-interactive sessions skip the trust *dialog*, which is not the same as
+  granting trust, and a route's headless sessions have nobody to answer a prompt.
+  Sessions now pass the config explicitly via `--mcp-config`, so a planning stage
+  can reach the ticket tracker and database servers its prompts assume. New
+  `taskWorkspaces.mcpConfigPath` (default `.mcp.json`), resolved from the
+  **repository root** — MCP servers grant tool access, so a branch must not be
+  able to hand itself new capabilities. `--strict-mcp-config` is deliberately not
+  used, so user-scope servers are unaffected.
+- **Fixed: path arguments were unquoted when the CLI is spawned through a shell.**
+  `--add-dir` has always been passed a real path, and on Windows the process is
+  spawned with `shell: true`, so a repository under a path containing a space was
+  silently truncated at the space. Argument building moved to a pure, tested
+  module (`claudeCliArgs.ts`) rather than being inferred from a running process.
+
 ## 0.16.1
 
 - **Fixed: "Stop Agent" now stops the route, not just the session.** Killing the
