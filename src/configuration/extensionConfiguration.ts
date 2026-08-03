@@ -115,6 +115,16 @@ export class ExtensionConfiguration {
   }
 
   /**
+   * Where the project keeps its own documentation, named to every stage.
+   *
+   * Empty disables the guidance entirely — a project with no documentation
+   * convention should not be told to invent one mid-task.
+   */
+  projectDocsPath(scope?: vscode.Uri): string {
+    return this.config(scope).get<string>("projectDocsPath", "docs/").trim();
+  }
+
+  /**
    * MCP config to load explicitly into every session, relative to the
    * repository root (or absolute). Empty disables it.
    *

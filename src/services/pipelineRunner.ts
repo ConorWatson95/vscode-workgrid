@@ -87,10 +87,26 @@ export class PipelineRunner {
     private readonly repository: TaskRepository,
     private readonly reviewPlans: ReviewPlanService,
     private readonly logger: Logger,
+    /**
+     * Where the project documents itself, named to every stage. A function
+     * because it is a setting the user can change between advances.
+     */
+    private readonly docsPath: () => string | undefined = () => undefined,
   ) {}
 
   /** In-flight routes, so stopping a task's agent can stop its route too. */
   private readonly running = new Map<string, AbortController>();
+
+  /** What every stage is told about the task it is working on. */
+  private contextFor(task: TaskWorkspace): StageContext {
+    return {
+      taskName: task.name,
+      taskDescription: task.description,
+      branchName: task.branchName,
+      baseBranch: task.baseBranch,
+      docsPath: this.docsPath() || undefined,
+    };
+  }
 
   /**
    * Subtasks *this* runner started. A persisted `running` subtask missing from
@@ -291,7 +307,7 @@ export class PipelineRunner {
   ): Promise<TaskWorkspace | undefined> {
     const reply = await this.sessions.run(
       task,
-      splitPrompt(contextFor(task), action.stage),
+      splitPrompt(this.contextFor(task), action.stage),
       `plan:${action.stage.id}`,
     );
     if (!reply.ok) {
@@ -347,7 +363,7 @@ export class PipelineRunner {
     cancelled?: boolean;
   }> {
     const { stage, subtask } = action;
-    const context = contextFor(task);
+    const context = this.contextFor(task);
 
     // A behaviour review is asked for a checklist; everything else does the work.
     const prompt = producesChecklist(stage.kind)
@@ -430,11 +446,4 @@ export class PipelineRunner {
   }
 }
 
-function contextFor(task: TaskWorkspace): StageContext {
-  return {
-    taskName: task.name,
-    taskDescription: task.description,
-    branchName: task.branchName,
-    baseBranch: task.baseBranch,
-  };
-}
+

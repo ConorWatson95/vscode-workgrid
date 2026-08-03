@@ -269,7 +269,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
   );
-  const runner = new PipelineRunner(stageRunner, repository, reviewPlans, logger);
+  const runner = new PipelineRunner(
+    stageRunner,
+    repository,
+    reviewPlans,
+    logger,
+    () => configuration.projectDocsPath(repositoryUri),
+  );
 
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {

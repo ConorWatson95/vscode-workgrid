@@ -17,6 +17,15 @@ export interface StageContext {
   taskDescription?: string;
   branchName: string;
   baseBranch: string;
+  /**
+   * Where the project keeps its own documentation, if anywhere.
+   *
+   * This is the harness's only durable memory. Subtask-per-session means every
+   * stage starts cold and re-derives whatever the last one worked out, and that
+   * rediscovery is a large share of a route's cost. A document in the repository
+   * is the one place a finding can outlive the session that produced it.
+   */
+  docsPath?: string;
 }
 
 /**
@@ -58,9 +67,37 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `run in-process, while every shell call pays a process launch. Reserve the shell`,
     `for work that genuinely needs it, and when you do use it, combine the steps`,
     `into one command rather than issuing several.`,
+    ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Guidance for reading and maintaining the project's own documentation.
+ *
+ * Both halves matter. Reading first is the cheap half: business rules and
+ * structure that the code does not state are exactly what a cold session would
+ * otherwise reconstruct from scratch. Writing back is what stops the next stage
+ * paying that cost again — without it, every session in every route rediscovers
+ * the same things and throws the result away when it ends.
+ *
+ * Bounded deliberately: a stage that writes down what the code already says
+ * produces documentation nobody trusts, and stale docs are worse than none.
+ */
+function docsGuidance(docsPath: string): string {
+  return [
+    `Project documentation lives in ${docsPath}. Read what is relevant there before`,
+    `exploring the code — it records business rules, data flows and structure that`,
+    `the code alone does not explain, and you have no memory of earlier stages.`,
+    "",
+    `If this stage establishes durable knowledge of that kind — a business rule you`,
+    `had to work out, a data flow, a structural decision and its reason — add or`,
+    `update a document in ${docsPath} as part of the work, and say which file you`,
+    `changed. Keep it to what outlives this task: not progress notes, not a summary`,
+    `of your changes, and nothing the code already states plainly. If you found an`,
+    `existing document wrong or out of date, correcting it is part of the job.`,
+  ].join("\n");
 }
 
 /**

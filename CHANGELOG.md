@@ -2,6 +2,27 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.16.4
+
+- **Stages now read and maintain the project's own documentation.** New
+  `taskWorkspaces.projectDocsPath` (default `docs/`) is named to every stage,
+  which is told to read what is relevant there *before* exploring the code, and
+  to add or update a document when the work establishes durable knowledge — a
+  business rule it had to work out, a data flow, a structural decision and its
+  reason.
+
+  This is the harness's only lasting memory. Subtask-per-session bounds context
+  by making every stage start cold, and the cost of that is rediscovery: each
+  session re-derives what the last one worked out and discards it on exit. A
+  document in the repository is the one place a finding survives, so reading it
+  is cheaper than re-deriving and writing it back is what stops the next stage
+  paying the same price.
+
+  Bounded deliberately: stages are told not to record progress notes, change
+  summaries, or anything the code already states plainly, and to correct a
+  document they find out of date. Set the path to empty to disable — a project
+  with no documentation convention should not be told to invent one mid-task.
+
 ## 0.16.3
 
 - **Creating and removing a task now report progress in the status bar.** Removal

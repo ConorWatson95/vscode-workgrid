@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.16.3",
+  "version": "0.16.4",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -484,6 +484,17 @@
           "default": 0,
           "scope": "resource",
           "markdownDescription": "When a chat session's context grows beyond this many tokens, `#taskWorkspaces.contextStrategy#` is applied automatically at the end of the current turn (no prompt). Set to `0` to disable. Recommended to set this higher than `#taskWorkspaces.compactPromptThreshold#` so you are warned first and only acted on if you keep going — e.g. `160000`."
+        },
+        "taskWorkspaces.projectDocsPath": {
+          "type": "string",
+          "default": "docs/",
+          "scope": "resource",
+          "markdownDescription": "Where this project keeps its own documentation — business rules, data flows, structure. Named to every route stage, which is told to **read** it before exploring the code and to **update** it when the work establishes durable knowledge of that kind.\n\nThis is the harness's only lasting memory. Each subtask runs in a fresh session, so a stage otherwise re-derives whatever the previous one worked out and discards it when the session ends; a document in the repository is the one place a finding survives.\n\nStages are told not to record progress notes, change summaries, or anything the code already states plainly. Set to empty to disable — a project with no documentation convention should not be told to invent one mid-task.",
+          "examples": [
+            "docs/",
+            "docs/architecture",
+            ""
+          ]
         },
         "taskWorkspaces.mcpConfigPath": {
           "type": "string",

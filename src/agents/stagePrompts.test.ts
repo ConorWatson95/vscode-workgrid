@@ -72,6 +72,62 @@ describe("the ask-for-information escape hatch", () => {
   });
 });
 
+describe("project documentation guidance", () => {
+  const withDocs = { ...CONTEXT, docsPath: "docs/" };
+
+  it("is absent when the project declares no docs location", () => {
+    // A project with no documentation convention should not be told to invent
+    // one mid-task.
+    const prompt = splitPrompt(CONTEXT, stage());
+    expect(prompt).not.toContain("Project documentation");
+  });
+
+  it("names the configured location in every prompt", () => {
+    for (const prompt of [
+      splitPrompt(withDocs, stage()),
+      subtaskPrompt(withDocs, stage(), { id: "fix-1", title: "T", prompt: "P", status: "pending" }),
+      behaviourReviewPrompt(withDocs, stage({ kind: "behaviourReview" })),
+    ]) {
+      expect(prompt).toContain("Project documentation lives in docs/");
+    }
+  });
+
+  it("uses whatever path the project configured", () => {
+    const prompt = splitPrompt({ ...CONTEXT, docsPath: "docs/architecture" }, stage());
+    expect(prompt).toContain("docs/architecture");
+    expect(prompt).not.toContain("docs/ ");
+  });
+
+  it("asks the stage to read before exploring the code", () => {
+    // Reading is the cheap half: a cold session would otherwise reconstruct
+    // business rules the docs already state.
+    const prompt = splitPrompt(withDocs, stage());
+    expect(prompt).toContain("before");
+    expect(prompt).toContain("exploring the code");
+  });
+
+  it("asks the stage to write durable knowledge back", () => {
+    // Without this, every session in every route rediscovers the same things and
+    // discards the result when it ends.
+    const prompt = subtaskPrompt(withDocs, stage(), {
+      id: "fix-1",
+      title: "T",
+      prompt: "P",
+      status: "pending",
+    });
+    expect(prompt).toContain("add or");
+    expect(prompt).toContain("update a document");
+    expect(prompt).toContain("which file you");
+  });
+
+  it("bounds what gets written, since stale or obvious docs are worse than none", () => {
+    const prompt = splitPrompt(withDocs, stage());
+    expect(prompt).toContain("not progress notes");
+    expect(prompt).toContain("already states plainly");
+    expect(prompt).toContain("out of date");
+  });
+});
+
 describe("exploration guidance", () => {
   it("steers every stage towards in-process tools over shell calls", () => {
     // On a measured route, shell calls averaged over ten seconds each — a process
