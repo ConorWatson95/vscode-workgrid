@@ -356,6 +356,74 @@ describe("advance", () => {
   });
 });
 
+describe("per-stage model", () => {
+  /** Records the options each call received alongside its label. */
+  function recordingSessions(): StageSessionRunner & {
+    seen: { label: string; model?: string }[];
+  } {
+    const seen: { label: string; model?: string }[] = [];
+    return {
+      seen,
+      async run(_task, _prompt, label, options) {
+        seen.push({ label, model: options?.model });
+        return { ok: true, text: label.startsWith("plan:") ? PLAN_REPLY : "done" };
+      },
+    };
+  }
+
+  function routeWithModels(): RouteDefinition {
+    return {
+      ...ROUTE,
+      stages: ROUTE.stages.map((s) =>
+        s.id === "build" ? { ...s, model: "sonnet" } : s,
+      ),
+    };
+  }
+
+  it("reaches the session runner for the stage that declared it", async () => {
+    const sessions = recordingSessions();
+    const { runner } = makeRunner(sessions);
+    await runner.advance({ ...task(), pipeline: createPipeline(routeWithModels()) });
+
+    const build = sessions.seen.filter((s) => s.label.startsWith("build:"));
+    expect(build.length).toBeGreaterThan(0);
+    expect(build.every((s) => s.model === "sonnet")).toBe(true);
+  });
+
+  it("applies to the stage's own split-planning session", async () => {
+    // Deciding how to break a stage up is the same kind of work as the stage.
+    const sessions = recordingSessions();
+    const { runner } = makeRunner(sessions);
+    await runner.advance({ ...task(), pipeline: createPipeline(routeWithModels()) });
+
+    expect(sessions.seen.find((s) => s.label === "plan:build")?.model).toBe("sonnet");
+  });
+
+  it("leaves stages that declare no model on the configured default", async () => {
+    const sessions = recordingSessions();
+    const { runner } = makeRunner(sessions);
+    await runner.advance({ ...task(), pipeline: createPipeline(routeWithModels()) });
+
+    const others = sessions.seen.filter((s) => !s.label.includes("build"));
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((s) => s.model === undefined)).toBe(true);
+  });
+
+  it("survives a round-trip through the repository", async () => {
+    // The pipeline is plain JSON in a Memento; a field that does not normalise
+    // back would silently revert every stage to the default model.
+    const sessions = recordingSessions();
+    const { repo, runner } = makeRunner(sessions);
+    const seeded = { ...task(), pipeline: createPipeline(routeWithModels()) };
+    await repo.save(seeded);
+
+    const reloaded = (await repo.get("t1"))!;
+    const build = reloaded.pipeline!.stages.find((s) => s.id === "build")!;
+    expect(build.model).toBe("sonnet");
+    void runner;
+  });
+});
+
 describe("stopping a route", () => {
   /**
    * Sessions that cancel the route from inside the first *subtask* run. The

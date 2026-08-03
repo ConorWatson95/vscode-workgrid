@@ -49,17 +49,29 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     task: TaskWorkspace,
     prompt: string,
     label: string,
+    options?: { model?: string },
   ): Promise<{ ok: boolean; text: string; sessionId?: string; error?: string }> {
-    this.logger.info(`Harness [${task.name}] running ${label} in a fresh session.`);
+    const override = options?.model?.trim();
+    this.logger.info(
+      `Harness [${task.name}] running ${label} in a fresh session` +
+        (override ? ` on ${override}.` : "."),
+    );
 
     // Auto-compaction is disabled for stage sessions, and cannot help them: it
     // is applied when a turn settles, and a subtask is a single turn, so the
     // only compaction it could ever run is one on a session this runner has
     // already finished with. Left enabled it spent a model turn summarising a
     // context nobody would read again, once per subtask.
+    const base = this.optionsFor(task);
     const session = this.sessions.create(
       task.id,
-      { ...this.optionsFor(task), autoCompactThreshold: 0 },
+      {
+        ...base,
+        autoCompactThreshold: 0,
+        // A stage's own model wins; an absent or blank one leaves the
+        // extension-wide setting in place rather than clearing it.
+        model: override && override.length > 0 ? override : base.model,
+      },
       prompt,
     );
 

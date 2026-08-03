@@ -232,6 +232,7 @@ function parseStage(
     kind: kind as StageKind,
     intent,
     workflow: str(raw.workflow),
+    model: str(raw.model),
     splittable: typeof raw.splittable === "boolean" ? raw.splittable : undefined,
     gate: gate as "auto" | "approval" | undefined,
   };

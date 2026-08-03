@@ -44,6 +44,8 @@ export interface StageSessionRunner {
     task: TaskWorkspace,
     prompt: string,
     label: string,
+    /** Per-stage overrides; absent fields fall back to the configured defaults. */
+    options?: { model?: string },
   ): Promise<{ ok: boolean; text: string; sessionId?: string; error?: string }>;
 }
 
@@ -309,6 +311,7 @@ export class PipelineRunner {
       task,
       splitPrompt(this.contextFor(task), action.stage),
       `plan:${action.stage.id}`,
+      { model: action.stage.model },
     );
     if (!reply.ok) {
       this.logger.error(
@@ -380,7 +383,9 @@ export class PipelineRunner {
       task = await this.save(task, pipeline);
     }
 
-    const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`);
+    const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
+      model: stage.model,
+    });
 
     // A stop is not an outcome. Stopping the agent kills the session, which looks
     // exactly like a completed turn from here — recording it as done would pass a

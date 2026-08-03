@@ -79,6 +79,11 @@ export interface TaskStage {
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**
+   * Model for this stage's sessions, copied from the route so a persisted
+   * pipeline stays self-describing. Undefined means the configured default.
+   */
+  model?: string;
+  /**
    * Empty on a splittable stage means "not yet planned". Non-splittable stages
    * are created with exactly one synthesized subtask, so every runnable stage
    * has a uniform shape.
@@ -129,6 +134,7 @@ export function normalizePipeline(
       requiresApproval: stage.requiresApproval ?? false,
       checklist: Array.isArray(stage.checklist) ? stage.checklist : undefined,
       addedByRule: stage.addedByRule,
+      model: stage.model,
       subtasks: Array.isArray(stage.subtasks) ? stage.subtasks : [],
       startedAt: stage.startedAt,
       finishedAt: stage.finishedAt,

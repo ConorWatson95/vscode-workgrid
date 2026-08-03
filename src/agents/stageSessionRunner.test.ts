@@ -59,7 +59,7 @@ class FakeSessions implements StageSessions {
 function runner(sessions: FakeSessions, timeoutMs = 1000) {
   return new ClaudeStageSessionRunner(
     sessions,
-    () => ({ cwd: "/repo", autoCompactThreshold: 160_000 }) as Omit<
+    () => ({ cwd: "/repo", autoCompactThreshold: 160_000, model: "opus" }) as Omit<
       StreamSessionOptions,
       "command"
     >,
@@ -77,6 +77,28 @@ describe("ClaudeStageSessionRunner", () => {
     void runner(sessions).run(TASK, "do the thing", "stage:sub-1");
 
     expect(sessions.created[0].options.autoCompactThreshold).toBe(0);
+  });
+
+  describe("per-stage model", () => {
+    it("overrides the configured model when the stage names one", () => {
+      // Around 80% of a planning stage's wall clock is model time, so this is
+      // the dial that moves it — without touching the stages that write code.
+      const sessions = new FakeSessions();
+      void runner(sessions).run(TASK, "p", "stage:sub-1", { model: "sonnet" });
+      expect(sessions.created[0].options.model).toBe("sonnet");
+    });
+
+    it("keeps the configured model when the stage names none", () => {
+      const sessions = new FakeSessions();
+      void runner(sessions).run(TASK, "p", "stage:sub-1");
+      expect(sessions.created[0].options.model).toBe("opus");
+    });
+
+    it("treats a blank override as no override, not as clearing the model", () => {
+      const sessions = new FakeSessions();
+      void runner(sessions).run(TASK, "p", "stage:sub-1", { model: "   " });
+      expect(sessions.created[0].options.model).toBe("opus");
+    });
   });
 
   it("passes the prompt through and starts a fresh session per subtask", () => {

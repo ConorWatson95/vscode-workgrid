@@ -54,6 +54,8 @@ export interface ReviewStageTemplate {
   kind: StageKind;
   intent: string;
   workflow?: string;
+  /** Model for this review stage, overriding the configured default. */
+  model?: string;
   splittable?: boolean;
   /** Defaults to "auto"; a rule can demand a human gate of its own. */
   gate?: "auto" | "approval";
@@ -141,6 +143,7 @@ export function ruleStageDefinition(rule: ReviewRule): RouteStageDefinition {
     kind: rule.stage.kind,
     intent: rule.stage.intent,
     workflow: rule.stage.workflow,
+    model: rule.stage.model,
     splittable: rule.stage.splittable ?? false,
     gate: rule.stage.gate ?? "auto",
   };

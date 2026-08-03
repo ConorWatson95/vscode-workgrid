@@ -179,6 +179,7 @@ function parseStage(
     kind: kind as StageKind,
     intent,
     workflow: str(raw.workflow),
+    model: str(raw.model),
     splittable: raw.splittable === true,
     gate: gate as StageGate,
   };

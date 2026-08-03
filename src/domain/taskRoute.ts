@@ -57,6 +57,17 @@ export interface RouteStageDefinition {
   /** Optional slash-command to invoke instead of a plain prompt, e.g. "/review". */
   workflow?: string;
   /**
+   * Model for this stage's sessions, overriding the extension-wide setting.
+   *
+   * Stages differ enormously in what they need. Deciding which of three
+   * directories a script belongs in is mostly reading and comparing; writing the
+   * migration that will run against a live database is not. On a measured route
+   * roughly 80% of a planning stage's wall clock was model time, so this is the
+   * one dial that moves it — while leaving the stages that actually change
+   * things on the stronger model.
+   */
+  model?: string;
+  /**
    * When true the stage is expected to be broken into subtasks by a planning
    * agent before it can run. When false it runs as a single unit of work.
    */

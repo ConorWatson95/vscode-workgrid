@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.16.4",
+  "version": "0.17.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -533,7 +533,7 @@
           ],
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Model for chat-panel sessions, passed to the CLI's `--model`. These are family aliases — each resolves to the *latest* model in that family, so they stay current as new versions ship. Empty uses the CLI default. You can also set a specific model id (e.g. `claude-opus-5`) by editing this value directly, or switch per-session from the chat panel header."
+          "markdownDescription": "Default model for agent sessions, passed to the CLI's `--model`. These are family aliases — each resolves to the *latest* model in that family, so they stay current as new versions ship. Empty uses the CLI default. You can also set a specific model id (e.g. `claude-opus-5`) by editing this value directly, or switch per-session from the chat panel header.\n\nA route stage can override this with its own `\"model\"` in `harness.json`, which is usually the better lever: once per-process overhead is dealt with, model time dominates a route, and stages differ enormously in what they need. Reading files to decide where a change belongs is not the same work as writing a migration that will run against a live database."
         },
         "taskWorkspaces.permissionMode": {
           "type": "string",

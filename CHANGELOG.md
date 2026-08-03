@@ -2,6 +2,24 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.17.0
+
+- **A route stage can name its own model.** Add `"model": "sonnet"` to a stage in
+  `harness.json` (or to a rule's stage) and that stage's sessions — including the
+  planning session that splits it — run on that model. Stages without one keep
+  using `taskWorkspaces.model`.
+
+  This is the dial that matters once per-process overhead is dealt with. On a
+  measured planning stage, tool calls fell from a 9.6s median to 0.37s and the
+  time waiting on tools from 61% of the stage to 20% — leaving **80% of the wall
+  clock as model time**, 115 turns of it. No further infrastructure work touches
+  that number; the model does.
+
+  The point is to be selective rather than uniformly cheaper. Deciding which of
+  three directories a script belongs in is reading and comparing. Writing the
+  migration that will run against a live database is not, and should stay on the
+  stronger model.
+
 ## 0.16.4
 
 - **Stages now read and maintain the project's own documentation.** New

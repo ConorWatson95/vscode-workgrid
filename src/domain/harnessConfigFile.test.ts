@@ -59,6 +59,28 @@ describe("parseHarnessConfig", () => {
     expect(route.stages[1].workflow).toBe("/review");
   });
 
+  it("carries a per-stage model through, and leaves others on the default", () => {
+    // Stages differ in what they need: choosing where a file belongs is reading
+    // and comparing; writing a migration that runs against a live database is not.
+    const [route] = parseHarnessConfig({
+      routes: [
+        {
+          ...ROUTE,
+          stages: [{ ...STAGE, model: "sonnet" }, { ...GATE }],
+        },
+      ],
+    }).routes;
+    expect(route.stages[0].model).toBe("sonnet");
+    expect(route.stages[1].model).toBeUndefined();
+  });
+
+  it("ignores a blank model rather than passing an empty --model", () => {
+    const [route] = parseHarnessConfig({
+      routes: [{ ...ROUTE, stages: [{ ...STAGE, model: "   " }, GATE] }],
+    }).routes;
+    expect(route.stages[0].model).toBeUndefined();
+  });
+
   it("falls back to the label when a route has no description", () => {
     const { description, ...withoutDescription } = ROUTE;
     const [route] = parseHarnessConfig({ routes: [withoutDescription] }).routes;

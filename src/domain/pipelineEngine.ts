@@ -69,6 +69,7 @@ function createStage(
     status: "pending",
     intent: definition.intent,
     addedByRule,
+    model: definition.model,
     splittable: definition.splittable,
     requiresApproval: definition.gate === "approval",
     // A non-splittable stage is its own single unit of work. Synthesizing that
