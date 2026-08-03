@@ -30,6 +30,8 @@ import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import * as fs from "node:fs";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
+import { PermissionRulesService } from "./services/permissionRulesService";
+import { suggestAllowRules } from "./agents/permissionDenials";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -269,16 +271,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
   );
+  const permissionRules = new PermissionRulesService(logger);
+  // Shared: also used when granting a rule, to refresh an existing worktree's copy.
+  const provisioner = new WorktreeProvisioner(logger);
+
   const runner = new PipelineRunner(
     stageRunner,
     repository,
     reviewPlans,
     logger,
     () => configuration.projectDocsPath(repositoryUri),
+    // Announced the instant it happens, so the user is not left waiting out a
+    // stage that has already lost the tool it wanted.
+    (task, denial) => {
+      const rule = suggestAllowRules([denial])[0];
+      void vscode.window
+        .showWarningMessage(
+          `"${task.name}": ${denial.tool} was denied — ${denial.command ?? denial.reason}`,
+          ...(rule ? ["Add Rule"] : []),
+          "Show Log",
+        )
+        .then(async (choice) => {
+          if (choice === "Show Log") {
+            logger.show?.();
+            return;
+          }
+          if (choice !== "Add Rule" || !rule) return;
+          const written = permissionRules.addAllowRules(task.repositoryRoot, [rule]);
+          if (written.problem) {
+            void vscode.window.showErrorMessage(written.problem);
+            return;
+          }
+          // Bring the settings across so the retry, which runs in the worktree,
+          // sees the new rule.
+          provisioner.provision(
+            configuration.copyIntoWorktree(repositoryUri),
+            task.repositoryRoot,
+            task.worktreePath,
+          );
+          void vscode.window.showInformationMessage(
+            written.added.length > 0
+              ? `Rule added. The route will retry this step.`
+              : `That rule was already present.`,
+          );
+        });
+    },
+    () => configuration.pauseOnPermissionDenial(repositoryUri),
   );
 
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {
+    permissionRules,
     service,
     worktrees: worktreeService,
     status: statusService,
@@ -294,7 +337,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     visualStudio,
     reviewPlans,
     runner,
-    provisioner: new WorktreeProvisioner(logger),
+    provisioner,
     tree,
     logger,
     extensionUri: context.extensionUri,

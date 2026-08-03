@@ -8,6 +8,7 @@ import { RouteDefinition } from "../domain/taskRoute";
 import { Logger } from "../logging/logger";
 import { LoadedReviewRules } from "./reviewRulesService";
 import { ok } from "../utilities/result";
+import { PermissionDenial } from "../agents/permissionDenials";
 
 const logger: Logger = {
   info: () => {},
@@ -91,6 +92,8 @@ function makeRunner(
     rules?: LoadedReviewRules;
     /** Reuse a repository, e.g. to model a second attempt on the same task. */
     repo?: InMemoryTaskRepository;
+    onDenial?: (task: TaskWorkspace, denial: PermissionDenial) => void;
+    pauseOnDenial?: boolean;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -100,7 +103,18 @@ function makeRunner(
   const rules: LoadedReviewRules =
     options.rules ?? { rules: [], problems: [], noRulesConfigured: true };
   const plans = new ReviewPlanService(changed, repo, logger, () => rules);
-  return { repo, runner: new PipelineRunner(sessions, repo, plans, logger) };
+  return {
+    repo,
+    runner: new PipelineRunner(
+      sessions,
+      repo,
+      plans,
+      logger,
+      () => undefined,
+      options.onDenial,
+      () => options.pauseOnDenial ?? true,
+    ),
+  };
 }
 
 const PLAN_REPLY = "1. Part one — do one.\n2. Part two — do two.";
@@ -613,36 +627,68 @@ describe("permission refusals", () => {
   /** Sessions that report a refused tool call, as the real adapter does. */
   function denyingSessions(): StageSessionRunner {
     return {
-      async run(_task, _prompt, label) {
+      async run(_task, _prompt, label, options) {
         if (label.startsWith("plan:")) return { ok: true, text: PLAN_REPLY };
-        return {
-          ok: true,
-          text: "done",
-          denials: [
-            {
-              tool: "PowerShell",
-              command: "tools/jira/Get-JiraAttachment.ps1 -IssueKey X",
-              reason: "This command requires approval",
-              attempts: 3,
-            },
-          ],
+        const denial: PermissionDenial = {
+          tool: "PowerShell",
+          command: "tools/jira/Get-JiraAttachment.ps1 -IssueKey X",
+          reason: "This command requires approval",
+          attempts: 3,
         };
+        // The real adapter announces the refusal as it happens, then returns it.
+        options?.onDenial?.(denial);
+        return { ok: true, text: "done", denials: [denial] };
       },
     };
   }
 
-  it("reports refusals even though the stage succeeded", async () => {
-    // This is the whole point: a refusal rarely fails the stage, so it would
-    // otherwise never reach the only person who can grant the permission.
+  it("pauses the route, even though the stage itself succeeded", async () => {
+    // A stage that could not run a command it judged necessary has not done its
+    // job; carrying on buries that behind whatever it did instead.
     const { repo, runner } = makeRunner(denyingSessions());
+    await repo.save(task());
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({
+      kind: "denied",
+      stageId: "build",
+      subtaskId: "build-1",
+    });
+    expect(report.denials[0].tool).toBe("PowerShell");
+    expect(report.steps.join(" ")).toContain("denied by permissions");
+  });
+
+  it("leaves the subtask pending, so granting the rule resumes it", async () => {
+    const { repo, runner } = makeRunner(denyingSessions());
+    await repo.save(task());
+    await runner.advance((await repo.get("t1"))!);
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "build")!;
+    expect(stage.subtasks.find((s) => s.id === "build-1")!.status).toBe("pending");
+    expect(stage.status).not.toBe("failed");
+  });
+
+  it("reports the refusal live, while the stage is still running", async () => {
+    // The refusal happens seconds in; waiting for the advance to end wastes the
+    // very minutes this is meant to save.
+    const seen: PermissionDenial[] = [];
+    const { repo, runner } = makeRunner(denyingSessions(), {
+      onDenial: (_task, denial) => seen.push(denial),
+    });
+    await repo.save(task());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].tool).toBe("PowerShell");
+  });
+
+  it("carries on when pausing is switched off, but still reports", async () => {
+    const { repo, runner } = makeRunner(denyingSessions(), { pauseOnDenial: false });
     await repo.save(task());
     const report = await runner.advance((await repo.get("t1"))!);
 
     expect(report.outcome).toMatchObject({ kind: "awaitingApproval" });
     expect(report.denials.length).toBeGreaterThan(0);
-    expect(report.denials[0].tool).toBe("PowerShell");
-    expect(report.steps.join(" ")).toContain("denied by permissions");
-    expect(report.steps.join(" ")).toContain("attempts");
   });
 
   it("reports nothing when no call was refused", async () => {
@@ -656,7 +702,7 @@ describe("permission refusals", () => {
   });
 
   it("does not carry refusals over from a previous advance", async () => {
-    const { repo, runner } = makeRunner(denyingSessions());
+    const { repo, runner } = makeRunner(denyingSessions(), { pauseOnDenial: false });
     await repo.save(task());
     const first = await runner.advance((await repo.get("t1"))!);
     expect(first.denials.length).toBeGreaterThan(0);

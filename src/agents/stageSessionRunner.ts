@@ -1,10 +1,7 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { StreamSessionOptions } from "./claudeStreamSession";
 import { ChatItem } from "./streamJson";
-import {
-  PermissionDenial,
-  collectPermissionDenials,
-} from "./permissionDenials";
+import { DenialWatcher, PermissionDenial } from "./permissionDenials";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 
@@ -14,7 +11,9 @@ export interface StageSession {
   readonly sessionId?: string;
   readonly lastTurnErrored: boolean;
   on(event: "status", listener: (status: string) => void): unknown;
+  on(event: "item", listener: (item: ChatItem) => void): unknown;
   off(event: "status", listener: (status: string) => void): unknown;
+  off(event: "item", listener: (item: ChatItem) => void): unknown;
 }
 
 /**
@@ -53,7 +52,11 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     task: TaskWorkspace,
     prompt: string,
     label: string,
-    options?: { model?: string },
+    options?: {
+      model?: string;
+      /** Called the instant a tool call is refused, while the stage still runs. */
+      onDenial?: (denial: PermissionDenial) => void;
+    },
   ): Promise<{
     ok: boolean;
     text: string;
@@ -98,6 +101,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         settled = true;
         clearTimeout(timer);
         session.off("status", onStatus);
+        session.off("item", onItem);
         resolve(result);
       };
 
@@ -120,8 +124,18 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         });
       }, this.timeoutMs);
 
-      const denials = (): PermissionDenial[] =>
-        collectPermissionDenials(session.items);
+      // Watched live rather than scanned at the end: the refusal happens seconds
+      // in, and the agent then spends turns working around it.
+      const watcher = new DenialWatcher();
+      const onItem = (item: ChatItem) => {
+        const denial = watcher.observe(item);
+        if (!denial) return;
+        this.logger.warn(
+          `Harness [${task.name}] ${label}: ${denial.tool} denied — ${denial.reason}`,
+        );
+        options?.onDenial?.(denial);
+      };
+      const denials = (): PermissionDenial[] => watcher.all();
 
       const lastAssistantText = (): string => {
         const reply = [...session.items]
@@ -159,6 +173,9 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       };
 
       session.on("status", onStatus);
+      session.on("item", onItem);
+      // Items already buffered before this listener attached still count.
+      for (const item of session.items) onItem(item);
     });
   }
 }

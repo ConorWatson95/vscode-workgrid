@@ -17,6 +17,7 @@ import { VisualStudioService } from "../projects/visualStudioService";
 import { ReviewPlanService } from "../services/reviewPlanService";
 import { PipelineRunner } from "../services/pipelineRunner";
 import { WorktreeProvisioner } from "../services/worktreeProvisioner";
+import { PermissionRulesService } from "../services/permissionRulesService";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -40,6 +41,8 @@ export interface CommandContext {
   logger: Logger;
   extensionUri: vscode.Uri;
   globalState: vscode.Memento;
+  /** Adds allow rules to the project's local Claude settings. */
+  permissionRules: PermissionRulesService;
   resolveRepositoryRoot: () => string | undefined;
   repositoryUri: () => vscode.Uri | undefined;
 }

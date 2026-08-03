@@ -2,6 +2,34 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.19.0
+
+- **A refused tool call now stops the route and offers to grant the permission.**
+  Previously the refusal was reported after the whole advance had finished, by
+  which point the minutes were already spent.
+
+  A refusal is detected the instant it appears in the stream, so the warning
+  arrives while the stage is still running, naming the tool and command. The
+  route then pauses with the subtask left **pending**, and the notification
+  offers **Add Rule & Retry** — which writes a prefix rule into the project's
+  `.claude/settings.local.json`, copies the file into the worktree, and advances
+  again — or **Add Rule**, or **Continue Without**.
+
+  There is deliberately no "Approve once". Verified against the CLI (2.1.220):
+  a stream-json session emits no permission request of any kind — not in
+  `manual` mode either — so there is nothing to answer while a call waits. There
+  is no `--permission-prompt-tool` and `canUseTool` is an Agent SDK callback,
+  and adopting the SDK would cost the subscription auth, `.claude/` config and
+  MCP setup that driving the CLI preserves. Adding the rule and re-running the
+  subtask is the nearest equivalent, and cheap because every subtask is a fresh
+  session anyway.
+
+  New `taskWorkspaces.pauseOnPermissionDenial` (default true) turns the pause off
+  while still reporting. The settings file is edited defensively: unknown keys
+  are preserved, existing rules are never removed, and unparseable or
+  wrongly-shaped content is refused rather than overwritten — it is a file the
+  user hand-edits and the CLI reads.
+
 ## 0.18.1
 
 - **Denied tool calls now reach the user.** A headless stage session has nobody

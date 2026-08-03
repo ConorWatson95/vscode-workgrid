@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  DenialWatcher,
   collectPermissionDenials,
   formatDenialReport,
   isPermissionDenial,
@@ -167,5 +168,65 @@ describe("formatDenialReport", () => {
 
   it("is empty when nothing was denied, so nothing is logged", () => {
     expect(formatDenialReport([])).toBe("");
+  });
+});
+
+describe("DenialWatcher", () => {
+  it("reports a refusal the moment it arrives", () => {
+    // Scanning the finished transcript is too late: the refusal happens seconds
+    // in and the agent then spends turns working around it.
+    const watcher = new DenialWatcher();
+    expect(watcher.observe(tool("PowerShell", "x.ps1 -Key 1"))).toBeUndefined();
+    const denial = watcher.observe(failed(REAL.bare));
+    expect(denial?.tool).toBe("PowerShell");
+    expect(denial?.command).toBe("x.ps1 -Key 1");
+  });
+
+  it("announces a call once but keeps counting its retries", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe(tool("PowerShell", "x.ps1"));
+    expect(watcher.observe(failed(REAL.bare))).toBeDefined();
+
+    watcher.observe(tool("PowerShell", "x.ps1"));
+    expect(watcher.observe(failed(REAL.nested))).toBeUndefined();
+    watcher.observe(tool("PowerShell", "x.ps1"));
+    expect(watcher.observe(failed(REAL.cwd))).toBeUndefined();
+
+    expect(watcher.all()).toHaveLength(1);
+    expect(watcher.all()[0].attempts).toBe(3);
+  });
+
+  it("announces a genuinely different call separately", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe(tool("PowerShell", "x.ps1"));
+    watcher.observe(failed(REAL.bare));
+    watcher.observe(tool("Bash", "sqlcmd -Q 'select 1'"));
+    expect(watcher.observe(failed(REAL.bare))?.tool).toBe("Bash");
+    expect(watcher.all()).toHaveLength(2);
+  });
+
+  it("stays quiet for ordinary failures and successes", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe(tool("Bash", "npm test"));
+    expect(watcher.observe(failed("2 tests failed"))).toBeUndefined();
+    watcher.observe(tool("Bash", "cat x"));
+    expect(
+      watcher.observe({ kind: "tool-result", text: "requires approval", isError: false }),
+    ).toBeUndefined();
+    expect(watcher.all()).toEqual([]);
+  });
+
+  it("agrees with the whole-transcript scan", () => {
+    const items: ChatItem[] = [
+      tool("PowerShell", "x.ps1"),
+      failed(REAL.bare),
+      tool("PowerShell", "x.ps1"),
+      failed(REAL.nested),
+      tool("Bash", "npm test"),
+      failed("nope"),
+    ];
+    const watcher = new DenialWatcher();
+    for (const item of items) watcher.observe(item);
+    expect(watcher.all()).toEqual(collectPermissionDenials(items));
   });
 });

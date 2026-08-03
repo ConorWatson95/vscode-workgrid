@@ -50,7 +50,11 @@ export interface StageSessionRunner {
     prompt: string,
     label: string,
     /** Per-stage overrides; absent fields fall back to the configured defaults. */
-    options?: { model?: string },
+    options?: {
+      model?: string;
+      /** Called the instant a tool call is refused, while the stage still runs. */
+      onDenial?: (denial: PermissionDenial) => void;
+    },
   ): Promise<{
     ok: boolean;
     text: string;
@@ -81,6 +85,17 @@ export type RunOutcome =
   | { kind: "exhausted"; steps: number }
   /** The task has no pipeline to drive. */
   | { kind: "unharnessed" }
+  /**
+   * A tool call was refused, so the stage could not do its job properly.
+   * The subtask is back to pending: grant the permission and advance again.
+   */
+  | {
+      kind: "denied";
+      stageId: string;
+      stageName: string;
+      subtaskId: string;
+      denials: PermissionDenial[];
+    }
   /** Cancelled by the caller. */
   | { kind: "cancelled" };
 
@@ -115,6 +130,17 @@ export class PipelineRunner {
      * because it is a setting the user can change between advances.
      */
     private readonly docsPath: () => string | undefined = () => undefined,
+    /** Called the instant a tool call is refused, so the user can act at once. */
+    private readonly onDenial: (
+      task: TaskWorkspace,
+      denial: PermissionDenial,
+    ) => void = () => {},
+    /**
+     * Whether a refusal stops the route. On by default: a stage that could not
+     * run a command it judged necessary has not done its job, and continuing
+     * buries that behind whatever it did instead.
+     */
+    private readonly pauseOnDenial: () => boolean = () => true,
   ) {}
 
   /**
@@ -299,6 +325,18 @@ export class PipelineRunner {
           // the next iteration's abort check do it, so the reverted subtask is
           // already saved and the route is resumable.
           if (result.cancelled) return { outcome: { kind: "cancelled" }, steps };
+          if (result.denied) {
+            return {
+              outcome: {
+                kind: "denied",
+                stageId: action.stage.id,
+                stageName: action.stage.name,
+                subtaskId: action.subtask.id,
+                denials: result.denied,
+              },
+              steps,
+            };
+          }
           // The stage asked a question instead of working. Nothing was attempted,
           // so the subtask is back in the queue and the route pauses.
           if (result.question) {
@@ -399,6 +437,7 @@ export class PipelineRunner {
     reason?: string;
     question?: string[];
     cancelled?: boolean;
+    denied?: PermissionDenial[];
   }> {
     const { stage, subtask } = action;
     const context = this.contextFor(task);
@@ -420,6 +459,7 @@ export class PipelineRunner {
 
     const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
       model: stage.model,
+      onDenial: (denial) => this.onDenial(task, denial),
     });
 
     // Surface refusals whatever the outcome. A denied tool call is otherwise
@@ -438,6 +478,19 @@ export class PipelineRunner {
           (attempts > denials.length ? ` over ${attempts} attempts` : "") +
           " — the log lists the allow rules to add.",
       );
+
+      if (this.pauseOnDenial()) {
+        // Revert rather than record an outcome: the stage worked around a tool it
+        // wanted, so neither "done" nor "failed" is true. Granting the permission
+        // and advancing re-runs this subtask with it available.
+        const reverted = revertSubtask(pipeline, subtask.id);
+        if (reverted.ok) pipeline = reverted.value;
+        return {
+          task: await this.save(task, pipeline),
+          failed: false,
+          denied: denials,
+        };
+      }
     }
 
     // A stop is not an outcome. Stopping the agent kills the session, which looks

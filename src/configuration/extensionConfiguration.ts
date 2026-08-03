@@ -115,6 +115,16 @@ export class ExtensionConfiguration {
   }
 
   /**
+   * Whether a refused tool call stops the route so the permission can be granted.
+   *
+   * On by default: a stage that could not run a command it judged necessary has
+   * not done its job, and carrying on buries that behind whatever it did instead.
+   */
+  pauseOnPermissionDenial(scope?: vscode.Uri): boolean {
+    return this.config(scope).get<boolean>("pauseOnPermissionDenial", true);
+  }
+
+  /**
    * Where the project keeps its own documentation, named to every stage.
    *
    * Empty disables the guidance entirely — a project with no documentation

@@ -39,7 +39,11 @@ import {
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
-import { suggestAllowRules } from "../agents/permissionDenials";
+import {
+  PermissionDenial,
+  suggestAllowRules,
+} from "../agents/permissionDenials";
+import { LOCAL_SETTINGS_RELATIVE_PATH } from "../services/permissionRulesService";
 import { withStatus } from "../ui/statusProgress";
 import { QuestionPanel } from "../ui/questionPanel";
 import * as os from "node:os";
@@ -89,6 +93,86 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       toggleChecklistItemCommand(ctx, arg),
     ),
   ];
+}
+
+/**
+ * Offers to grant a refused permission and carry on.
+ *
+ * The CLI gives no way to approve a call that is already waiting — a stream-json
+ * session emits no permission request at all, so there is nothing to answer.
+ * The nearest equivalent is to add the rule and run the subtask again, which is
+ * cheap because every subtask is a fresh session anyway.
+ */
+async function handleDenialCommand(
+  ctx: CommandContext,
+  task: TaskWorkspace,
+  denials: readonly PermissionDenial[],
+  stageName: string | undefined,
+): Promise<void> {
+  const rules = suggestAllowRules(denials);
+  const attempts = denials.reduce((total, d) => total + d.attempts, 0);
+  const summary =
+    `${denials.length} tool call(s) denied by permissions` +
+    (attempts > denials.length ? ` after ${attempts} attempts` : "") +
+    (stageName ? ` in "${stageName}"` : "") +
+    ".";
+
+  const actions = [
+    ...(rules.length > 0 ? ["Add Rule & Retry", "Add Rule"] : []),
+    "Continue Without",
+    "Show Log",
+  ];
+  const choice = await vscode.window.showWarningMessage(
+    `${summary} ${denials[0]?.command ?? ""}`.trim(),
+    ...actions,
+  );
+  if (choice === "Show Log" || choice === undefined) {
+    if (choice === "Show Log") ctx.logger.show?.();
+    return;
+  }
+  if (choice === "Continue Without") {
+    // Nothing to do: the subtask is already pending, so advancing runs it again
+    // without the permission — the same outcome as before, but chosen.
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+    return;
+  }
+
+  const written = ctx.permissionRules.addAllowRules(task.repositoryRoot, rules);
+  if (written.problem) {
+    const fallback = await vscode.window.showErrorMessage(
+      written.problem,
+      "Copy Rules Instead",
+    );
+    if (fallback === "Copy Rules Instead") {
+      await vscode.env.clipboard.writeText(rules.join(",\n"));
+    }
+    return;
+  }
+
+  const message =
+    written.added.length > 0
+      ? `Added ${written.added.length} rule(s) to ${LOCAL_SETTINGS_RELATIVE_PATH}.`
+      : `Those rules were already present in ${LOCAL_SETTINGS_RELATIVE_PATH}.`;
+  ctx.logger.info(`Harness [${task.name}] ${message}`);
+
+  // The settings file is copied into each worktree at creation, so an existing
+  // worktree needs it brought across before the retry can see it.
+  const provisioned = ctx.provisioner.provision(
+    ctx.configuration.copyIntoWorktree(ctx.repositoryUri()),
+    task.repositoryRoot,
+    task.worktreePath,
+  );
+  if (provisioned.problems.length > 0) {
+    ctx.logger.warn(
+      `Could not refresh worktree settings for "${task.name}": ${provisioned.problems.join("; ")}`,
+    );
+  }
+
+  if (choice === "Add Rule & Retry") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  } else {
+    void vscode.window.showInformationMessage(`${message} Advance the route when ready.`);
+  }
 }
 
 /**
@@ -290,29 +374,20 @@ async function advanceRouteCommand(
     ctx.logger.info(`Harness [${task.name}] ${step}`);
   }
 
-  // A refusal rarely fails the stage — the agent works around it — so without
-  // this it never reaches the only person who can grant the permission.
+  const outcome = report.outcome;
+
+  // A refusal takes precedence over every other reading of the run: the stage did
+  // not do what it set out to do, and only the user can grant the permission.
+  if (outcome.kind === "denied") {
+    await handleDenialCommand(ctx, task, outcome.denials, outcome.stageName);
+    return;
+  }
+  // Pausing can be switched off, in which case the refusal is still reported —
+  // it just does not stop the route.
   if (report.denials.length > 0) {
-    const rules = suggestAllowRules(report.denials);
-    const attempts = report.denials.reduce((total, d) => total + d.attempts, 0);
-    const choice = await vscode.window.showWarningMessage(
-      `${report.denials.length} tool call(s) were denied by permissions` +
-        (attempts > report.denials.length ? ` after ${attempts} attempts` : "") +
-        `. The stage worked around them or gave up.`,
-      ...(rules.length > 0 ? ["Copy Allow Rules"] : []),
-      "Show Log",
-    );
-    if (choice === "Copy Allow Rules") {
-      await vscode.env.clipboard.writeText(rules.join(",\n"));
-      void vscode.window.showInformationMessage(
-        `Copied ${rules.length} rule(s). Add them to permissions.allow in .claude/settings.local.json.`,
-      );
-    } else if (choice === "Show Log") {
-      ctx.logger.show?.();
-    }
+    await handleDenialCommand(ctx, task, report.denials, undefined);
   }
 
-  const outcome = report.outcome;
   switch (outcome.kind) {
     case "cancelled":
       // The user stopped it; they know. Saying so again is noise.
