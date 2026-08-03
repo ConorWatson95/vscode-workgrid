@@ -88,8 +88,15 @@ describe("contextTokensOf", () => {
     const event = { message: { usage: { input_tokens: 2, cache_read_input_tokens: 1000, cache_creation_input_tokens: 32000 } } };
     expect(contextTokensOf(event)).toBe(33002);
   });
-  it("reads top-level usage on result events", () => {
-    expect(contextTokensOf({ usage: { input_tokens: 5, cache_read_input_tokens: 40000 } })).toBe(40005);
+  it("ignores the cumulative usage on a result event", () => {
+    // A result event totals every turn in the run. Reading it reported 3.8M
+    // tokens for a session whose real peak was 133k, so every turn tripped the
+    // auto-compaction threshold and paid for a pointless compaction.
+    const result = {
+      type: "result",
+      usage: { input_tokens: 5, cache_read_input_tokens: 3_800_000 },
+    } as { message?: { usage?: { input_tokens?: number } } };
+    expect(contextTokensOf(result)).toBeUndefined();
   });
   it("returns undefined when there is no usage", () => {
     expect(contextTokensOf({ message: {} })).toBeUndefined();

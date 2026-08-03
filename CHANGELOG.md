@@ -2,6 +2,88 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.16.1
+
+- **Fixed: "Stop Agent" now stops the route, not just the session.** Killing the
+  session ended the current subtask, which the driver read as "that turn
+  finished" and answered by starting the next one — so the agent stopped and the
+  route carried on, and a second Advance Route could end up driving the same task
+  alongside the first. Stop Agent now cancels the route first, discards the
+  interrupted reply, and reverts that subtask to pending, so Advance Route
+  resumes from where it stopped instead of skipping past it.
+- **Fixed: a task left mid-subtask by a closed window is no longer stuck.**
+  `startSubtask` persists "running" before the session starts, but sessions die
+  with the extension host, so the flag outlived the work and every later Advance
+  Route answered "a subtask is already in flight" — permanently, with no way
+  back. A running subtask the current runner never started is now reclaimed. A
+  genuinely concurrent advance is still refused.
+- **The per-subtask timeout is configurable and no longer destroys the work.** It
+  was a hard-coded 15 minutes, and a stage that hit it was recorded as failed
+  with its reply discarded — so a planning stage that had spent 15 minutes
+  investigating left nothing behind, not even a diagnosis. New
+  `taskWorkspaces.stageTimeoutMinutes` (default 45), and whatever the stage
+  produced before the cap is kept.
+- **Route progress moved to the status bar.** A route runs for many minutes and
+  several tasks can run at once, so one dismissable toast per task buried the
+  notifications that actually needed an answer. The sidebar already shows the
+  stage and subtask; only outcomes needing a human now raise a notification.
+- **Fixed: the context size was read from the wrong place, so every turn
+  compacted.** A `result` event's `usage` is cumulative over the whole run, like
+  `total_cost_usd` — not the size of the current context. Reading it reported
+  3.8M tokens for a session whose real peak was 133k, so the auto-compaction
+  threshold tripped at the end of every turn. Context is now taken only from a
+  message's own usage.
+- **Fixed: stage sessions no longer auto-compact.** Compaction is applied when a
+  turn settles, and a subtask is a single turn, so the only compaction it could
+  ever run is one on a session the runner has already finished with. Every
+  subtask was paying for a summary of a context nobody would read again.
+- `ClaudeStageSessionRunner` now depends on a narrow `StageSessions` interface
+  and is covered by tests, including the timeout and post-settle paths.
+
+## 0.16.0
+
+- **Engineering harness.** A task can now be given a **route** — a declared
+  sequence of stages the work must travel through — chosen when the task is
+  created. "Advance Route" drives it: a planning agent splits splittable stages
+  into subtasks, each subtask runs in its own fresh Claude session, and the run
+  stops at the first human gate or failure. Stages and their verification items
+  appear nested under the task in the sidebar.
+- **Per-project routes.** Routes live in the same config as rules, so the stages a
+  kind of work travels through are the project's decision — a .NET line-of-business
+  app and a TypeScript library do not share a workflow. A project's routes replace
+  the built-ins entirely; define none and the three built-ins are offered so the
+  picker works on day one. Every route must contain a stage with
+  `"gate": "approval"`, or it is rejected — a route that could pass itself would
+  defeat the harness.
+- **Per-project review rules.** `.taskworkspaces/harness.json` in the
+  repository root holds `{ routes, rules }`; `rules` map changed file paths to the reviews they oblige — SQL review,
+  behaviour review, compatibility review. Rules are re-evaluated as the diff grows
+  and matched reviews are inserted before the human gate. The extension ships
+  **no** rules of its own: a project with no rules file requires none. Starter
+  sets are copied in by "Create Review Rules File". Rules are read from the
+  repository root, never a task worktree, so a branch cannot relax the reviews it
+  is subject to.
+- **Behaviour review with a human checklist.** Behaviour-review stages ask the
+  agent to act as a QA planner rather than a judge: its output is a checklist of
+  things a person must exercise, and the terminal human-verification gate refuses
+  to pass while any item is unchecked. "Show Required Reviews" reports what a
+  task's real diff obliges, and works on unharnessed tasks as advice.
+- **Checkpoint instead of compact.** New `taskWorkspaces.contextStrategy`. Set it
+  to `checkpoint` and a session crossing the auto-compact threshold writes a
+  size-capped handoff, then continues in a fresh session briefed from it, instead
+  of summarising in place. The handoff and the brief sent are both logged.
+- **Copy local config into new worktrees.** New
+  `taskWorkspaces.copyIntoWorktree`, for untracked files a fresh worktree lacks —
+  `.claude/settings.local.json` being the obvious one. Destinations that escape
+  the worktree are refused; a missing source is skipped, not fatal.
+- **Fixed: a schema mismatch used to discard every stored task.** The task
+  repository returned an empty list on any `schemaVersion` it did not recognise,
+  including one written by a *newer* build. Because worktrees with no matching
+  task are reported as orphans, that turned a populated task list into a list of
+  unadopted strangers, losing every task's name, description and base branch.
+  Stored state is now migrated, unreadable entries are quarantined rather than
+  dropped, and unknown fields are preserved.
+
 ## 0.15.0
 
 - **Fixed the conversation replaying its opening messages partway through.**

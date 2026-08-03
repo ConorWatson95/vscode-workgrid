@@ -9,6 +9,8 @@ export interface Logger {
   warn(message: string): void;
   error(message: string, error?: unknown): void;
   debug(message: string): void;
+  /** Reveals the log to the user. Optional so test fakes can omit it. */
+  show?(): void;
 }
 
 export class OutputChannelLogger implements Logger {
@@ -33,5 +35,9 @@ export class OutputChannelLogger implements Logger {
 
   debug(message: string): void {
     this.channel.debug(message);
+  }
+
+  show(): void {
+    this.channel.show(true);
   }
 }

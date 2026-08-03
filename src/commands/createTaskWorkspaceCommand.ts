@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
 import { ServiceError } from "../services/taskWorkspaceService";
+import { RouteDefinition } from "../domain/taskRoute";
+import { createPipeline } from "../domain/pipelineEngine";
+import { loadHarness } from "../services/reviewRulesService";
 
 /**
  * Multi-step create flow: name → branch type → base branch → description,
@@ -49,10 +52,51 @@ export async function createTaskWorkspaceCommand(
   });
   if (!baseBranch) return;
 
+  // Choosing a route is what harnesses the task: it fixes the stages the work
+  // will travel through before any agent runs. Declining is a first-class
+  // choice — an unharnessed task behaves exactly as it did before routes existed.
+  // Routes come from the project's harness config when it defines any; the
+  // built-ins are only a fallback so the picker is usable before one exists.
+  const harness = loadHarness(repositoryRoot, {
+    configuredPath: ctx.configuration.harnessConfigPath(scope),
+  });
+  for (const problem of harness.problems) {
+    ctx.logger.warn(`Harness config: ${problem}`);
+  }
+
+  const routeChoice = await vscode.window.showQuickPick(
+    [
+      ...harness.routes.map((route) => ({
+        label: route.label,
+        detail:
+          `${route.description} (${route.stages.length} stages)` +
+          (harness.usingBuiltInRoutes ? " · built-in" : ""),
+        route: route as RouteDefinition | undefined,
+      })),
+      {
+        label: "No route",
+        detail: "Just a worktree — no stages, no gates. You can decide later.",
+        route: undefined,
+      },
+    ],
+    {
+      title: "Create Task Workspace",
+      placeHolder: "Route — the stages this kind of work must travel through",
+    },
+  );
+  if (!routeChoice) return;
+
+  // With a route, this text is handed to every stage prompt. A thin brief — a bare
+  // ticket reference, say — is allowed: a stage that needs more asks for it and the
+  // route pauses, rather than the extension second-guessing what is enough.
   const description = await vscode.window.showInputBox({
     title: "Create Task Workspace",
-    prompt: "Description (optional)",
-    placeHolder: "What is this task about?",
+    prompt: routeChoice.route
+      ? "Brief — given to every stage of the route"
+      : "Description (optional)",
+    placeHolder: routeChoice.route
+      ? "A ticket reference is fine; stages will ask if they need more."
+      : "What is this task about?",
   });
   // A cancelled (Escape) description returns undefined; treat as no description.
 
@@ -72,7 +116,10 @@ export async function createTaskWorkspaceCommand(
     `Create task "${name.trim()}"?`,
     {
       modal: true,
-      detail: `Branch: ${proposal.value.branchName}\nBase: ${baseBranch.trim()}\nWorktree: ${proposal.value.worktreePath}`,
+      detail:
+        `Branch: ${proposal.value.branchName}\nBase: ${baseBranch.trim()}\n` +
+        `Worktree: ${proposal.value.worktreePath}\n` +
+        `Route: ${routeChoice.route?.label ?? "none"}`,
     },
     "Create",
   );
@@ -100,6 +147,42 @@ export async function createTaskWorkspaceCommand(
   if (!created.ok) {
     void vscode.window.showErrorMessage(describeCreateError(created.error));
     return;
+  }
+
+  // Bring across untracked local config before anything runs in the worktree, so
+  // the first agent session sees the same settings as the main checkout.
+  const provisioned = ctx.provisioner.provision(
+    ctx.configuration.copyIntoWorktree(scope),
+    repositoryRoot,
+    created.value.worktreePath,
+  );
+  if (provisioned.problems.length > 0) {
+    void vscode.window.showWarningMessage(
+      `Task created, but ${provisioned.problems.length} file(s) could not be copied into the worktree. See the output channel.`,
+    );
+  }
+
+  // Attach the pipeline after the worktree exists, so a failed creation never
+  // leaves a harnessed task with no worktree behind it.
+  if (routeChoice.route) {
+    const harnessed = {
+      ...created.value,
+      pipeline: createPipeline(routeChoice.route),
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await ctx.repository.save(harnessed);
+      created.value.pipeline = harnessed.pipeline;
+    } catch (error) {
+      // The worktree is real and usable; only the route failed to stick.
+      ctx.logger.error(
+        `Created "${created.value.name}" but could not attach the ${routeChoice.route.id} route`,
+        error,
+      );
+      void vscode.window.showWarningMessage(
+        `Task created, but its route could not be saved. It will behave as an unharnessed task.`,
+      );
+    }
   }
 
   ctx.tree.refresh();

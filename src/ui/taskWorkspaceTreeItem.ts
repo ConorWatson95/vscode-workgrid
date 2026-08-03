@@ -6,6 +6,12 @@ import {
   AgentActivity,
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
+import { ChecklistItem, TaskStage } from "../domain/taskPipeline";
+import {
+  checklistPresentation,
+  pipelineSummary,
+  stagePresentation,
+} from "./stagePresentation";
 
 /** A tree node representing a single task workspace. */
 export class TaskWorkspaceTreeItem extends vscode.TreeItem {
@@ -14,7 +20,14 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     readonly live: TaskWorkspaceLiveState | undefined,
     readonly agentActivity: AgentActivity | undefined,
   ) {
-    super(task.name, vscode.TreeItemCollapsibleState.None);
+    // A harnessed task expands to show its route; an unharnessed one has no
+    // children, so it stays a leaf exactly as before.
+    super(
+      task.name,
+      (task.pipeline?.stages.length ?? 0) > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
+    );
     this.id = task.id;
 
     let iconId: string;
@@ -43,7 +56,12 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       iconId,
       colorId ? new vscode.ThemeColor(colorId) : undefined,
     );
-    this.contextValue = buildContextValue(task.status, task.agent?.status);
+    const harnessed = (task.pipeline?.stages.length ?? 0) > 0;
+    this.contextValue = buildContextValue(
+      task.status,
+      task.agent?.status,
+      harnessed,
+    );
 
     const descriptionParts = [statusLabel];
     if (live?.isDirty) {
@@ -53,11 +71,19 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     }
     this.description = descriptionParts.join(" · ");
 
+    // The pipeline records its own route label, so a project route that has since
+    // been renamed or removed still renders correctly.
+    const summary = pipelineSummary(task.pipeline, task.pipeline?.routeLabel);
+
     this.tooltip = new vscode.MarkdownString(
       [
         `**${task.name}**`,
         "",
         `Status: ${statusLabel}`,
+        summary ? `Route: ${summary}` : "",
+        // Shown because it is handed to every stage prompt — if it is wrong or
+        // empty, every agent session inherits that.
+        task.description ? `\nBrief: ${task.description}` : "",
         `Branch: \`${task.branchName}\``,
         `Base: \`${task.baseBranch}\``,
         `Worktree: \`${task.worktreePath}\``,
@@ -75,6 +101,82 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       title: "Open Task Details",
       arguments: [this],
     };
+  }
+}
+
+/**
+ * A pipeline stage nested under its task. Read-only progress: stages are driven
+ * by the engine, not edited here.
+ */
+export class StageTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly task: TaskWorkspace,
+    readonly stage: TaskStage,
+  ) {
+    const outstanding = (stage.checklist ?? []).filter((i) => !i.checked);
+    // Only expand when there is something underneath worth seeing.
+    super(
+      stage.name,
+      (stage.checklist ?? []).length > 0
+        ? outstanding.length > 0
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
+    );
+
+    const visual = stagePresentation(stage);
+    this.id = `${task.id}/${stage.id}`;
+    this.iconPath = new vscode.ThemeIcon(
+      visual.iconId,
+      visual.colorId ? new vscode.ThemeColor(visual.colorId) : undefined,
+    );
+    this.description = visual.description;
+    this.contextValue = visual.contextValue;
+
+    this.tooltip = new vscode.MarkdownString(
+      [
+        `**${stage.name}** — ${visual.label}`,
+        "",
+        stage.intent,
+        stage.addedByRule ? `\n_Added by a review rule: ${stage.addedByRule}_` : "",
+        stage.subtasks.length > 0
+          ? `\nSubtasks:\n${stage.subtasks
+              .map((s) => `- ${s.title} (${s.status})`)
+              .join("\n")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+}
+
+/** One verification item, nested under the stage that raised it. */
+export class ChecklistTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly task: TaskWorkspace,
+    readonly stageId: string,
+    readonly item: ChecklistItem,
+  ) {
+    super(item.text, vscode.TreeItemCollapsibleState.None);
+    const visual = checklistPresentation(item);
+    this.id = `${task.id}/${stageId}/${item.id}`;
+    this.iconPath = new vscode.ThemeIcon(
+      visual.iconId,
+      visual.colorId ? new vscode.ThemeColor(visual.colorId) : undefined,
+    );
+    this.contextValue = visual.contextValue;
+    this.description = item.checked ? "verified" : "";
+    this.tooltip = new vscode.MarkdownString(
+      [
+        item.text,
+        "",
+        item.checked ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.` : "Not yet verified.",
+        item.note ? `\nNote: ${item.note}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
 }
 

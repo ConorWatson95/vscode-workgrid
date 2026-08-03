@@ -79,6 +79,45 @@ export class GitStatusService {
   }
 
   /**
+   * Every path this task has touched relative to its base branch: committed
+   * changes, uncommitted working-tree changes, and untracked files.
+   *
+   * This is the input to the review-rules engine, so it errs towards inclusion —
+   * a file that is changed but not yet committed still obliges the reviews its
+   * path implies.
+   */
+  async getChangedPaths(
+    worktreePath: string,
+    baseBranch: string,
+    signal?: AbortSignal,
+  ): Promise<Result<string[], GitError>> {
+    const committed = await this.git.run(
+      ["diff", "--name-only", "-z", `${baseBranch}...HEAD`],
+      { cwd: worktreePath, signal },
+    );
+    if (!committed.ok) return committed;
+
+    const working = await this.git.run(["diff", "--name-only", "-z", "HEAD"], {
+      cwd: worktreePath,
+      signal,
+    });
+    if (!working.ok) return working;
+
+    const untracked = await this.git.run(
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+      { cwd: worktreePath, signal },
+    );
+
+    return ok(
+      mergeChangedPaths([
+        committed.value.stdout,
+        working.value.stdout,
+        untracked.ok ? untracked.value.stdout : "",
+      ]),
+    );
+  }
+
+  /**
    * Produces a readable unified diff for a task: committed changes vs the base
    * branch, followed by any uncommitted working-tree changes. Untracked files
    * are listed by name (git diff does not include their contents).
@@ -118,6 +157,27 @@ export class GitStatusService {
 
     return ok(sections.length > 0 ? sections.join("\n\n\n") : "No changes relative to the base branch.");
   }
+}
+
+/**
+ * Merges several NUL-separated `--name-only` outputs into one de-duplicated,
+ * sorted path list. Paths are normalised to forward slashes so review rules can
+ * be written one way regardless of platform.
+ *
+ * A path appearing in both the committed diff and the working tree is one
+ * changed file, not two — de-duplication matters because rule matches are
+ * reported per rule and inflated inputs would mislead the explanation shown to
+ * the user.
+ */
+export function mergeChangedPaths(outputs: readonly string[]): string[] {
+  const paths = new Set<string>();
+  for (const output of outputs) {
+    for (const entry of output.split("\0")) {
+      const trimmed = entry.trim();
+      if (trimmed) paths.add(trimmed.replace(/\\/g, "/"));
+    }
+  }
+  return [...paths].sort();
 }
 
 /** Extracts the branch name from a `## main...origin/main` header line. */

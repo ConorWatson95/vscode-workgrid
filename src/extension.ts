@@ -23,6 +23,11 @@ import { PlanUsageService } from "./agents/planUsageService";
 import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
+import { ReviewPlanService } from "./services/reviewPlanService";
+import { loadReviewRules } from "./services/reviewRulesService";
+import { PipelineRunner } from "./services/pipelineRunner";
+import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
+import { WorktreeProvisioner } from "./services/worktreeProvisioner";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -40,7 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const gitClient = new GitClient(logger);
   const statusService = new GitStatusService(gitClient);
   const worktreeService = new GitWorktreeService(gitClient, statusService);
-  const repository = new ExtensionStateTaskRepository(context.globalState);
+  const repository = new ExtensionStateTaskRepository(context.globalState, logger);
   const service = new TaskWorkspaceService(
     repository,
     worktreeService,
@@ -227,6 +232,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  // Rules are resolved per repository, and the configured path is
+  // resource-scoped, so each project can keep its own rule set.
+  const reviewPlans = new ReviewPlanService(
+    statusService,
+    repository,
+    logger,
+    (root) =>
+      loadReviewRules(root, {
+        configuredPath: configuration.harnessConfigPath(repositoryUri),
+      }),
+  );
+
+  // Each subtask runs in a fresh session, so route stages never share context.
+  const stageRunner = new ClaudeStageSessionRunner(
+    sessions,
+    (task) => ({
+      worktreePath: task.worktreePath,
+      permissionMode: configuration.permissionMode(repositoryUri),
+      addDirs: [task.repositoryRoot],
+      autoCompactThreshold: configuration.autoCompactThreshold(repositoryUri),
+      contextStrategy: configuration.contextStrategy(repositoryUri),
+      model: configuration.model(repositoryUri),
+      taskName: task.name,
+    }),
+    logger,
+    configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
+  );
+  const runner = new PipelineRunner(stageRunner, repository, reviewPlans, logger);
+
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {
     service,
@@ -242,6 +276,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     diffProvider,
     detailView,
     visualStudio,
+    reviewPlans,
+    runner,
+    provisioner: new WorktreeProvisioner(logger),
     tree,
     logger,
     extensionUri: context.extensionUri,

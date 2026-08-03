@@ -106,6 +106,7 @@ export function agentControls(agentStatus: AgentSessionStatus | undefined): {
 export function buildContextValue(
   status: TaskWorkspaceStatus,
   agentStatus: AgentSessionStatus | undefined,
+  harnessed = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -113,5 +114,12 @@ export function buildContextValue(
   if (stoppable) tokens.push("agentStoppable");
   // Distinguish archived (can be restored) from active (can be archived).
   tokens.push(status === "archived" ? "archived" : "archivable");
+  // A harnessed task is driven by its route, so the row offers one action —
+  // advance — rather than three ways to start an ad-hoc chat. The chat modes stay
+  // available in the context menu; they are just no longer the obvious thing.
+  //
+  // "adhoc" rather than "unharnessed" deliberately: menu `when` clauses match
+  // contextValue by substring, and /harnessed/ would match "unharnessed" too.
+  tokens.push(harnessed ? "harnessed" : "adhoc");
   return tokens.join(" ");
 }

@@ -8,11 +8,25 @@ import { createTaskWorkspaceCommand } from "./createTaskWorkspaceCommand";
 import {
   TaskWorkspaceTreeItem,
   OrphanWorktreeTreeItem,
+  StageTreeItem,
+  ChecklistTreeItem,
 } from "../ui/taskWorkspaceTreeItem";
+import {
+  approveStage,
+  outstandingChecklist,
+  setChecklistItem,
+} from "../domain/pipelineEngine";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
 import { scanSlashCommands } from "../agents/slashCommands";
+import { formatReviewPlan } from "../services/reviewPlanService";
+import { HARNESS_CONFIG_RELATIVE_PATH } from "../services/reviewRulesService";
+import {
+  RULE_TEMPLATES,
+  renderRuleTemplate,
+} from "../domain/reviewRuleTemplates";
+import * as fs from "node:fs";
 import {
   loadTranscriptItems,
   loadTranscriptItemsSync,
@@ -55,7 +69,375 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
     register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
     register("taskWorkspaces.sessionHistory", () => sessionHistoryCommand(ctx)),
+    register("taskWorkspaces.requiredReviews", (arg) =>
+      requiredReviewsCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.createReviewRules", () =>
+      createReviewRulesCommand(ctx),
+    ),
+    register("taskWorkspaces.advanceRoute", (arg) => advanceRouteCommand(ctx, arg)),
+    register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
+    register("taskWorkspaces.toggleChecklistItem", (arg) =>
+      toggleChecklistItemCommand(ctx, arg),
+    ),
   ];
+}
+
+/**
+ * Approves a stage held at a human gate. The engine refuses while verification
+ * items are outstanding, so this reports which ones rather than forcing through.
+ */
+async function approveStageCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  const result = approveStage(task.pipeline, arg.stage.id, new Date().toISOString());
+  if (!result.ok) {
+    const choice = await vscode.window.showWarningMessage(
+      result.error.message,
+      "Show Details",
+    );
+    if (choice === "Show Details") ctx.logger.show?.();
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: result.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(`Harness [${task.name}] approved "${arg.stage.name}".`);
+
+  const next = await vscode.window.showInformationMessage(
+    `Approved "${arg.stage.name}".`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/** Ticks or un-ticks one verification item, optionally recording what was seen. */
+async function toggleChecklistItemCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof ChecklistTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  const checking = !arg.item.checked;
+  let note: string | undefined;
+  if (checking) {
+    // Optional, but the observation is the evidence — worth capturing while the
+    // tester still remembers it.
+    note = await vscode.window.showInputBox({
+      title: arg.item.text,
+      prompt: "What did you observe? (optional)",
+      placeHolder: "e.g. Verified on staging — dealer id retained",
+    });
+  }
+
+  const result = setChecklistItem(task.pipeline, arg.item.id, {
+    checked: checking,
+    note,
+    at: new Date().toISOString(),
+  });
+  if (!result.ok) {
+    void vscode.window.showErrorMessage(result.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: result.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+
+  const remaining = outstandingChecklist(result.value).length;
+  if (checking && remaining === 0) {
+    void vscode.window.showInformationMessage(
+      "All verification items are checked — the human gate can now be approved.",
+    );
+  }
+}
+
+/**
+ * Drives a harnessed task's route as far as it can go unattended, stopping at the
+ * first human gate or failure. Cancellable, because each step spawns an agent
+ * session and the whole run can take many minutes.
+ */
+async function advanceRouteCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+
+  if (!task.pipeline) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" has no route, so there is nothing to advance.`,
+    );
+    return;
+  }
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is already advancing. Stop the agent to interrupt it.`,
+    );
+    return;
+  }
+
+  // Status-bar progress, not a notification. A route runs for many minutes and
+  // several can run at once; one dismissable toast per task would bury the ones
+  // that actually need an answer. The sidebar already shows which stage and
+  // subtask each task is on, and Stop Agent is the cancel affordance — so only
+  // outcomes that need a human get a notification, below.
+  const report = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Window,
+      title: `Advancing "${task.name}"…`,
+    },
+    () => ctx.runner.advance(task),
+  );
+
+  ctx.tree.refresh();
+  for (const step of report.steps) {
+    ctx.logger.info(`Harness [${task.name}] ${step}`);
+  }
+
+  const outcome = report.outcome;
+  switch (outcome.kind) {
+    case "cancelled":
+      // The user stopped it; they know. Saying so again is noise.
+      ctx.logger.info(`Harness [${task.name}] stopped; the route can be resumed.`);
+      return;
+    case "done":
+      void vscode.window.showInformationMessage(
+        `"${task.name}" completed its route.`,
+      );
+      return;
+    case "needsInput": {
+      // Answering appends to the brief rather than replying into a session: the
+      // session is gone, and the next attempt is a fresh one that will only see
+      // the brief.
+      const choice = await vscode.window.showInformationMessage(
+        `"${outcome.stageName}" needs more information.`,
+        { modal: true, detail: outcome.question },
+        "Answer",
+        "Show Log",
+      );
+      if (choice === "Show Log") {
+        ctx.logger.show?.();
+        return;
+      }
+      if (choice !== "Answer") return;
+
+      const answer = await vscode.window.showInputBox({
+        title: `Answer for "${outcome.stageName}"`,
+        prompt: "Added to the task brief, which every stage sees",
+        placeHolder: outcome.question.split("\n")[0],
+      });
+      if (!answer?.trim()) return;
+
+      const latest = await ctx.repository.get(task.id);
+      if (!latest) return;
+      await ctx.repository.save({
+        ...latest,
+        description: [latest.description, `Q: ${outcome.question}`, `A: ${answer.trim()}`]
+          .filter(Boolean)
+          .join("\n\n"),
+        updatedAt: new Date().toISOString(),
+      });
+      ctx.tree.refresh();
+
+      const again = await vscode.window.showInformationMessage(
+        "Answer added to the brief.",
+        "Advance Route",
+      );
+      if (again === "Advance Route") {
+        await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+      }
+      return;
+    }
+    case "awaitingApproval": {
+      const choice = await vscode.window.showInformationMessage(
+        `"${task.name}" is waiting for you at "${outcome.stageName}".`,
+        "Show Details",
+      );
+      if (choice === "Show Details") ctx.logger.show?.();
+      return;
+    }
+    case "blocked": {
+      const choice = await vscode.window.showWarningMessage(
+        `"${task.name}" stopped at "${outcome.stageName}"` +
+          (outcome.reason ? `: ${outcome.reason}` : "."),
+        "Show Details",
+      );
+      if (choice === "Show Details") ctx.logger.show?.();
+      return;
+    }
+    case "exhausted":
+      void vscode.window.showWarningMessage(
+        `"${task.name}" hit the ${outcome.steps}-step limit without finishing. See the log.`,
+      );
+      return;
+    case "unharnessed":
+      return;
+  }
+}
+
+/**
+ * Writes a starter review-rules file into the repository. The extension applies
+ * no rules of its own, so this is how a project opts in — the copied file is the
+ * project's to edit, which is the point.
+ */
+async function createReviewRulesCommand(ctx: CommandContext): Promise<void> {
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) {
+    void vscode.window.showErrorMessage("Open a Git repository first.");
+    return;
+  }
+
+  const configured = ctx.configuration.harnessConfigPath(ctx.repositoryUri());
+  const relative = configured.trim() || HARNESS_CONFIG_RELATIVE_PATH;
+  const target = path.isAbsolute(relative)
+    ? relative
+    : path.join(repositoryRoot, relative);
+
+  if (fs.existsSync(target)) {
+    const open = await vscode.window.showInformationMessage(
+      `${relative} already exists.`,
+      "Open It",
+    );
+    if (open === "Open It") {
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target));
+    }
+    return;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    RULE_TEMPLATES.map((template) => ({
+      label: template.label,
+      detail: template.description,
+      template,
+    })),
+    {
+      title: "Create Review Rules File",
+      placeHolder: "Starter rule set — you can edit it afterwards",
+    },
+  );
+  if (!picked) return;
+
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, renderRuleTemplate(picked.template), "utf8");
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `Could not write ${relative}: ${(error as Error).message}`,
+    );
+    return;
+  }
+
+  ctx.logger.info(`Created review rules at ${target} from the "${picked.template.id}" template.`);
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target));
+  void vscode.window.showInformationMessage(
+    `Created ${relative}. Commit it on your base branch — the harness config is read from the repository root, not from task worktrees.`,
+  );
+}
+
+/**
+ * Shows which reviews a task's actual diff obliges, per the project's rules.
+ * For a harnessed task it also offers to add the missing stages to its pipeline.
+ */
+async function requiredReviewsCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+
+  const planned = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: "Evaluating review rules…" },
+    () => ctx.reviewPlans.plan(task),
+  );
+  if (!planned.ok) {
+    void vscode.window.showErrorMessage(
+      `Could not evaluate review rules: ${planned.error.message}`,
+    );
+    return;
+  }
+
+  const plan = planned.value;
+  ctx.logger.info(formatReviewPlan(task, plan));
+
+  if (plan.problems.length > 0) {
+    void vscode.window.showWarningMessage(
+      `Review rules have ${plan.problems.length} problem(s). See the output channel.`,
+    );
+  }
+
+  if (plan.required.length === 0) {
+    void vscode.window.showInformationMessage(
+      plan.changedPaths.length === 0
+        ? `"${task.name}" has no changes relative to ${task.baseBranch}.`
+        : `No extra reviews required for "${task.name}".`,
+    );
+    return;
+  }
+
+  const missing = plan.required.filter((r) => !r.alreadyOnPipeline);
+  const summary = plan.required.map((r) => r.stageLabel).join(", ");
+
+  // An unharnessed task has no pipeline to add stages to, so the answer is
+  // advisory only. Say so rather than offering an action that cannot work.
+  if (!plan.harnessed) {
+    const choice = await vscode.window.showInformationMessage(
+      `"${task.name}" requires: ${summary}`,
+      { detail: "Advisory only — this task has no route.", modal: false },
+      "Show Details",
+    );
+    if (choice === "Show Details") ctx.logger.show?.();
+    return;
+  }
+
+  if (missing.length === 0) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" already has every required review: ${summary}`,
+    );
+    return;
+  }
+
+  const choice = await vscode.window.showInformationMessage(
+    `"${task.name}" is missing ${missing.length} required review(s): ${missing
+      .map((r) => r.stageLabel)
+      .join(", ")}`,
+    "Add to Pipeline",
+    "Show Details",
+  );
+  if (choice === "Show Details") {
+    ctx.logger.show?.();
+    return;
+  }
+  if (choice !== "Add to Pipeline") return;
+
+  const applied = await ctx.reviewPlans.apply(task);
+  if (!applied.ok) {
+    void vscode.window.showErrorMessage(
+      `Could not update the pipeline: ${applied.error.message}`,
+    );
+    return;
+  }
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    `Added ${applied.value.added.length} review stage(s) to "${task.name}".`,
+  );
 }
 
 /** Browses archived session history of removed tasks and opens it read-only. */
@@ -301,6 +683,24 @@ async function adoptCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   }
   ctx.tree.refresh();
   void vscode.window.showInformationMessage(`Adopted "${result.value.name}".`);
+}
+
+/**
+ * Context-management options shared by every session launch. The handoff is
+ * logged verbatim alongside the brief actually sent, so a checkpoint is
+ * inspectable after the fact — otherwise a clear would be unauditable.
+ */
+function contextOptions(ctx: CommandContext, task: TaskWorkspace) {
+  return {
+    contextStrategy: ctx.configuration.contextStrategy(ctx.repositoryUri()),
+    taskName: task.name,
+    onCheckpoint: ({ raw, brief }: { raw: string; brief: string }) => {
+      ctx.logger.info(
+        `Checkpoint for "${task.name}" — handoff written by the agent:\n${raw}\n\n` +
+          `--- brief sent to the fresh session (${brief.length} chars) ---\n${brief}`,
+      );
+    },
+  };
 }
 
 /** Resolves the target task from a tree item, a task id, or undefined. */
@@ -659,6 +1059,7 @@ async function openChatSession(
     resumeSessionId,
     autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
     model: ctx.configuration.model(ctx.repositoryUri()),
+    ...contextOptions(ctx, task),
   });
 
   // Replay the prior transcript into the panel so history is visible.
@@ -774,6 +1175,7 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
       resumeSessionId: resumable,
       autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
       model,
+      ...contextOptions(ctx, task),
     });
     if (session.items.length === 0) {
       const fromDisk = resumeSessionId ? loadTranscriptItemsSync(os.homedir(), resumeSessionId) : [];
@@ -818,6 +1220,7 @@ function buildController(ctx: CommandContext, task: TaskWorkspace): ChatControll
         addDirs: [task.repositoryRoot],
         autoCompactThreshold: ctx.configuration.autoCompactThreshold(ctx.repositoryUri()),
         model,
+        ...contextOptions(ctx, task),
       });
       void ctx.repository.save({
         ...task,
@@ -853,6 +1256,12 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
   const task = await resolveTask(ctx, arg);
   if (!task) return;
 
+  // Stop the route before the session. Stopping only the session ends the current
+  // subtask, which the driver reads as "that turn finished" and answers by
+  // starting the next one — so a stop that did not cancel the route was not a
+  // stop at all. Cancelling first means the reply is discarded and the subtask
+  // reverts to pending, so Advance Route resumes from where it stopped.
+  ctx.runner.cancel(task.id);
   ctx.sessions.stop(task.id);
   ctx.terminals.disposeTerminal(task.id);
   if (task.agent) {

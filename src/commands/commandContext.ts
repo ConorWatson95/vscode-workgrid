@@ -14,6 +14,9 @@ import { TaskDetailViewProvider } from "../ui/taskDetailViewProvider";
 import { DiffContentProvider } from "../ui/diffContentProvider";
 import { Logger } from "../logging/logger";
 import { VisualStudioService } from "../projects/visualStudioService";
+import { ReviewPlanService } from "../services/reviewPlanService";
+import { PipelineRunner } from "../services/pipelineRunner";
+import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -30,6 +33,9 @@ export interface CommandContext {
   diffProvider: DiffContentProvider;
   detailView: TaskDetailViewProvider;
   visualStudio: VisualStudioService;
+  reviewPlans: ReviewPlanService;
+  runner: PipelineRunner;
+  provisioner: WorktreeProvisioner;
   tree: TaskWorkspaceTreeProvider;
   logger: Logger;
   extensionUri: vscode.Uri;

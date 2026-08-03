@@ -1,0 +1,135 @@
+import { TaskWorkspace } from "../domain/taskWorkspace";
+import { StreamSessionOptions } from "./claudeStreamSession";
+import { ChatItem } from "./streamJson";
+import { StageSessionRunner } from "../services/pipelineRunner";
+import { Logger } from "../logging/logger";
+
+/** The part of a live session a stage run observes. */
+export interface StageSession {
+  readonly items: readonly ChatItem[];
+  readonly sessionId?: string;
+  readonly lastTurnErrored: boolean;
+  on(event: "status", listener: (status: string) => void): unknown;
+  off(event: "status", listener: (status: string) => void): unknown;
+}
+
+/**
+ * The part of `AgentSessionManager` a stage run needs. Narrowed to an interface
+ * so the run loop can be tested without spawning a CLI.
+ */
+export interface StageSessions {
+  create(
+    taskId: string,
+    options: Omit<StreamSessionOptions, "command">,
+    initialPrompt?: string,
+  ): StageSession;
+  stop(taskId: string): void;
+}
+
+/**
+ * Runs one stage prompt to completion in a **fresh** Claude session.
+ *
+ * `AgentSessionManager.create` stops any existing session for the task first, so
+ * every subtask genuinely starts with an empty context. That is the point of
+ * driving a route through subtasks at all: without the fresh start this would be
+ * one long conversation with a checklist bolted on.
+ */
+export class ClaudeStageSessionRunner implements StageSessionRunner {
+  constructor(
+    private readonly sessions: StageSessions,
+    private readonly optionsFor: (
+      task: TaskWorkspace,
+    ) => Omit<StreamSessionOptions, "command">,
+    private readonly logger: Logger,
+    /** Hard stop per subtask, so a hung CLI cannot stall the route forever. */
+    private readonly timeoutMs = 15 * 60 * 1000,
+  ) {}
+
+  run(
+    task: TaskWorkspace,
+    prompt: string,
+    label: string,
+  ): Promise<{ ok: boolean; text: string; sessionId?: string; error?: string }> {
+    this.logger.info(`Harness [${task.name}] running ${label} in a fresh session.`);
+
+    // Auto-compaction is disabled for stage sessions, and cannot help them: it
+    // is applied when a turn settles, and a subtask is a single turn, so the
+    // only compaction it could ever run is one on a session this runner has
+    // already finished with. Left enabled it spent a model turn summarising a
+    // context nobody would read again, once per subtask.
+    const session = this.sessions.create(
+      task.id,
+      { ...this.optionsFor(task), autoCompactThreshold: 0 },
+      prompt,
+    );
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: {
+        ok: boolean;
+        text: string;
+        sessionId?: string;
+        error?: string;
+      }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        session.off("status", onStatus);
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        const minutes = Math.round(this.timeoutMs / 60000);
+        this.logger.warn(
+          `Harness [${task.name}] ${label} hit the ${minutes}-minute limit; stopping it. ` +
+            `Raise taskWorkspaces.stageTimeoutMinutes if stages here legitimately take longer.`,
+        );
+        this.sessions.stop(task.id);
+        // Keep whatever it produced. The stage still fails — an interrupted
+        // stage has not done its job — but discarding the reply threw away tens
+        // of minutes of investigation and left nothing to diagnose from.
+        finish({
+          ok: false,
+          text: lastAssistantText(),
+          sessionId: session.sessionId,
+          error: `timed out after ${minutes} minute(s)`,
+        });
+      }, this.timeoutMs);
+
+      const lastAssistantText = (): string => {
+        const reply = [...session.items]
+          .reverse()
+          .find((item) => item.kind === "assistant");
+        return reply && "text" in reply ? reply.text : "";
+      };
+
+      const onStatus = (status: string) => {
+        // The turn is over when the session goes idle or dies. "waiting" means it
+        // finished and wants more input; there is no more input for a subtask.
+        if (status === "waiting") {
+          const errored = session.lastTurnErrored;
+          finish({
+            ok: !errored,
+            text: lastAssistantText(),
+            sessionId: session.sessionId,
+            error: errored ? "the agent reported an error" : undefined,
+          });
+          return;
+        }
+        if (status === "failed" || status === "stopped") {
+          const text = lastAssistantText();
+          // A stopped session that produced a reply is still a usable result;
+          // only treat it as a failure when there is nothing to show.
+          finish({
+            ok: status === "stopped" && text.length > 0,
+            text,
+            sessionId: session.sessionId,
+            error: text.length > 0 ? undefined : `session ${status}`,
+          });
+        }
+      };
+
+      session.on("status", onStatus);
+    });
+  }
+}

@@ -18,6 +18,13 @@ import {
   contextTokensOf,
   compactInfoOf,
 } from "./streamJson";
+import {
+  HANDOFF_PROMPT,
+  Handoff,
+  formatHandoffBrief,
+  isEmptyHandoff,
+  parseHandoff,
+} from "./handoff";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 
@@ -33,6 +40,22 @@ export interface StreamSessionOptions {
   autoCompactThreshold?: number;
   /** Model alias/id passed to `--model` (e.g. "opus"). Empty = CLI default. */
   model?: string;
+  /**
+   * What to do when the context exceeds `autoCompactThreshold`.
+   * "compact" issues `/compact`; "checkpoint" writes a handoff and starts a
+   * fresh session from it, keeping carried-forward context bounded.
+   */
+  contextStrategy?: "compact" | "checkpoint";
+  /** Task name, used to orient a session resumed from a handoff. */
+  taskName?: string;
+  /** Called when a checkpoint is taken, so the handoff can be persisted. */
+  onCheckpoint?: (checkpoint: {
+    handoff: Handoff;
+    /** The agent's raw reply, kept verbatim for inspection. */
+    raw: string;
+    /** The brief actually sent to the fresh session. */
+    brief: string;
+  }) => void;
 }
 
 type SessionEvents = {
@@ -62,7 +85,8 @@ export class ClaudeStreamSession {
   /** Rolling tail of recent stderr, surfaced when a turn errors with no detail. */
   private stderrTail = "";
 
-  readonly id: string;
+  /** Mutable: a checkpoint restart mints a new id for the new transcript. */
+  id: string;
   readonly items: ChatItem[] = [];
   status: AgentSessionStatus = "starting";
   sessionId?: string;
@@ -84,6 +108,13 @@ export class ClaudeStreamSession {
   costUsd?: number;
   /** True between issuing `/compact` and seeing its result, for feedback. */
   private compacting = false;
+  /** True between asking for a handoff and consuming the reply. */
+  private awaitingHandoff = false;
+  /**
+   * Session to resume on the next spawn. Cleared by a checkpoint restart, which
+   * must begin with an empty context rather than reloading the old transcript.
+   */
+  private resumeSessionId?: string;
 
   constructor(
     private readonly options: StreamSessionOptions,
@@ -91,6 +122,7 @@ export class ClaudeStreamSession {
   ) {
     // Reuse the resumed id so the transcript continues in the same file.
     this.id = options.resumeSessionId ?? randomUUID();
+    this.resumeSessionId = options.resumeSessionId;
   }
 
   on<E extends keyof SessionEvents>(
@@ -117,8 +149,8 @@ export class ClaudeStreamSession {
       "stream-json",
       "--verbose",
       // Resume the existing session, or create one with a known id.
-      ...(this.options.resumeSessionId
-        ? ["--resume", this.options.resumeSessionId]
+      ...(this.resumeSessionId
+        ? ["--resume", this.resumeSessionId]
         : ["--session-id", this.id]),
       "--permission-mode",
       this.options.permissionMode,
@@ -276,20 +308,106 @@ export class ClaudeStreamSession {
       }
       this.busy = false;
       this.setStatus("waiting");
-      this.maybeAutoCompact();
+      // A pending handoff takes precedence: its reply is what we just received.
+      if (this.awaitingHandoff) {
+        this.completeCheckpoint();
+      } else {
+        this.maybeAutoCompact();
+      }
     }
   }
 
-  /** Auto-issues `/compact` when the context exceeds the configured threshold. */
+  /**
+   * Applies the configured context strategy once a turn settles.
+   *
+   * "compact" summarises in place — the context regrows and the operation is
+   * slow. "checkpoint" asks for a written handoff and then starts a fresh
+   * session from it, so the carried-forward state is bounded and inspectable.
+   */
   private maybeAutoCompact(): void {
     const threshold = this.options.autoCompactThreshold ?? 0;
-    if (threshold > 0 && !this.compacting && this.contextTokens > threshold) {
+    if (threshold <= 0 || this.compacting || this.awaitingHandoff) return;
+    if (this.contextTokens <= threshold) return;
+
+    if ((this.options.contextStrategy ?? "compact") === "checkpoint") {
       this.logger.info(
-        `Auto-compacting: context ${this.contextTokens} > threshold ${threshold}.`,
+        `Checkpointing: context ${this.contextTokens} > threshold ${threshold}.`,
       );
-      this.pushItem({ kind: "system", text: "Context over threshold — compacting automatically…" });
-      this.compact();
+      this.pushItem({
+        kind: "system",
+        text: "Context over threshold — writing a handoff and starting a fresh session…",
+      });
+      this.awaitingHandoff = true;
+      this.send(HANDOFF_PROMPT);
+      return;
     }
+
+    this.logger.info(
+      `Auto-compacting: context ${this.contextTokens} > threshold ${threshold}.`,
+    );
+    this.pushItem({ kind: "system", text: "Context over threshold — compacting automatically…" });
+    this.compact();
+  }
+
+  /**
+   * Completes a checkpoint: parse the handoff the agent just wrote, persist it,
+   * then replace this process with a fresh session briefed from it.
+   *
+   * On an empty handoff we fall back to `/compact` rather than clearing — losing
+   * the conversation with nothing to resume from would be strictly worse than a
+   * slow compaction.
+   */
+  private completeCheckpoint(): void {
+    this.awaitingHandoff = false;
+
+    const reply = [...this.items].reverse().find((item) => item.kind === "assistant");
+    const raw = reply && "text" in reply ? reply.text : "";
+    const { handoff, structured } = parseHandoff(raw);
+
+    if (isEmptyHandoff(handoff)) {
+      this.logger.warn("Checkpoint produced an empty handoff; compacting instead.");
+      this.pushItem({
+        kind: "system",
+        text: "Handoff was empty — compacting instead of clearing.",
+      });
+      this.compact();
+      return;
+    }
+    if (!structured) {
+      this.logger.warn("Handoff had no recognised headings; carrying it forward as prose.");
+    }
+
+    const brief = formatHandoffBrief(handoff, { taskName: this.options.taskName });
+    this.options.onCheckpoint?.({ handoff, raw, brief });
+
+    const previousTokens = this.contextTokens;
+    this.restartFresh(brief);
+    this.pushItem({
+      kind: "system",
+      text:
+        `Started a fresh session from a ${brief.length}-character handoff` +
+        (previousTokens > 0 ? ` (was ~${Math.round(previousTokens / 1000)}k tokens).` : "."),
+    });
+  }
+
+  /**
+   * Tears down the current process and starts a new one with no `--resume`, so
+   * the CLI begins with an empty context. A new session id is minted because the
+   * fresh conversation is a new transcript, not a continuation of the old file.
+   */
+  private restartFresh(brief: string): void {
+    this.stop();
+    this.child = undefined;
+    this.stdoutBuffer = "";
+    this.stderrTail = "";
+    this.contextTokens = 0;
+    this.compacting = false;
+    this.sessionId = undefined;
+    this.id = randomUUID();
+    // A fresh process must not resume the old transcript.
+    this.resumeSessionId = undefined;
+    this.emitter.emit("compacted");
+    this.start(brief);
   }
 
   /** Emits a transcript note confirming a `/compact`. */

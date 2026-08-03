@@ -3,7 +3,38 @@ import {
   parseStatusPorcelain,
   parseBranchHeader,
   parseShortStat,
+  mergeChangedPaths,
 } from "./gitStatusService";
+
+describe("mergeChangedPaths", () => {
+  it("merges NUL-separated outputs and drops empties", () => {
+    expect(mergeChangedPaths(["a.ts\0b.ts\0", "", "c.ts\0"])).toEqual([
+      "a.ts",
+      "b.ts",
+      "c.ts",
+    ]);
+  });
+
+  it("de-duplicates a file that is both committed and modified", () => {
+    // One changed file, not two — inflated counts would mislead the
+    // explanation shown to the user.
+    expect(mergeChangedPaths(["src/a.ts\0", "src/a.ts\0"])).toEqual(["src/a.ts"]);
+  });
+
+  it("normalises separators so rules can be written one way", () => {
+    expect(mergeChangedPaths(["src\\Mapping\\Profile.cs\0"])).toEqual([
+      "src/Mapping/Profile.cs",
+    ]);
+  });
+
+  it("sorts for stable output", () => {
+    expect(mergeChangedPaths(["z.ts\0a.ts\0"])).toEqual(["a.ts", "z.ts"]);
+  });
+
+  it("returns nothing for empty output", () => {
+    expect(mergeChangedPaths(["", "\0"])).toEqual([]);
+  });
+});
 
 describe("parseStatusPorcelain", () => {
   it("reports a clean tree", () => {

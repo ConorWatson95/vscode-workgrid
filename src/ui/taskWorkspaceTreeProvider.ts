@@ -4,11 +4,18 @@ import {
   TaskWorkspaceTreeItem,
   MessageTreeItem,
   OrphanWorktreeTreeItem,
+  StageTreeItem,
+  ChecklistTreeItem,
 } from "./taskWorkspaceTreeItem";
 import { Logger } from "../logging/logger";
 import { AgentActivity } from "./statusPresentation";
 
-type TreeNode = TaskWorkspaceTreeItem | OrphanWorktreeTreeItem | MessageTreeItem;
+type TreeNode =
+  | TaskWorkspaceTreeItem
+  | OrphanWorktreeTreeItem
+  | MessageTreeItem
+  | StageTreeItem
+  | ChecklistTreeItem;
 
 /**
  * Tree data provider for the Task Workspaces view. Resolves the active
@@ -51,7 +58,19 @@ export class TaskWorkspaceTreeProvider
   }
 
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
-    if (element) return []; // flat list in the MVP
+    // A harnessed task expands into its route's stages; a stage expands into the
+    // verification items it raised. Everything else is a leaf.
+    if (element instanceof TaskWorkspaceTreeItem) {
+      return (element.task.pipeline?.stages ?? []).map(
+        (stage) => new StageTreeItem(element.task, stage),
+      );
+    }
+    if (element instanceof StageTreeItem) {
+      return (element.stage.checklist ?? []).map(
+        (item) => new ChecklistTreeItem(element.task, element.stage.id, item),
+      );
+    }
+    if (element) return [];
 
     const repositoryRoot = this.resolveRepositoryRoot();
     if (!repositoryRoot) {

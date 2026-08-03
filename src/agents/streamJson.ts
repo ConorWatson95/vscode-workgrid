@@ -80,13 +80,17 @@ export interface StreamEvent {
 /**
  * Approximate size of the model's current context from an event's usage: new
  * input + cached (read) + cache-creation input tokens. Returns undefined when
- * the event carries no usage.
+ * the event carries no per-message usage.
+ *
+ * **Only `message.usage` counts.** The top-level `usage` on a `result` event is
+ * cumulative over the whole run, exactly like `total_cost_usd` — summing it
+ * reports millions of tokens for a session that never exceeded 130k, and any
+ * threshold compared against it fires on every turn.
  */
 export function contextTokensOf(event: {
-  usage?: Usage;
   message?: { usage?: Usage };
 }): number | undefined {
-  const u = event.message?.usage ?? event.usage;
+  const u = event.message?.usage;
   if (!u) return undefined;
   const total =
     (u.input_tokens ?? 0) +

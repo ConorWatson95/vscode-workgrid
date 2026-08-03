@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { CopyEntry } from "../domain/worktreeCopyPlan";
 
 const SECTION = "taskWorkspaces";
 
@@ -21,6 +22,33 @@ export class ExtensionConfiguration {
 
   defaultBaseBranch(scope?: vscode.Uri): string {
     return this.config(scope).get<string>("defaultBaseBranch", "").trim();
+  }
+
+  /**
+   * Files and directories copied into every new worktree. A fresh worktree lacks
+   * everything git does not track, so untracked local config has to be brought
+   * across or an agent behaves differently there than in the main checkout.
+   */
+  copyIntoWorktree(scope?: vscode.Uri): CopyEntry[] {
+    return this.config(scope).get<CopyEntry[]>("copyIntoWorktree", []);
+  }
+
+  /**
+   * Location of the project's review-rules file. Empty means the conventional
+   * path inside the repository. Resource-scoped, so each project can differ.
+   */
+  reviewRulesPath(scope?: vscode.Uri): string {
+    return this.config(scope).get<string>("reviewRulesPath", "").trim();
+  }
+
+  /**
+   * Location of the project's harness config (routes + review rules). Falls back
+   * to the older `reviewRulesPath` when only that is set, so an existing
+   * configuration keeps working.
+   */
+  harnessConfigPath(scope?: vscode.Uri): string {
+    const configured = this.config(scope).get<string>("harnessConfigPath", "").trim();
+    return configured || this.reviewRulesPath(scope);
   }
 
   claudeCommand(scope?: vscode.Uri): string {
@@ -70,7 +98,33 @@ export class ExtensionConfiguration {
     return this.config(scope).get<number>("compactPromptThreshold", 120000);
   }
 
+  /**
+   * What to do when a session crosses `autoCompactThreshold`: summarise in place
+   * ("compact") or write a handoff and continue in a fresh session
+   * ("checkpoint"). Checkpointing keeps carried-forward context bounded.
+   */
+  contextStrategy(scope?: vscode.Uri): "compact" | "checkpoint" {
+    return this.config(scope).get<"compact" | "checkpoint">(
+      "contextStrategy",
+      "compact",
+    );
+  }
+
   autoCompactThreshold(scope?: vscode.Uri): number {
     return this.config(scope).get<number>("autoCompactThreshold", 0);
+  }
+
+  /**
+   * Hard stop for one subtask, so a hung CLI cannot stall a route forever.
+   *
+   * Generous by default: a planning stage on a large repository legitimately
+   * takes tens of minutes, and per-process overhead on the host machine (virus
+   * scanning on spawn, most often) can multiply that several times over. A cap
+   * that fires during normal work is worse than no cap, because the stage is
+   * recorded as failed.
+   */
+  stageTimeoutMinutes(scope?: vscode.Uri): number {
+    const minutes = this.config(scope).get<number>("stageTimeoutMinutes", 45);
+    return minutes > 0 ? minutes : 45;
   }
 }

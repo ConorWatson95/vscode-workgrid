@@ -1,33 +1,56 @@
 import * as vscode from "vscode";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { TaskRepository, normalizeRoot } from "./taskRepository";
+import {
+  CURRENT_SCHEMA_VERSION,
+  StoredState,
+  migrateStoredState,
+} from "./storedStateMigration";
+import { Logger } from "../logging/logger";
 
 const STORAGE_KEY = "taskWorkspaces.tasks";
-const SCHEMA_VERSION = 1;
-
-interface StoredState {
-  schemaVersion: number;
-  tasks: TaskWorkspace[];
-}
+/** Where unreadable state is parked, so a bad blob is recoverable by hand. */
+const QUARANTINE_KEY = "taskWorkspaces.tasks.quarantine";
 
 /**
  * TaskRepository backed by VS Code global state (a Memento). Global (not
  * workspace) state so tasks survive across windows and are keyed by
- * repositoryRoot. Stores a versioned JSON envelope to allow future migrations.
+ * repositoryRoot.
+ *
+ * Reads go through `migrateStoredState`, which never discards data: an earlier
+ * version of this class returned `[]` on any schema mismatch, which would have
+ * wiped every task's metadata and left the user's worktrees looking like
+ * unadopted orphans. Migration logic lives in a `vscode`-free module so it is
+ * covered by unit tests.
  */
 export class ExtensionStateTaskRepository implements TaskRepository {
-  constructor(private readonly memento: vscode.Memento) {}
+  constructor(
+    private readonly memento: vscode.Memento,
+    private readonly logger?: Logger,
+  ) {}
 
   private read(): TaskWorkspace[] {
-    const state = this.memento.get<StoredState>(STORAGE_KEY);
-    if (!state || state.schemaVersion !== SCHEMA_VERSION) {
-      return [];
+    const outcome = migrateStoredState(this.memento.get<unknown>(STORAGE_KEY));
+
+    for (const note of outcome.notes) {
+      this.logger?.info(`Task state migration: ${note}`);
     }
-    return state.tasks;
+    if (outcome.quarantined.length > 0) {
+      // Fire-and-forget: a failed quarantine write must not block reading.
+      void this.memento.update(QUARANTINE_KEY, {
+        quarantinedAt: new Date().toISOString(),
+        entries: outcome.quarantined,
+      });
+    }
+
+    return outcome.tasks;
   }
 
   private async write(tasks: TaskWorkspace[]): Promise<void> {
-    const state: StoredState = { schemaVersion: SCHEMA_VERSION, tasks };
+    const state: StoredState = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      tasks,
+    };
     await this.memento.update(STORAGE_KEY, state);
   }
 

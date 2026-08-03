@@ -56,6 +56,24 @@ describe("agentControls", () => {
   });
 });
 
+describe("buildContextValue harness token", () => {
+  it("marks a harnessed task so the row can offer one action", () => {
+    expect(buildContextValue("ready", undefined, true)).toContain("harnessed");
+  });
+
+  it("uses a token that cannot substring-match the other", () => {
+    // Menu `when` clauses match contextValue by substring, so /harnessed/ must not
+    // also match an unharnessed task.
+    const adhoc = buildContextValue("ready", undefined, false);
+    expect(adhoc).toContain("adhoc");
+    expect(adhoc).not.toContain("harnessed");
+  });
+
+  it("defaults to ad-hoc when not specified", () => {
+    expect(buildContextValue("ready", undefined)).toContain("adhoc");
+  });
+});
+
 describe("buildContextValue", () => {
   it("marks a ready task as agent-startable", () => {
     expect(buildContextValue("ready", undefined)).toContain("agentStartable");
