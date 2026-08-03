@@ -9,7 +9,11 @@ import {
   pipelineProgress,
   planStage,
   answerQuestion,
+  clearDenials,
   clearQuestion,
+  grantDenial,
+  recordDenials,
+  ungrantedDenials,
   recordChecklist,
   recordQuestion,
   retryStage,
@@ -800,5 +804,124 @@ describe("questions a stage asks", () => {
       pendingQuestion: { stageId: "s", subtaskId: "s-1", items: [] },
     });
     expect(restored?.pendingQuestion).toBeUndefined();
+  });
+});
+
+describe("tool calls the permission layer refused", () => {
+  function refused(count = 2) {
+    const pipeline = createPipeline(ROUTE);
+    const stage = pipeline.stages[0];
+    const items = Array.from({ length: count }, (_, i) => ({
+      tool: "PowerShell",
+      command: `script${i + 1}.ps1 -Key X`,
+      reason: "This command requires approval",
+      attempts: i + 1,
+      rule: `PowerShell(script${i + 1}.ps1:*)`,
+    }));
+    const result = recordDenials(pipeline, {
+      stageId: stage.id,
+      stageName: stage.name,
+      subtaskId: `${stage.id}-1`,
+      items,
+      at: T,
+    });
+    if (!result.ok) throw new Error("recordDenials failed");
+    return result.value;
+  }
+
+  it("stores each refusal with the rule that would permit it", () => {
+    // The rule is derived from the command actually attempted, which is gone once
+    // the session ends — so it is stored rather than re-derived later.
+    const pipeline = refused();
+    expect(pipeline.pendingDenials?.items.map((i) => i.rule)).toEqual([
+      "PowerShell(script1.ps1:*)",
+      "PowerShell(script2.ps1:*)",
+    ]);
+    expect(pipeline.pendingDenials?.items.every((i) => !i.granted)).toBe(true);
+  });
+
+  it("gives each refusal its own id", () => {
+    const ids = refused(3).pendingDenials!.items.map((i) => i.id);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("rejects refusals against a stage that does not exist", () => {
+    const result = recordDenials(createPipeline(ROUTE), {
+      stageId: "nope",
+      stageName: "x",
+      subtaskId: "x-1",
+      items: [{ tool: "Bash", reason: "r", attempts: 1 }],
+      at: T,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses an empty set", () => {
+    const pipeline = createPipeline(ROUTE);
+    const result = recordDenials(pipeline, {
+      stageId: pipeline.stages[0].id,
+      stageName: "x",
+      subtaskId: "x-1",
+      items: [],
+      at: T,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("grants one without granting the rest", () => {
+    const pipeline = refused();
+    const first = pipeline.pendingDenials!.items[0].id;
+    const result = grantDenial(pipeline, first);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.pendingDenials!.items[0].granted).toBe(true);
+    expect(result.value.pendingDenials!.items[1].granted).toBeUndefined();
+    expect(ungrantedDenials(result.value)).toHaveLength(1);
+  });
+
+  it("refuses to grant something that was not refused", () => {
+    expect(grantDenial(refused(), "made-up").ok).toBe(false);
+    expect(grantDenial(createPipeline(ROUTE), "any").ok).toBe(false);
+  });
+
+  it("clears them once dealt with", () => {
+    expect(clearDenials(refused()).pendingDenials).toBeUndefined();
+    expect(clearDenials(createPipeline(ROUTE)).pendingDenials).toBeUndefined();
+  });
+
+  it("does not mutate the pipeline it was given", () => {
+    const pipeline = refused();
+    const before = JSON.stringify(pipeline);
+    grantDenial(pipeline, pipeline.pendingDenials!.items[0].id);
+    clearDenials(pipeline);
+    expect(JSON.stringify(pipeline)).toBe(before);
+  });
+
+  it("survives a round-trip through storage", () => {
+    // The point of persisting is that a dismissed notification loses nothing, so
+    // this has to normalise back out of the stored blob.
+    const stored = JSON.parse(JSON.stringify(refused()));
+    const restored = normalizePipeline(stored);
+    expect(restored?.pendingDenials?.items).toHaveLength(2);
+    expect(restored?.pendingDenials?.items[0].rule).toBe("PowerShell(script1.ps1:*)");
+    expect(restored?.pendingDenials?.stageName).toBe(ROUTE.stages[0].label);
+  });
+
+  it("keeps the granted flag across a round-trip", () => {
+    const granted = grantDenial(refused(), refused().pendingDenials!.items[0].id);
+    if (!granted.ok) throw new Error("grant failed");
+    const restored = normalizePipeline(JSON.parse(JSON.stringify(granted.value)));
+    expect(restored?.pendingDenials?.items[0].granted).toBe(true);
+  });
+
+  it("discards a stored record with nothing actionable in it", () => {
+    expect(
+      normalizePipeline({
+        routeId: "r",
+        stages: [],
+        pendingDenials: { stageId: "s", subtaskId: "s-1", items: [] },
+      })?.pendingDenials,
+    ).toBeUndefined();
   });
 });

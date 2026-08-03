@@ -2,6 +2,18 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.19.1
+
+- **Refusals are a row in the sidebar, not a toast.** They are persisted on the
+  stage that hit them and appear nested under it with an inline **✓ Allow This
+  Command** action — the same shape as verification items. Approving writes the
+  rule, marks the row allowed, and offers to advance; the row survives a
+  dismissed notification and a window reload, which a toast did not. An **✕**
+  ignores a refusal the stage can manage without.
+
+  The notification is now just a pointer with a **Reveal** action, since nothing
+  is lost by closing it.
+
 ## 0.19.0
 
 - **A refused tool call now stops the route and offers to grant the permission.**

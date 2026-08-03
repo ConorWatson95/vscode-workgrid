@@ -115,6 +115,39 @@ export interface TaskPipeline {
    * asking at once, which a modal cannot.
    */
   pendingQuestion?: PendingQuestion;
+  /**
+   * Tool calls the permission layer refused, held until dealt with.
+   *
+   * Persisted for the same reason questions are: a notification is transient and
+   * several tasks produce a pile of them, so dismissing one lost the only record
+   * of what was refused and which rule would fix it.
+   */
+  pendingDenials?: PendingDenials;
+}
+
+/** Refusals from one stage, waiting on a decision. */
+export interface PendingDenials {
+  stageId: string;
+  stageName: string;
+  subtaskId: string;
+  refusedAt: string;
+  items: DenialItem[];
+}
+
+/** One refused call, and the rule that would permit it. */
+export interface DenialItem {
+  id: string;
+  /** Tool that was refused, e.g. "PowerShell". */
+  tool: string;
+  command?: string;
+  /** The permission layer's own words. */
+  reason: string;
+  /** How many times the agent retried this same call. */
+  attempts: number;
+  /** Suggested `permissions.allow` entry, when one could be derived. */
+  rule?: string;
+  /** Set once the rule has been written, so the panel shows what is left. */
+  granted?: boolean;
 }
 
 /**
@@ -181,6 +214,35 @@ export function normalizePipeline(
     stages,
     currentStage: raw.currentStage,
     pendingQuestion: normalizeQuestion(raw.pendingQuestion),
+    pendingDenials: normalizeDenials(raw.pendingDenials),
+  };
+}
+
+/** Keeps stored refusals only when there is something actionable left. */
+function normalizeDenials(stored: unknown): PendingDenials | undefined {
+  if (!stored || typeof stored !== "object") return undefined;
+  const d = stored as Partial<PendingDenials>;
+  if (!d.stageId || !d.subtaskId || !Array.isArray(d.items)) return undefined;
+
+  const items: DenialItem[] = d.items
+    .filter((item): item is DenialItem => Boolean(item?.tool))
+    .map((item, index) => ({
+      id: item.id ?? `${d.subtaskId}-d${index + 1}`,
+      tool: item.tool,
+      command: item.command,
+      reason: item.reason ?? "",
+      attempts: typeof item.attempts === "number" ? item.attempts : 1,
+      rule: item.rule,
+      granted: item.granted === true,
+    }));
+  if (items.length === 0) return undefined;
+
+  return {
+    stageId: d.stageId,
+    stageName: d.stageName ?? d.stageId,
+    subtaskId: d.subtaskId,
+    refusedAt: d.refusedAt ?? "",
+    items,
   };
 }
 

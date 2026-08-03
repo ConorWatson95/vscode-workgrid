@@ -6,6 +6,7 @@ import {
   nextAction,
   planStage,
   recordChecklist,
+  recordDenials,
   recordQuestion,
   revertSubtask,
   startSubtask,
@@ -26,6 +27,7 @@ import { ReviewPlanService } from "./reviewPlanService";
 import {
   PermissionDenial,
   formatDenialReport,
+  suggestAllowRules,
 } from "../agents/permissionDenials";
 
 /**
@@ -485,6 +487,25 @@ export class PipelineRunner {
         // and advancing re-runs this subtask with it available.
         const reverted = revertSubtask(pipeline, subtask.id);
         if (reverted.ok) pipeline = reverted.value;
+
+        // Persist them with the task. A notification is transient and several
+        // tasks make a pile of them, so dismissing one used to lose the only
+        // record of what was refused and which rule would fix it.
+        const recorded = recordDenials(pipeline, {
+          stageId: stage.id,
+          stageName: stage.name,
+          subtaskId: subtask.id,
+          items: denials.map((denial) => ({
+            tool: denial.tool,
+            command: denial.command,
+            reason: denial.reason,
+            attempts: denial.attempts,
+            rule: suggestAllowRules([denial])[0],
+          })),
+          at: new Date().toISOString(),
+        });
+        if (recorded.ok) pipeline = recorded.value;
+
         return {
           task: await this.save(task, pipeline),
           failed: false,

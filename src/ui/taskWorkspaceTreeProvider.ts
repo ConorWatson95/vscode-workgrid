@@ -6,6 +6,7 @@ import {
   OrphanWorktreeTreeItem,
   StageTreeItem,
   ChecklistTreeItem,
+  DenialTreeItem,
 } from "./taskWorkspaceTreeItem";
 import { Logger } from "../logging/logger";
 import { AgentActivity } from "./statusPresentation";
@@ -15,7 +16,8 @@ type TreeNode =
   | OrphanWorktreeTreeItem
   | MessageTreeItem
   | StageTreeItem
-  | ChecklistTreeItem;
+  | ChecklistTreeItem
+  | DenialTreeItem;
 
 /**
  * Tree data provider for the Task Workspaces view. Resolves the active
@@ -66,9 +68,17 @@ export class TaskWorkspaceTreeProvider
       );
     }
     if (element instanceof StageTreeItem) {
-      return (element.stage.checklist ?? []).map(
+      const checklist = (element.stage.checklist ?? []).map(
         (item) => new ChecklistTreeItem(element.task, element.stage.id, item),
       );
+      // Refusals belong to the stage that hit them, and lead: the stage cannot
+      // do its job until they are granted or deliberately ignored.
+      const denials = element.task.pipeline?.pendingDenials;
+      const refused =
+        denials?.stageId === element.stage.id
+          ? denials.items.map((item) => new DenialTreeItem(element.task, item))
+          : [];
+      return [...refused, ...checklist];
     }
     if (element) return [];
 

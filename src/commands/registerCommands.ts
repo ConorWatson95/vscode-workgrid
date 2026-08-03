@@ -10,14 +10,18 @@ import {
   OrphanWorktreeTreeItem,
   StageTreeItem,
   ChecklistTreeItem,
+  DenialTreeItem,
 } from "../ui/taskWorkspaceTreeItem";
 import {
   answerQuestion,
   approveStage,
+  clearDenials,
   clearQuestion,
+  grantDenial,
   outstandingChecklist,
   setChecklistItem,
   unansweredQuestions,
+  ungrantedDenials,
 } from "../domain/pipelineEngine";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
@@ -39,11 +43,7 @@ import {
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
-import {
-  PermissionDenial,
-  suggestAllowRules,
-} from "../agents/permissionDenials";
-import { LOCAL_SETTINGS_RELATIVE_PATH } from "../services/permissionRulesService";
+import { PermissionDenial } from "../agents/permissionDenials";
 import { withStatus } from "../ui/statusProgress";
 import { QuestionPanel } from "../ui/questionPanel";
 import * as os from "node:os";
@@ -89,6 +89,8 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.advanceRoute", (arg) => advanceRouteCommand(ctx, arg)),
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
+    register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
+    register("taskWorkspaces.dismissDenial", (arg) => dismissDenialCommand(ctx, arg)),
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
     ),
@@ -96,12 +98,11 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
 }
 
 /**
- * Offers to grant a refused permission and carry on.
+ * Notes a refusal and points at the row that can grant it.
  *
- * The CLI gives no way to approve a call that is already waiting — a stream-json
- * session emits no permission request at all, so there is nothing to answer.
- * The nearest equivalent is to add the rule and run the subtask again, which is
- * cheap because every subtask is a fresh session anyway.
+ * Deliberately terse: the refusal and its rule are persisted on the pipeline and
+ * shown under the stage in the sidebar, so this only has to say it happened. A
+ * dismissed notification no longer loses anything.
  */
 async function handleDenialCommand(
   ctx: CommandContext,
@@ -109,54 +110,47 @@ async function handleDenialCommand(
   denials: readonly PermissionDenial[],
   stageName: string | undefined,
 ): Promise<void> {
-  const rules = suggestAllowRules(denials);
   const attempts = denials.reduce((total, d) => total + d.attempts, 0);
-  const summary =
-    `${denials.length} tool call(s) denied by permissions` +
-    (attempts > denials.length ? ` after ${attempts} attempts` : "") +
-    (stageName ? ` in "${stageName}"` : "") +
-    ".";
-
-  const actions = [
-    ...(rules.length > 0 ? ["Add Rule & Retry", "Add Rule"] : []),
-    "Continue Without",
-    "Show Log",
-  ];
   const choice = await vscode.window.showWarningMessage(
-    `${summary} ${denials[0]?.command ?? ""}`.trim(),
-    ...actions,
+    `${denials.length} tool call(s) denied in "${stageName ?? task.name}"` +
+      (attempts > denials.length ? ` after ${attempts} attempts` : "") +
+      ". Approve them under the stage in the sidebar.",
+    "Reveal",
+    "Show Log",
   );
-  if (choice === "Show Log" || choice === undefined) {
-    if (choice === "Show Log") ctx.logger.show?.();
-    return;
+  if (choice === "Show Log") ctx.logger.show?.();
+  if (choice === "Reveal") {
+    await vscode.commands.executeCommand("taskWorkspaces.tree.focus");
   }
-  if (choice === "Continue Without") {
-    // Nothing to do: the subtask is already pending, so advancing runs it again
-    // without the permission — the same outcome as before, but chosen.
-    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
-    return;
-  }
+}
 
-  const written = ctx.permissionRules.addAllowRules(task.repositoryRoot, rules);
-  if (written.problem) {
-    const fallback = await vscode.window.showErrorMessage(
-      written.problem,
-      "Copy Rules Instead",
+/**
+ * Grants one refused call: writes its rule, marks it granted, and offers to
+ * carry on. The rule goes to the repository root, so it applies to every future
+ * task rather than only this worktree.
+ */
+async function grantDenialCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof DenialTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline?.pendingDenials) return;
+
+  const item = task.pipeline.pendingDenials.items.find((i) => i.id === arg.denial.id);
+  if (!item) return;
+  if (!item.rule) {
+    void vscode.window.showWarningMessage(
+      "No rule could be derived from that call — grant it by hand in .claude/settings.local.json.",
     );
-    if (fallback === "Copy Rules Instead") {
-      await vscode.env.clipboard.writeText(rules.join(",\n"));
-    }
     return;
   }
 
-  const message =
-    written.added.length > 0
-      ? `Added ${written.added.length} rule(s) to ${LOCAL_SETTINGS_RELATIVE_PATH}.`
-      : `Those rules were already present in ${LOCAL_SETTINGS_RELATIVE_PATH}.`;
-  ctx.logger.info(`Harness [${task.name}] ${message}`);
+  const written = ctx.permissionRules.addAllowRules(task.repositoryRoot, [item.rule]);
+  if (written.problem) {
+    void vscode.window.showErrorMessage(written.problem);
+    return;
+  }
 
-  // The settings file is copied into each worktree at creation, so an existing
-  // worktree needs it brought across before the retry can see it.
+  // The settings file is copied into a worktree at creation, so an existing one
+  // needs it refreshed before a retry can see the new rule.
   const provisioned = ctx.provisioner.provision(
     ctx.configuration.copyIntoWorktree(ctx.repositoryUri()),
     task.repositoryRoot,
@@ -168,11 +162,67 @@ async function handleDenialCommand(
     );
   }
 
-  if (choice === "Add Rule & Retry") {
-    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
-  } else {
-    void vscode.window.showInformationMessage(`${message} Advance the route when ready.`);
+  const granted = grantDenial(task.pipeline, item.id);
+  if (granted.ok) {
+    await ctx.repository.save({
+      ...task,
+      pipeline: granted.value,
+      updatedAt: new Date().toISOString(),
+    });
   }
+  ctx.tree.refresh();
+  ctx.logger.info(`Harness [${task.name}] allowed ${item.rule}`);
+
+  const latest = await ctx.repository.get(task.id);
+  const outstanding = latest?.pipeline ? ungrantedDenials(latest.pipeline) : [];
+  if (outstanding.length > 0) {
+    void vscode.window.showInformationMessage(
+      `Allowed. ${outstanding.length} still to approve.`,
+    );
+    return;
+  }
+
+  const next = await vscode.window.showInformationMessage(
+    "Allowed. Nothing else is waiting on approval.",
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    // Clear them now: the route is about to re-run the step that was refused.
+    if (latest?.pipeline) {
+      await ctx.repository.save({
+        ...latest,
+        pipeline: clearDenials(latest.pipeline),
+        updatedAt: new Date().toISOString(),
+      });
+      ctx.tree.refresh();
+    }
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/** Drops a refusal without granting it, when the stage can manage without. */
+async function dismissDenialCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof DenialTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline?.pendingDenials) return;
+
+  const remaining = task.pipeline.pendingDenials.items.filter(
+    (i) => i.id !== arg.denial.id,
+  );
+  const pipeline =
+    remaining.length > 0
+      ? {
+          ...task.pipeline,
+          pendingDenials: { ...task.pipeline.pendingDenials, items: remaining },
+        }
+      : clearDenials(task.pipeline);
+
+  await ctx.repository.save({
+    ...task,
+    pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
 }
 
 /**

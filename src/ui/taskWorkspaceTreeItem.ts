@@ -6,7 +6,7 @@ import {
   AgentActivity,
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
-import { ChecklistItem, TaskStage } from "../domain/taskPipeline";
+import { ChecklistItem, DenialItem, TaskStage } from "../domain/taskPipeline";
 import {
   checklistPresentation,
   pipelineSummary,
@@ -182,6 +182,50 @@ export class ChecklistTreeItem extends vscode.TreeItem {
         "",
         item.checked ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.` : "Not yet verified.",
         item.note ? `\nNote: ${item.note}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+}
+
+/**
+ * A tool call the permission layer refused, with an approve action on the row.
+ *
+ * A row rather than a panel or a toast: a toast is transient and stacks across
+ * tasks, and this needs one button, not a window. It sits under the stage that
+ * hit it and stays until granted, so it is still there after a reload.
+ */
+export class DenialTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly task: TaskWorkspace,
+    readonly denial: DenialItem,
+  ) {
+    super(denial.command ?? denial.tool, vscode.TreeItemCollapsibleState.None);
+    this.id = `${task.id}/denial/${denial.id}`;
+    this.iconPath = new vscode.ThemeIcon(
+      denial.granted ? "pass" : "shield",
+      new vscode.ThemeColor(
+        denial.granted ? "testing.iconPassed" : "notificationsWarningIcon.foreground",
+      ),
+    );
+    // Only an ungranted refusal offers the approve action.
+    this.contextValue = denial.granted ? "denialGranted" : "denialPending";
+    this.description = denial.granted
+      ? "allowed"
+      : `${denial.tool} denied${denial.attempts > 1 ? ` · ${denial.attempts} attempts` : ""}`;
+    this.tooltip = new vscode.MarkdownString(
+      [
+        `**${denial.tool} was denied**`,
+        "",
+        denial.command ? "```\n" + denial.command + "\n```" : "",
+        denial.reason,
+        "",
+        denial.rule
+          ? denial.granted
+            ? `Rule added: \`${denial.rule}\``
+            : `Approving adds \`${denial.rule}\` to \`.claude/settings.local.json\`.`
+          : "No rule could be derived from this call; grant it by hand.",
       ]
         .filter(Boolean)
         .join("\n"),

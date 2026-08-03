@@ -1,6 +1,7 @@
 import { Result, ok, err } from "../utilities/result";
 import {
   ChecklistItem,
+  DenialItem,
   QuestionItem,
   Subtask,
   TaskPipeline,
@@ -469,6 +470,87 @@ export function unansweredQuestions(pipeline: TaskPipeline): QuestionItem[] {
   return (pipeline.pendingQuestion?.items ?? []).filter(
     (item) => !item.answer?.trim(),
   );
+}
+
+/**
+ * Records the tool calls a stage was refused, so they outlive the notification.
+ *
+ * The rule is stored alongside each refusal rather than re-derived later: it is
+ * computed from the command that was actually attempted, which is gone once the
+ * session ends.
+ */
+export function recordDenials(
+  pipeline: TaskPipeline,
+  refused: {
+    stageId: string;
+    stageName: string;
+    subtaskId: string;
+    items: readonly Omit<DenialItem, "id" | "granted">[];
+    at: string;
+  },
+): Result<TaskPipeline, PipelineError> {
+  if (!pipeline.stages.some((s) => s.id === refused.stageId)) {
+    return err(unknownStage(refused.stageId));
+  }
+  const items: DenialItem[] = refused.items.map((item, index) => ({
+    ...item,
+    id: `${refused.subtaskId}-d${index + 1}`,
+  }));
+  if (items.length === 0) {
+    return err({
+      kind: "unknownQuestion",
+      message: "No refusals to record.",
+    });
+  }
+
+  return ok({
+    ...pipeline,
+    pendingDenials: {
+      stageId: refused.stageId,
+      stageName: refused.stageName,
+      subtaskId: refused.subtaskId,
+      refusedAt: refused.at,
+      items,
+    },
+  });
+}
+
+/** Marks one refusal's rule as written, leaving the rest outstanding. */
+export function grantDenial(
+  pipeline: TaskPipeline,
+  itemId: string,
+): Result<TaskPipeline, PipelineError> {
+  const pending = pipeline.pendingDenials;
+  if (!pending) {
+    return err({
+      kind: "noPendingQuestion",
+      message: "Nothing was refused.",
+    });
+  }
+  if (!pending.items.some((item) => item.id === itemId)) {
+    return err({ kind: "unknownQuestion", message: `No refusal "${itemId}".` });
+  }
+  return ok({
+    ...pipeline,
+    pendingDenials: {
+      ...pending,
+      items: pending.items.map((item) =>
+        item.id === itemId ? { ...item, granted: true } : item,
+      ),
+    },
+  });
+}
+
+/** Refusals whose rule has not been written yet. */
+export function ungrantedDenials(pipeline: TaskPipeline): DenialItem[] {
+  return (pipeline.pendingDenials?.items ?? []).filter((item) => !item.granted);
+}
+
+/** Clears the recorded refusals, once granted or deliberately ignored. */
+export function clearDenials(pipeline: TaskPipeline): TaskPipeline {
+  if (!pipeline.pendingDenials) return pipeline;
+  const { pendingDenials: _dealtWith, ...rest } = pipeline;
+  return rest;
 }
 
 /** Clears the outstanding questions, once they are answered or abandoned. */

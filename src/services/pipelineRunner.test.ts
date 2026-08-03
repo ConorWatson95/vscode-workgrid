@@ -712,3 +712,39 @@ describe("permission refusals", () => {
     expect(second.denials).toEqual([]);
   });
 });
+
+describe("refusals persisted for the sidebar", () => {
+  it("are stored on the stage that hit them, with their rules", async () => {
+    // A notification is transient and stacks across tasks; the row under the
+    // stage is what survives a dismissal and a window reload.
+    const sessions: StageSessionRunner = {
+      async run(_task, _prompt, label) {
+        if (label.startsWith("plan:")) return { ok: true, text: PLAN_REPLY };
+        return {
+          ok: true,
+          text: "done",
+          denials: [
+            {
+              tool: "PowerShell",
+              command: "tools/jira/Get-JiraAttachment.ps1 -IssueKey X",
+              reason: "This command requires approval",
+              attempts: 5,
+            },
+          ],
+        };
+      },
+    };
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+    await runner.advance((await repo.get("t1"))!);
+
+    const pending = (await repo.get("t1"))!.pipeline!.pendingDenials!;
+    expect(pending.stageId).toBe("build");
+    expect(pending.subtaskId).toBe("build-1");
+    expect(pending.items).toHaveLength(1);
+    expect(pending.items[0].attempts).toBe(5);
+    expect(pending.items[0].rule).toBe(
+      "PowerShell(tools/jira/Get-JiraAttachment.ps1:*)",
+    );
+  });
+});
