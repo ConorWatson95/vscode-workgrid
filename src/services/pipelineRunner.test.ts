@@ -608,3 +608,61 @@ describe("a question the runner recorded", () => {
     expect(stage.subtasks.find((s) => s.id === "build-1")!.status).toBe("pending");
   });
 });
+
+describe("permission refusals", () => {
+  /** Sessions that report a refused tool call, as the real adapter does. */
+  function denyingSessions(): StageSessionRunner {
+    return {
+      async run(_task, _prompt, label) {
+        if (label.startsWith("plan:")) return { ok: true, text: PLAN_REPLY };
+        return {
+          ok: true,
+          text: "done",
+          denials: [
+            {
+              tool: "PowerShell",
+              command: "tools/jira/Get-JiraAttachment.ps1 -IssueKey X",
+              reason: "This command requires approval",
+              attempts: 3,
+            },
+          ],
+        };
+      },
+    };
+  }
+
+  it("reports refusals even though the stage succeeded", async () => {
+    // This is the whole point: a refusal rarely fails the stage, so it would
+    // otherwise never reach the only person who can grant the permission.
+    const { repo, runner } = makeRunner(denyingSessions());
+    await repo.save(task());
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({ kind: "awaitingApproval" });
+    expect(report.denials.length).toBeGreaterThan(0);
+    expect(report.denials[0].tool).toBe("PowerShell");
+    expect(report.steps.join(" ")).toContain("denied by permissions");
+    expect(report.steps.join(" ")).toContain("attempts");
+  });
+
+  it("reports nothing when no call was refused", async () => {
+    // In bypassPermissions nothing is denied, so this stays quiet.
+    const { repo, runner } = makeRunner(fakeSessions({ "plan:": { text: PLAN_REPLY } }));
+    await repo.save(task());
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.denials).toEqual([]);
+    expect(report.steps.join(" ")).not.toContain("denied");
+  });
+
+  it("does not carry refusals over from a previous advance", async () => {
+    const { repo, runner } = makeRunner(denyingSessions());
+    await repo.save(task());
+    const first = await runner.advance((await repo.get("t1"))!);
+    expect(first.denials.length).toBeGreaterThan(0);
+
+    // Nothing left to run, so this advance refuses nothing of its own.
+    const second = await runner.advance((await repo.get("t1"))!);
+    expect(second.denials).toEqual([]);
+  });
+});

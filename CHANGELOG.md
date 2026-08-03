@@ -2,6 +2,27 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.18.1
+
+- **Denied tool calls now reach the user.** A headless stage session has nobody
+  to approve anything, so any call not covered by `permissions.allow` is refused —
+  and the refusal was invisible. The agent rewords the command, retries, then
+  works around it or asks a question that reads like a briefing problem. One
+  observed case burned 39 seconds and five turns retrying a single script five
+  different ways, every planning stage, with nothing anywhere naming the cause.
+
+  Refusals are now detected, collapsed per call with an attempt count, logged in
+  full, and reported after an advance — including when the stage *succeeded*,
+  since a refusal rarely fails a stage and would otherwise never surface. The
+  notification offers **Copy Allow Rules**, which yields prefix rules
+  (`PowerShell(path/to/script.ps1:*)`) ready to paste into `permissions.allow`.
+  Prefix rather than exact, because the arguments change every run; the
+  PowerShell call operator is stripped, since `&` is itself what trips the
+  "multiple operations" check.
+
+  Deliberately narrow: an operating-system `Permission denied` on a file is a
+  real error, not a policy decision, and is not reported as one.
+
 ## 0.18.0
 
 - **Questions are persisted, itemised, and answered in a proper panel.** A stage

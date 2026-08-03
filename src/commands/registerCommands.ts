@@ -39,6 +39,7 @@ import {
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
+import { suggestAllowRules } from "../agents/permissionDenials";
 import { withStatus } from "../ui/statusProgress";
 import { QuestionPanel } from "../ui/questionPanel";
 import * as os from "node:os";
@@ -287,6 +288,28 @@ async function advanceRouteCommand(
   ctx.tree.refresh();
   for (const step of report.steps) {
     ctx.logger.info(`Harness [${task.name}] ${step}`);
+  }
+
+  // A refusal rarely fails the stage — the agent works around it — so without
+  // this it never reaches the only person who can grant the permission.
+  if (report.denials.length > 0) {
+    const rules = suggestAllowRules(report.denials);
+    const attempts = report.denials.reduce((total, d) => total + d.attempts, 0);
+    const choice = await vscode.window.showWarningMessage(
+      `${report.denials.length} tool call(s) were denied by permissions` +
+        (attempts > report.denials.length ? ` after ${attempts} attempts` : "") +
+        `. The stage worked around them or gave up.`,
+      ...(rules.length > 0 ? ["Copy Allow Rules"] : []),
+      "Show Log",
+    );
+    if (choice === "Copy Allow Rules") {
+      await vscode.env.clipboard.writeText(rules.join(",\n"));
+      void vscode.window.showInformationMessage(
+        `Copied ${rules.length} rule(s). Add them to permissions.allow in .claude/settings.local.json.`,
+      );
+    } else if (choice === "Show Log") {
+      ctx.logger.show?.();
+    }
   }
 
   const outcome = report.outcome;

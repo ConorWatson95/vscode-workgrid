@@ -23,6 +23,10 @@ import {
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
 import { ReviewPlanService } from "./reviewPlanService";
+import {
+  PermissionDenial,
+  formatDenialReport,
+} from "../agents/permissionDenials";
 
 /**
  * Drives a task's pipeline: asks the engine what to do next, does it, records
@@ -47,7 +51,14 @@ export interface StageSessionRunner {
     label: string,
     /** Per-stage overrides; absent fields fall back to the configured defaults. */
     options?: { model?: string },
-  ): Promise<{ ok: boolean; text: string; sessionId?: string; error?: string }>;
+  ): Promise<{
+    ok: boolean;
+    text: string;
+    sessionId?: string;
+    error?: string;
+    /** Tool calls the permission layer refused during this run. */
+    denials?: PermissionDenial[];
+  }>;
 }
 
 export type RunOutcome =
@@ -77,6 +88,14 @@ export interface RunReport {
   outcome: RunOutcome;
   /** Human-readable log of what the runner did, in order. */
   steps: string[];
+  /**
+   * Tool calls the permission layer refused during this advance.
+   *
+   * Reported separately from the outcome because a refusal rarely fails the
+   * stage — the agent works around it — so it would otherwise never reach the
+   * user, who is the only one who can grant the permission.
+   */
+  denials: PermissionDenial[];
 }
 
 /**
@@ -97,6 +116,12 @@ export class PipelineRunner {
      */
     private readonly docsPath: () => string | undefined = () => undefined,
   ) {}
+
+  /**
+   * Permission refusals seen during the current advance, so the caller can show
+   * one summary rather than a warning per subtask.
+   */
+  private denied: PermissionDenial[] = [];
 
   /** In-flight routes, so stopping a task's agent can stop its route too. */
   private readonly running = new Map<string, AbortController>();
@@ -147,7 +172,9 @@ export class PipelineRunner {
     task: TaskWorkspace,
     signal?: AbortSignal,
   ): Promise<RunReport> {
-    if (!task.pipeline) return { outcome: { kind: "unharnessed" }, steps: [] };
+    if (!task.pipeline) {
+      return { outcome: { kind: "unharnessed" }, steps: [], denials: [] };
+    }
 
     // One controller per task, so `cancel` can reach a route the caller started
     // without holding the caller's own signal.
@@ -159,7 +186,11 @@ export class PipelineRunner {
     const previous = this.running.get(task.id);
     this.running.set(task.id, controller);
     try {
-      return await this.drive(task, controller.signal);
+      // Denials are attached here rather than at each of the driver's dozen
+      // return points: they are a property of the whole advance, not of whichever
+      // outcome ended it.
+      const report = await this.drive(task, controller.signal);
+      return { ...report, denials: this.denied };
     } finally {
       if (this.running.get(task.id) === controller) this.running.delete(task.id);
       else if (previous) this.running.set(task.id, previous);
@@ -169,9 +200,11 @@ export class PipelineRunner {
   private async drive(
     task: TaskWorkspace,
     signal?: AbortSignal,
-  ): Promise<RunReport> {
+  ): Promise<Omit<RunReport, "denials">> {
 
     const steps: string[] = [];
+    // Per-advance, so a summary reflects this run rather than accumulating.
+    this.denied = [];
     let current = task;
 
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -388,6 +421,24 @@ export class PipelineRunner {
     const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
       model: stage.model,
     });
+
+    // Surface refusals whatever the outcome. A denied tool call is otherwise
+    // silent: the agent rewords it, retries, eventually works around it or asks
+    // a question that reads like a briefing problem, and nothing anywhere says a
+    // permission was the cause.
+    const denials = reply.denials ?? [];
+    if (denials.length > 0) {
+      this.denied.push(...denials);
+      this.logger.warn(
+        `Harness [${task.name}] ${stage.name}: ${formatDenialReport(denials)}`,
+      );
+      const attempts = denials.reduce((total, d) => total + d.attempts, 0);
+      steps.push(
+        `${denials.length} tool call(s) denied by permissions` +
+          (attempts > denials.length ? ` over ${attempts} attempts` : "") +
+          " — the log lists the allow rules to add.",
+      );
+    }
 
     // A stop is not an outcome. Stopping the agent kills the session, which looks
     // exactly like a completed turn from here — recording it as done would pass a

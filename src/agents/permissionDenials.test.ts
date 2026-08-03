@@ -1,0 +1,171 @@
+import { describe, it, expect } from "vitest";
+import {
+  collectPermissionDenials,
+  formatDenialReport,
+  isPermissionDenial,
+  suggestAllowRules,
+} from "./permissionDenials";
+import { ChatItem } from "./streamJson";
+
+/** Verbatim refusals from a real route, which is what these must recognise. */
+const REAL = {
+  multipleOps:
+    "This PowerShell command contains multiple operations. The following part requires approval: & ./tools/jira/Get-JiraAttachment.ps1 -IssueKey NMGB-2792",
+  nested: "Command spawns a nested PowerShell process which cannot be validated",
+  cwd: "Compound command changes working directory (Set-Location/Push-Location/Pop-Location/New-PSDrive) — relative paths cannot be validated against the original cwd and require manual approval",
+  bare: "This command requires approval",
+};
+
+function tool(name: string, detail: string): ChatItem {
+  return { kind: "tool", name, detail };
+}
+function failed(text: string): ChatItem {
+  return { kind: "tool-result", text, isError: true };
+}
+
+describe("isPermissionDenial", () => {
+  it("recognises every refusal a real route produced", () => {
+    for (const text of Object.values(REAL)) {
+      expect(isPermissionDenial(text)).toBe(true);
+    }
+  });
+
+  it("does not treat an operating-system failure as a policy refusal", () => {
+    // "Permission denied" on a file is a genuine error, not something an allow
+    // rule fixes — reporting it as one would send the user to the wrong place.
+    expect(isPermissionDenial("bash: ./deploy.sh: Permission denied")).toBe(false);
+    expect(isPermissionDenial("EACCES: permission denied, open 'x.log'")).toBe(false);
+  });
+
+  it("ignores ordinary failures", () => {
+    expect(isPermissionDenial("error TS2322: Type 'string' is not assignable")).toBe(false);
+    expect(isPermissionDenial("")).toBe(false);
+  });
+});
+
+describe("collectPermissionDenials", () => {
+  it("attributes a refusal to the call that caused it", () => {
+    const denials = collectPermissionDenials([
+      tool("PowerShell", "& ./tools/jira/Get-JiraAttachment.ps1 -IssueKey NMGB-2792"),
+      failed(REAL.multipleOps),
+    ]);
+    expect(denials).toHaveLength(1);
+    expect(denials[0].tool).toBe("PowerShell");
+    expect(denials[0].command).toContain("Get-JiraAttachment.ps1");
+    expect(denials[0].reason).toContain("multiple operations");
+  });
+
+  it("collapses the retry loop into one entry with a count", () => {
+    // The agent rewords the same call hoping to pass validation; five variations
+    // of one script cost 39 seconds on a real route.
+    const items: ChatItem[] = [];
+    for (const text of [REAL.multipleOps, REAL.nested, REAL.cwd, REAL.bare]) {
+      items.push(tool("PowerShell", "Get-JiraAttachment.ps1 -IssueKey NMGB-2792"), failed(text));
+    }
+    const denials = collectPermissionDenials(items);
+    expect(denials).toHaveLength(1);
+    expect(denials[0].attempts).toBe(4);
+  });
+
+  it("keeps genuinely different calls apart", () => {
+    const denials = collectPermissionDenials([
+      tool("PowerShell", "Get-JiraAttachment.ps1 -IssueKey A"),
+      failed(REAL.bare),
+      tool("Bash", "sqlcmd -Q 'select 1'"),
+      failed(REAL.bare),
+    ]);
+    expect(denials.map((d) => d.tool)).toEqual(["PowerShell", "Bash"]);
+  });
+
+  it("ignores failures that are not refusals", () => {
+    const denials = collectPermissionDenials([
+      tool("Bash", "npm test"),
+      failed("3 tests failed"),
+    ]);
+    expect(denials).toEqual([]);
+  });
+
+  it("ignores a refusal-shaped success, since only errors are refusals", () => {
+    const denials = collectPermissionDenials([
+      tool("Bash", "cat notes.md"),
+      { kind: "tool-result", text: "the docs mention this requires approval", isError: false },
+    ]);
+    expect(denials).toEqual([]);
+  });
+
+  it("still reports a refusal with no preceding call", () => {
+    const denials = collectPermissionDenials([failed(REAL.bare)]);
+    expect(denials).toHaveLength(1);
+    expect(denials[0].tool).toBe("tool");
+  });
+
+  it("finds nothing in an empty transcript", () => {
+    expect(collectPermissionDenials([])).toEqual([]);
+  });
+});
+
+describe("suggestAllowRules", () => {
+  it("suggests a prefix rule, because arguments change every run", () => {
+    // An exact rule would be denied again with the next ticket id.
+    const rules = suggestAllowRules(
+      collectPermissionDenials([
+        tool("PowerShell", "C:\\Dev\\app\\tools\\jira\\Get-JiraAttachment.ps1 -IssueKey NMGB-2792"),
+        failed(REAL.bare),
+      ]),
+    );
+    expect(rules).toEqual(["PowerShell(C:\\Dev\\app\\tools\\jira\\Get-JiraAttachment.ps1:*)"]);
+  });
+
+  it("strips the call operator, which is itself what fails validation", () => {
+    const rules = suggestAllowRules(
+      collectPermissionDenials([
+        tool("PowerShell", "& ./tools/jira/Get-JiraAttachment.ps1 -IssueKey X"),
+        failed(REAL.multipleOps),
+      ]),
+    );
+    expect(rules).toEqual(["PowerShell(./tools/jira/Get-JiraAttachment.ps1:*)"]);
+  });
+
+  it("strips surrounding quotes from a quoted path", () => {
+    const rules = suggestAllowRules(
+      collectPermissionDenials([
+        tool("PowerShell", '"C:\\Dev\\app\\tools\\x.ps1" -Key 1'),
+        failed(REAL.bare),
+      ]),
+    );
+    expect(rules).toEqual(["PowerShell(C:\\Dev\\app\\tools\\x.ps1:*)"]);
+  });
+
+  it("de-duplicates rules across differently-worded attempts", () => {
+    const rules = suggestAllowRules([
+      { tool: "PowerShell", command: "x.ps1 -A", reason: "r", attempts: 1 },
+      { tool: "PowerShell", command: "x.ps1 -B", reason: "r", attempts: 1 },
+    ]);
+    expect(rules).toEqual(["PowerShell(x.ps1:*)"]);
+  });
+
+  it("suggests nothing when there was no command to key on", () => {
+    expect(suggestAllowRules([{ tool: "Bash", reason: "r", attempts: 1 }])).toEqual([]);
+  });
+});
+
+describe("formatDenialReport", () => {
+  it("names the calls, the retries, and what to add", () => {
+    const report = formatDenialReport(
+      collectPermissionDenials([
+        tool("PowerShell", "tools/jira/Get-JiraAttachment.ps1 -IssueKey X"),
+        failed(REAL.multipleOps),
+        tool("PowerShell", "tools/jira/Get-JiraAttachment.ps1 -IssueKey X"),
+        failed(REAL.nested),
+      ]),
+    );
+    expect(report).toContain("1 tool call(s) were denied");
+    expect(report).toContain("2 attempts");
+    expect(report).toContain("permissions.allow");
+    expect(report).toContain('"PowerShell(tools/jira/Get-JiraAttachment.ps1:*)"');
+  });
+
+  it("is empty when nothing was denied, so nothing is logged", () => {
+    expect(formatDenialReport([])).toBe("");
+  });
+});

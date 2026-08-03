@@ -1,6 +1,10 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { StreamSessionOptions } from "./claudeStreamSession";
 import { ChatItem } from "./streamJson";
+import {
+  PermissionDenial,
+  collectPermissionDenials,
+} from "./permissionDenials";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 
@@ -50,7 +54,13 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     prompt: string,
     label: string,
     options?: { model?: string },
-  ): Promise<{ ok: boolean; text: string; sessionId?: string; error?: string }> {
+  ): Promise<{
+    ok: boolean;
+    text: string;
+    sessionId?: string;
+    error?: string;
+    denials?: PermissionDenial[];
+  }> {
     const override = options?.model?.trim();
     this.logger.info(
       `Harness [${task.name}] running ${label} in a fresh session` +
@@ -82,6 +92,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         text: string;
         sessionId?: string;
         error?: string;
+        denials?: PermissionDenial[];
       }) => {
         if (settled) return;
         settled = true;
@@ -105,8 +116,12 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           text: lastAssistantText(),
           sessionId: session.sessionId,
           error: `timed out after ${minutes} minute(s)`,
+          denials: denials(),
         });
       }, this.timeoutMs);
+
+      const denials = (): PermissionDenial[] =>
+        collectPermissionDenials(session.items);
 
       const lastAssistantText = (): string => {
         const reply = [...session.items]
@@ -125,6 +140,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             text: lastAssistantText(),
             sessionId: session.sessionId,
             error: errored ? "the agent reported an error" : undefined,
+            denials: denials(),
           });
           return;
         }
@@ -137,6 +153,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             text,
             sessionId: session.sessionId,
             error: text.length > 0 ? undefined : `session ${status}`,
+            denials: denials(),
           });
         }
       };
