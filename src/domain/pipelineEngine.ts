@@ -1,6 +1,7 @@
 import { Result, ok, err } from "../utilities/result";
 import {
   ChecklistItem,
+  QuestionItem,
   Subtask,
   TaskPipeline,
   TaskStage,
@@ -32,7 +33,9 @@ export type PipelineError =
   | { kind: "alreadyResolved"; message: string }
   | { kind: "notAwaitingApproval"; message: string }
   | { kind: "checklistIncomplete"; message: string; outstanding: number }
-  | { kind: "unknownChecklistItem"; message: string };
+  | { kind: "unknownChecklistItem"; message: string }
+  | { kind: "noPendingQuestion"; message: string }
+  | { kind: "unknownQuestion"; message: string };
 
 /** What the harness should do next. Exhaustive by construction. */
 export type NextAction =
@@ -390,6 +393,91 @@ export function outstandingChecklist(pipeline: TaskPipeline): ChecklistItem[] {
  * would block the route. It goes back in the queue to be re-run once the brief
  * has been answered.
  */
+/**
+ * Records a stage's question so it outlives the session that asked it.
+ *
+ * Only one is held at a time: the runner stops at the first question, so a
+ * second could only arrive after this one is answered.
+ */
+export function recordQuestion(
+  pipeline: TaskPipeline,
+  asked: {
+    stageId: string;
+    stageName: string;
+    subtaskId: string;
+    questions: string[];
+    at: string;
+  },
+): Result<TaskPipeline, PipelineError> {
+  const stage = pipeline.stages.find((s) => s.id === asked.stageId);
+  if (!stage) {
+    return err({ kind: "unknownStage", message: `No stage "${asked.stageId}".` });
+  }
+  const items = asked.questions
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0)
+    .map((text, index) => ({ id: `${asked.subtaskId}-q${index + 1}`, text }));
+  if (items.length === 0) {
+    return err({
+      kind: "unknownQuestion",
+      message: "A stage asked for information without saying what.",
+    });
+  }
+
+  return ok({
+    ...pipeline,
+    pendingQuestion: {
+      stageId: asked.stageId,
+      stageName: asked.stageName,
+      subtaskId: asked.subtaskId,
+      askedAt: asked.at,
+      items,
+    },
+  });
+}
+
+/** Records one answer, leaving the others outstanding. */
+export function answerQuestion(
+  pipeline: TaskPipeline,
+  itemId: string,
+  answer: string,
+): Result<TaskPipeline, PipelineError> {
+  const pending = pipeline.pendingQuestion;
+  if (!pending) {
+    return err({
+      kind: "noPendingQuestion",
+      message: "Nothing is waiting on an answer.",
+    });
+  }
+  if (!pending.items.some((item) => item.id === itemId)) {
+    return err({ kind: "unknownQuestion", message: `No question "${itemId}".` });
+  }
+  const trimmed = answer.trim();
+  return ok({
+    ...pipeline,
+    pendingQuestion: {
+      ...pending,
+      items: pending.items.map((item) =>
+        item.id === itemId ? { ...item, answer: trimmed || undefined } : item,
+      ),
+    },
+  });
+}
+
+/** Questions still without an answer. */
+export function unansweredQuestions(pipeline: TaskPipeline): QuestionItem[] {
+  return (pipeline.pendingQuestion?.items ?? []).filter(
+    (item) => !item.answer?.trim(),
+  );
+}
+
+/** Clears the outstanding questions, once they are answered or abandoned. */
+export function clearQuestion(pipeline: TaskPipeline): TaskPipeline {
+  if (!pipeline.pendingQuestion) return pipeline;
+  const { pendingQuestion: _answered, ...rest } = pipeline;
+  return rest;
+}
+
 export function revertSubtask(
   pipeline: TaskPipeline,
   subtaskId: string,

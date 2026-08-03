@@ -204,7 +204,7 @@ describe("advance", () => {
       kind: "needsInput",
       stageId: "build",
       subtaskId: "build-1",
-      question: "Which dealer fields are in scope?",
+      questions: ["Which dealer fields are in scope?"],
     });
     // Nothing beyond it was attempted.
     expect(sessions.calls.map((c) => c.label)).not.toContain("build:build-2");
@@ -572,5 +572,39 @@ describe("a subtask left running by a closed extension host", () => {
 
     release();
     await first;
+  });
+});
+
+describe("a question the runner recorded", () => {
+  it("is persisted with the task, so closing the panel loses nothing", async () => {
+    // The session that asked has ended, so a question held only in a dialog was
+    // unrecoverable — dismissing it meant re-running the stage to see it again.
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": { text: "NEEDS-INFO:\n1. Which tenants?\n2. Include DR?" },
+    });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+    await runner.advance((await repo.get("t1"))!);
+
+    const pending = (await repo.get("t1"))!.pipeline!.pendingQuestion!;
+    expect(pending.stageId).toBe("build");
+    expect(pending.stageName).toBe("Build");
+    expect(pending.subtaskId).toBe("build-1");
+    expect(pending.items.map((i) => i.text)).toEqual(["Which tenants?", "Include DR?"]);
+    expect(pending.askedAt).not.toBe("");
+  });
+
+  it("leaves the subtask pending, so answering resumes rather than skips", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": { text: "NEEDS-INFO: Which tenants?" },
+    });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+    await runner.advance((await repo.get("t1"))!);
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "build")!;
+    expect(stage.subtasks.find((s) => s.id === "build-1")!.status).toBe("pending");
   });
 });

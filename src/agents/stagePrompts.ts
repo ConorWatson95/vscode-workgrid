@@ -53,7 +53,9 @@ function preamble(context: StageContext, stage: TaskStage): string {
     "",
     `If the brief does not tell you enough to do this properly — it may be only a`,
     `ticket reference — do NOT guess and do NOT proceed. Reply with exactly`,
-    `"${NEEDS_INFO_MARKER}" followed by your specific questions, and nothing else.`,
+    `"${NEEDS_INFO_MARKER}" followed by your questions as a numbered list, one`,
+    `question per line, and nothing else. Each line is answered separately, so ask`,
+    `one thing per line rather than combining several into a paragraph.`,
     `The work will pause and a human will answer. First check whether the answer is`,
     `already available to you: read the code, and use any ticket tooling this`,
     `repository provides. Only ask for what you genuinely cannot find.`,
@@ -178,7 +180,7 @@ If nothing needs manual verification, reply with exactly: NONE`;
  * sentence. Requires the marker to start a line so the word appearing inside prose
  * ("I considered replying NEEDS-INFO but…") does not pause the route.
  */
-export function parseNeedsInfo(text: string): string | undefined {
+export function parseNeedsInfo(text: string): string[] | undefined {
   const lines = text.split(/\r?\n/);
   const index = lines.findIndex((line) =>
     line.trimStart().toUpperCase().startsWith(NEEDS_INFO_MARKER),
@@ -186,12 +188,29 @@ export function parseNeedsInfo(text: string): string | undefined {
   if (index === -1) return undefined;
 
   const first = lines[index].trimStart().slice(NEEDS_INFO_MARKER.length).trim();
-  const rest = lines.slice(index + 1).join("\n").trim();
-  const question = [first, rest].filter(Boolean).join("\n").trim();
+  const rest = lines.slice(index + 1);
+
+  // Each question is answered on its own, so they have to be separated here.
+  // Bulleted or numbered lines are the shape the prompt asks for; a reply that
+  // ignores that becomes one question per non-empty line, and a single trailing
+  // paragraph stays whole rather than being split at every newline.
+  const bulleted: string[] = [];
+  const plain: string[] = [];
+  for (const raw of [first, ...rest]) {
+    const line = raw.trim();
+    if (!line) continue;
+    const marker = /^(?:\d+[.)]|[-*+•])\s+(.*)$/.exec(line);
+    if (marker?.[1]?.trim()) bulleted.push(marker[1].trim());
+    else plain.push(line);
+  }
+
+  const questions = bulleted.length > 0 ? bulleted : plain.length > 0 ? [plain.join(" ")] : [];
 
   // A marker with nothing after it is still a request to pause; say something
-  // useful rather than showing an empty dialog.
-  return question || "The stage asked for more information but did not say what.";
+  // useful rather than presenting an empty form.
+  return questions.length > 0
+    ? questions
+    : ["The stage asked for more information but did not say what."];
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   nextAction,
   planStage,
   recordChecklist,
+  recordQuestion,
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
@@ -60,7 +61,8 @@ export type RunOutcome =
       stageId: string;
       stageName: string;
       subtaskId: string;
-      question: string;
+      /** One entry per question; each is answered separately. */
+      questions: string[];
     }
   /** The route finished. */
   | { kind: "done" }
@@ -273,7 +275,7 @@ export class PipelineRunner {
                 stageId: action.stage.id,
                 stageName: action.stage.name,
                 subtaskId: action.subtask.id,
-                question: result.question,
+                questions: result.question,
               },
               steps,
             };
@@ -362,7 +364,7 @@ export class PipelineRunner {
     task: TaskWorkspace;
     failed: boolean;
     reason?: string;
-    question?: string;
+    question?: string[];
     cancelled?: boolean;
   }> {
     const { stage, subtask } = action;
@@ -403,6 +405,17 @@ export class PipelineRunner {
     if (question) {
       const reverted = revertSubtask(pipeline, subtask.id);
       if (reverted.ok) pipeline = reverted.value;
+      // Persist the question with the task. The session that asked it is gone,
+      // so anything not stored here is unrecoverable — dismissing a dialog used
+      // to mean re-running the stage just to find out what it wanted.
+      const recorded = recordQuestion(pipeline, {
+        stageId: stage.id,
+        stageName: stage.name,
+        subtaskId: subtask.id,
+        questions: question,
+        at: new Date().toISOString(),
+      });
+      if (recorded.ok) pipeline = recorded.value;
       steps.push(`"${subtask.title}" asked for more information.`);
       return { task: await this.save(task, pipeline), failed: false, question };
     }

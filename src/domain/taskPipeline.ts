@@ -105,6 +105,40 @@ export interface TaskPipeline {
   stages: TaskStage[];
   /** Stage currently active or awaiting approval; absent when at rest. */
   currentStage?: string;
+  /**
+   * A stage's outstanding question, held until it is answered.
+   *
+   * Persisted rather than shown and forgotten. A question is the one thing in a
+   * route that cannot be recovered by re-reading state: the session that asked
+   * it is gone, so a dialog dismissed by accident used to mean re-running the
+   * stage just to see what it wanted. It also has to survive several tasks
+   * asking at once, which a modal cannot.
+   */
+  pendingQuestion?: PendingQuestion;
+}
+
+/**
+ * A stage waiting on answers from a human.
+ *
+ * Holds the questions as separate items rather than one block of text. A stage
+ * that needs three things asks for three things, and pairing each answer with
+ * the question it belongs to is what lets the brief record them unambiguously —
+ * a single field for five questions produces one answer that addresses whichever
+ * the user happened to read.
+ */
+export interface PendingQuestion {
+  stageId: string;
+  stageName: string;
+  subtaskId: string;
+  askedAt: string;
+  items: QuestionItem[];
+}
+
+/** One question and, once given, its answer. */
+export interface QuestionItem {
+  id: string;
+  text: string;
+  answer?: string;
 }
 
 /**
@@ -146,5 +180,38 @@ export function normalizePipeline(
     routeLabel: raw.routeLabel,
     stages,
     currentStage: raw.currentStage,
+    pendingQuestion: normalizeQuestion(raw.pendingQuestion),
+  };
+}
+
+/**
+ * Keeps a stored question only if it is complete enough to act on. A half-written
+ * record would render an "answer this" prompt with nothing to answer.
+ */
+function normalizeQuestion(stored: unknown): PendingQuestion | undefined {
+  if (!stored || typeof stored !== "object") return undefined;
+  const q = stored as Partial<PendingQuestion> & { question?: string };
+  if (!q.stageId || !q.subtaskId) return undefined;
+
+  // Records written before questions were itemised held a single string.
+  const items: QuestionItem[] = Array.isArray(q.items)
+    ? q.items
+        .filter((item): item is QuestionItem => Boolean(item?.text?.trim()))
+        .map((item, index) => ({
+          id: item.id ?? `${q.subtaskId}-q${index + 1}`,
+          text: item.text,
+          answer: item.answer,
+        }))
+    : q.question?.trim()
+      ? [{ id: `${q.subtaskId}-q1`, text: q.question }]
+      : [];
+  if (items.length === 0) return undefined;
+
+  return {
+    stageId: q.stageId,
+    stageName: q.stageName ?? q.stageId,
+    subtaskId: q.subtaskId,
+    askedAt: q.askedAt ?? "",
+    items,
   };
 }

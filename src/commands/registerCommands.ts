@@ -12,9 +12,12 @@ import {
   ChecklistTreeItem,
 } from "../ui/taskWorkspaceTreeItem";
 import {
+  answerQuestion,
   approveStage,
+  clearQuestion,
   outstandingChecklist,
   setChecklistItem,
+  unansweredQuestions,
 } from "../domain/pipelineEngine";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
@@ -37,6 +40,7 @@ import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
 import { withStatus } from "../ui/statusProgress";
+import { QuestionPanel } from "../ui/questionPanel";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -79,10 +83,84 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.advanceRoute", (arg) => advanceRouteCommand(ctx, arg)),
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
+    register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
     ),
   ];
+}
+
+/**
+ * Opens the panel for a task's outstanding questions.
+ *
+ * Reachable from the tree as well as from an advance, because a question now
+ * outlives the moment it was asked — the previous dialog was the only way to see
+ * it, so dismissing it meant re-running the stage to find out what it wanted.
+ */
+async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task?.pipeline?.pendingQuestion) {
+    void vscode.window.showInformationMessage(
+      task ? `"${task.name}" has no outstanding questions.` : "No task selected.",
+    );
+    return;
+  }
+
+  QuestionPanel.show(task.id, task.name, task.pipeline.pendingQuestion, {
+    // Saved as the user types, so closing the panel cannot lose an answer.
+    answer: async (taskId, itemId, text) => {
+      const latest = await ctx.repository.get(taskId);
+      if (!latest?.pipeline) return;
+      const result = answerQuestion(latest.pipeline, itemId, text);
+      if (!result.ok) return;
+      await ctx.repository.save({
+        ...latest,
+        pipeline: result.value,
+        updatedAt: new Date().toISOString(),
+      });
+    },
+    submit: async (taskId) => {
+      const latest = await ctx.repository.get(taskId);
+      const pending = latest?.pipeline?.pendingQuestion;
+      if (!latest?.pipeline || !pending) return;
+
+      const outstanding = unansweredQuestions(latest.pipeline);
+      if (outstanding.length > 0) {
+        void vscode.window.showWarningMessage(
+          `${outstanding.length} question(s) still need an answer.`,
+        );
+        return;
+      }
+
+      // Answers go into the brief, not back into the session that asked: that
+      // session has ended, and the next attempt is a fresh one that sees only
+      // the brief. Pairing each answer with its question is why they are stored
+      // as items rather than one block of text.
+      const transcript = pending.items
+        .map((item) => `Q: ${item.text}\nA: ${item.answer?.trim() ?? ""}`)
+        .join("\n\n");
+
+      await ctx.repository.save({
+        ...latest,
+        description: [latest.description, transcript].filter(Boolean).join("\n\n"),
+        pipeline: clearQuestion(latest.pipeline),
+        updatedAt: new Date().toISOString(),
+      });
+      QuestionPanel.update(taskId, undefined);
+      ctx.tree.refresh();
+      ctx.logger.info(
+        `Harness [${latest.name}] answered ${pending.items.length} question(s) for "${pending.stageName}".`,
+      );
+
+      const next = await vscode.window.showInformationMessage(
+        `Added ${pending.items.length} answer(s) to the brief.`,
+        "Advance Route",
+      );
+      if (next === "Advance Route") {
+        await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", taskId);
+      }
+    },
+  });
 }
 
 /**
@@ -222,49 +300,13 @@ async function advanceRouteCommand(
         `"${task.name}" completed its route.`,
       );
       return;
-    case "needsInput": {
-      // Answering appends to the brief rather than replying into a session: the
-      // session is gone, and the next attempt is a fresh one that will only see
-      // the brief.
-      const choice = await vscode.window.showInformationMessage(
-        `"${outcome.stageName}" needs more information.`,
-        { modal: true, detail: outcome.question },
-        "Answer",
-        "Show Log",
-      );
-      if (choice === "Show Log") {
-        ctx.logger.show?.();
-        return;
-      }
-      if (choice !== "Answer") return;
-
-      const answer = await vscode.window.showInputBox({
-        title: `Answer for "${outcome.stageName}"`,
-        prompt: "Added to the task brief, which every stage sees",
-        placeHolder: outcome.question.split("\n")[0],
-      });
-      if (!answer?.trim()) return;
-
-      const latest = await ctx.repository.get(task.id);
-      if (!latest) return;
-      await ctx.repository.save({
-        ...latest,
-        description: [latest.description, `Q: ${outcome.question}`, `A: ${answer.trim()}`]
-          .filter(Boolean)
-          .join("\n\n"),
-        updatedAt: new Date().toISOString(),
-      });
+    case "needsInput":
+      // The questions are already persisted on the pipeline by the runner, so
+      // this only opens the panel. Closing it loses nothing — the task shows an
+      // "Answer Questions" action until they are answered.
       ctx.tree.refresh();
-
-      const again = await vscode.window.showInformationMessage(
-        "Answer added to the brief.",
-        "Advance Route",
-      );
-      if (again === "Advance Route") {
-        await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
-      }
+      await openQuestionsCommand(ctx, task.id);
       return;
-    }
     case "awaitingApproval": {
       const choice = await vscode.window.showInformationMessage(
         `"${task.name}" is waiting for you at "${outcome.stageName}".`,

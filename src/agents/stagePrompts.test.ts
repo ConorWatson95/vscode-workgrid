@@ -144,22 +144,39 @@ describe("exploration guidance", () => {
 });
 
 describe("parseNeedsInfo", () => {
-  it("extracts the question", () => {
-    expect(parseNeedsInfo("NEEDS-INFO: Which dealer fields are in scope?")).toBe(
+  it("extracts a single question", () => {
+    expect(parseNeedsInfo("NEEDS-INFO: Which dealer fields are in scope?")).toEqual([
       "Which dealer fields are in scope?",
-    );
+    ]);
   });
 
-  it("collects a multi-line question", () => {
-    const question = parseNeedsInfo("NEEDS-INFO:\n- Which fields?\n- Which tenants?");
-    expect(question).toContain("Which fields?");
-    expect(question).toContain("Which tenants?");
+  it("separates a numbered list into one question each", () => {
+    // Each is answered on its own, so they must not arrive as one blob: a single
+    // field for five questions gets one answer addressing whichever was read.
+    expect(
+      parseNeedsInfo("NEEDS-INFO:\n1. Which fields?\n2. Which tenants?\n3. Which env?"),
+    ).toEqual(["Which fields?", "Which tenants?", "Which env?"]);
+  });
+
+  it("separates a bulleted list too", () => {
+    expect(parseNeedsInfo("NEEDS-INFO:\n- Which fields?\n- Which tenants?")).toEqual([
+      "Which fields?",
+      "Which tenants?",
+    ]);
+  });
+
+  it("keeps an unlisted paragraph whole rather than splitting at every newline", () => {
+    const questions = parseNeedsInfo(
+      "NEEDS-INFO: Which tenants are affected,\nand does this include DR?",
+    );
+    expect(questions).toHaveLength(1);
+    expect(questions?.[0]).toContain("DR?");
   });
 
   it("tolerates a preface before the marker", () => {
     expect(
       parseNeedsInfo("I checked the code and the ticket tooling.\n\nNEEDS-INFO: Which tenant?"),
-    ).toBe("Which tenant?");
+    ).toEqual(["Which tenant?"]);
   });
 
   it("ignores the marker mid-sentence, so prose does not pause the route", () => {
@@ -169,7 +186,7 @@ describe("parseNeedsInfo", () => {
   });
 
   it("still pauses when the marker carries no question", () => {
-    expect(parseNeedsInfo("NEEDS-INFO:")).toContain("did not say what");
+    expect(parseNeedsInfo("NEEDS-INFO:")?.[0]).toContain("did not say what");
   });
 
   it("returns nothing for an ordinary reply", () => {

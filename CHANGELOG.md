@@ -2,6 +2,27 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.18.0
+
+- **Questions are persisted, itemised, and answered in a proper panel.** A stage
+  that needs information used to raise a modal with every question crammed into
+  one detail field, followed by a single-line input box. That failed three ways:
+  dismissing it **lost the questions** — and the session that asked them was
+  gone, so the only way back was re-running the stage; one answer field for five
+  questions meant one reply addressing whichever the user happened to read; and
+  nothing on screen said which task was asking.
+
+  Now the runner stores the questions on the pipeline before any UI appears.
+  Each is a separate item with its own answer field in a webview panel titled
+  with the task name, answers save as you type, and the task row shows
+  "2 questions" with an **Answer Questions** action until they are dealt with.
+  Submitting appends each `Q:`/`A:` pair to the brief.
+
+  Prompts now ask for a numbered list, one question per line, and the parser
+  splits bulleted or numbered replies into separate items — an unlisted paragraph
+  stays whole rather than being split at every newline. Records that stored a
+  single question string still load.
+
 ## 0.17.0
 
 - **A route stage can name its own model.** Add `"model": "sonnet"` to a stage in

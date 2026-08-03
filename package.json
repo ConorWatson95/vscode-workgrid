@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -121,6 +121,12 @@
         "icon": "$(debug-continue)"
       },
       {
+        "command": "taskWorkspaces.answerQuestions",
+        "title": "Answer Questions",
+        "category": "Task Workspaces",
+        "icon": "$(comment-unresolved)"
+      },
+      {
         "command": "taskWorkspaces.approveStage",
         "title": "Approve Stage",
         "category": "Task Workspaces",
@@ -234,6 +240,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "taskWorkspaces.answerQuestions",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /hasQuestions/",
+          "group": "inline@0"
+        },
         {
           "command": "taskWorkspaces.advanceRoute",
           "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",

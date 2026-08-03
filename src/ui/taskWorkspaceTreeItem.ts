@@ -57,13 +57,22 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       colorId ? new vscode.ThemeColor(colorId) : undefined,
     );
     const harnessed = (task.pipeline?.stages.length ?? 0) > 0;
+    const questions = task.pipeline?.pendingQuestion?.items.length ?? 0;
     this.contextValue = buildContextValue(
       task.status,
       task.agent?.status,
       harnessed,
+      questions > 0,
     );
 
     const descriptionParts = [statusLabel];
+    // Lead with the block: a route waiting on an answer is doing nothing, and
+    // that is invisible otherwise.
+    if (questions > 0) {
+      descriptionParts.unshift(
+        questions === 1 ? "1 question" : `${questions} questions`,
+      );
+    }
     if (live?.isDirty) {
       descriptionParts.push(`${live.changedFileCount} changed`);
     } else if ((live?.commitsAhead ?? 0) > 0) {

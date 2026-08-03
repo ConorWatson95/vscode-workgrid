@@ -107,6 +107,7 @@ export function buildContextValue(
   status: TaskWorkspaceStatus,
   agentStatus: AgentSessionStatus | undefined,
   harnessed = false,
+  hasQuestions = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -121,5 +122,8 @@ export function buildContextValue(
   // "adhoc" rather than "unharnessed" deliberately: menu `when` clauses match
   // contextValue by substring, and /harnessed/ would match "unharnessed" too.
   tokens.push(harnessed ? "harnessed" : "adhoc");
+  // An outstanding question is the one thing a route cannot recover on its own,
+  // so the row has to offer a way back to it however the panel was closed.
+  if (hasQuestions) tokens.push("hasQuestions");
   return tokens.join(" ");
 }

@@ -8,8 +8,12 @@ import {
   outstandingChecklist,
   pipelineProgress,
   planStage,
+  answerQuestion,
+  clearQuestion,
   recordChecklist,
+  recordQuestion,
   retryStage,
+  unansweredQuestions,
   setChecklistItem,
   skipStage,
   startSubtask,
@@ -666,5 +670,135 @@ describe("normalizePipeline", () => {
     expect(normalizePipeline(undefined)).toBeUndefined();
     expect(normalizePipeline({})).toBeUndefined();
     expect(normalizePipeline("nonsense")).toBeUndefined();
+  });
+});
+
+describe("questions a stage asks", () => {
+  /** A pipeline with one question outstanding. */
+  function asked(questions: string[] = ["Which tenants?", "Include DR?"]) {
+    const pipeline = createPipeline(ROUTE);
+    const stage = pipeline.stages[0];
+    const result = recordQuestion(pipeline, {
+      stageId: stage.id,
+      stageName: stage.name,
+      subtaskId: `${stage.id}-1`,
+      questions,
+      at: T,
+    });
+    if (!result.ok) throw new Error("recordQuestion failed");
+    return result.value;
+  }
+
+  it("stores one item per question, so each is answered separately", () => {
+    const pipeline = asked();
+    expect(pipeline.pendingQuestion?.items.map((i) => i.text)).toEqual([
+      "Which tenants?",
+      "Include DR?",
+    ]);
+    // Distinct ids are what let an answer be attached to its own question.
+    const ids = pipeline.pendingQuestion!.items.map((i) => i.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("drops blank questions rather than rendering an empty field", () => {
+    const pipeline = asked(["Which tenants?", "   ", ""]);
+    expect(pipeline.pendingQuestion?.items).toHaveLength(1);
+  });
+
+  it("refuses a question set with nothing in it", () => {
+    const pipeline = createPipeline(ROUTE);
+    const result = recordQuestion(pipeline, {
+      stageId: pipeline.stages[0].id,
+      stageName: "x",
+      subtaskId: "x-1",
+      questions: ["  "],
+      at: T,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a question against a stage that does not exist", () => {
+    const result = recordQuestion(createPipeline(ROUTE), {
+      stageId: "nope",
+      stageName: "x",
+      subtaskId: "x-1",
+      questions: ["?"],
+      at: T,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("answers one question without touching the others", () => {
+    const pipeline = asked();
+    const first = pipeline.pendingQuestion!.items[0].id;
+    const result = answerQuestion(pipeline, first, "Nissan GB only");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.pendingQuestion!.items[0].answer).toBe("Nissan GB only");
+    expect(result.value.pendingQuestion!.items[1].answer).toBeUndefined();
+    expect(unansweredQuestions(result.value).map((i) => i.text)).toEqual(["Include DR?"]);
+  });
+
+  it("treats a blank answer as unanswered, so it cannot be submitted", () => {
+    const pipeline = asked();
+    const id = pipeline.pendingQuestion!.items[0].id;
+    const result = answerQuestion(pipeline, id, "   ");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(unansweredQuestions(result.value)).toHaveLength(2);
+  });
+
+  it("refuses an answer to a question that was not asked", () => {
+    expect(answerQuestion(asked(), "made-up", "x").ok).toBe(false);
+    expect(answerQuestion(createPipeline(ROUTE), "any", "x").ok).toBe(false);
+  });
+
+  it("clears the questions once they are dealt with", () => {
+    expect(clearQuestion(asked()).pendingQuestion).toBeUndefined();
+    // Idempotent: clearing a pipeline with none is not an error.
+    expect(clearQuestion(createPipeline(ROUTE)).pendingQuestion).toBeUndefined();
+  });
+
+  it("does not mutate the pipeline it was given", () => {
+    const pipeline = asked();
+    const before = JSON.stringify(pipeline);
+    answerQuestion(pipeline, pipeline.pendingQuestion!.items[0].id, "x");
+    clearQuestion(pipeline);
+    expect(JSON.stringify(pipeline)).toBe(before);
+  });
+
+  it("survives a round-trip through storage", () => {
+    // The whole point is that a question outlives the session that asked it, so
+    // it has to normalise back out of the persisted blob.
+    const stored = JSON.parse(JSON.stringify(asked()));
+    const restored = normalizePipeline(stored);
+    expect(restored?.pendingQuestion?.items).toHaveLength(2);
+    expect(restored?.pendingQuestion?.stageName).toBe(ROUTE.stages[0].label);
+  });
+
+  it("upgrades a record that stored one question as a single string", () => {
+    const legacy = {
+      routeId: "r",
+      stages: [],
+      pendingQuestion: {
+        stageId: "s",
+        subtaskId: "s-1",
+        question: "Which tenants?",
+      },
+    };
+    const restored = normalizePipeline(legacy);
+    expect(restored?.pendingQuestion?.items).toEqual([
+      { id: "s-1-q1", text: "Which tenants?", answer: undefined },
+    ]);
+  });
+
+  it("discards a stored question with nothing to ask", () => {
+    const restored = normalizePipeline({
+      routeId: "r",
+      stages: [],
+      pendingQuestion: { stageId: "s", subtaskId: "s-1", items: [] },
+    });
+    expect(restored?.pendingQuestion).toBeUndefined();
   });
 });
