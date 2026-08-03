@@ -2,6 +2,22 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.19.3
+
+- **Fixed: a stage with refusals but no checklist could not be expanded**, so the
+  rows that grant them were unreachable — clicking Reveal appeared to do nothing.
+  Refusals now count towards a stage's expansion and expand it by default.
+- **Fixed: rules suggested the shell instead of the command.** Taking the first
+  token of a compound command produced `Bash(cd:*)`, `Bash(bash:*)` and
+  `PowerShell(powershell:*)` — the first grants nothing meaningful and the others
+  grant everything the interpreter can be told to run, which is the same
+  objection as excluding `powershell.exe` from a virus scanner. Shells,
+  interpreters and builtins are now skipped: `cd X && ./run.sh` suggests
+  `./run.sh`, `powershell -File x.ps1` suggests `x.ps1`, and when every
+  candidate is a wrapper **no rule is offered** — that call needs a human
+  decision, not a blanket grant. The validator's own "the following part requires
+  approval" fragment is preferred over the whole command when present.
+
 ## 0.19.2
 
 - **Fixed: suggested allow rules were noise for file tools.** A refused `Write`

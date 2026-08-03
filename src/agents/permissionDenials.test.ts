@@ -294,3 +294,65 @@ describe("DenialWatcher", () => {
     expect(watcher.all()).toEqual(collectPermissionDenials(items));
   });
 });
+
+describe("rules that must never be suggested", () => {
+  const denial = (tool: string, command: string, reason = "This command requires approval"): PermissionDenial => ({
+    tool,
+    command,
+    reason,
+    attempts: 1,
+  });
+
+  it("never grants a shell or interpreter", () => {
+    // Bash(bash:*) and PowerShell(powershell:*) grant everything the interpreter
+    // can be told to run — the same objection as whitelisting powershell.exe in
+    // a virus scanner.
+    expect(suggestAllowRules([denial("Bash", "bash -c 'echo hi'")])).toEqual([]);
+    expect(suggestAllowRules([denial("PowerShell", "powershell -NoProfile")])).toEqual([]);
+    expect(suggestAllowRules([denial("Bash", "sudo sh")])).toEqual([]);
+  });
+
+  it("never grants a bare builtin", () => {
+    expect(suggestAllowRules([denial("Bash", "cd C:/Dev/app")])).toEqual([]);
+    expect(suggestAllowRules([denial("Bash", "export FOO=bar")])).toEqual([]);
+  });
+
+  it("skips past the wrapper to the command that matters", () => {
+    // "cd X && real-command" used to yield Bash(cd:*).
+    expect(
+      suggestAllowRules([denial("Bash", "cd C:/Dev/app && ./tools/run.sh --all")]),
+    ).toEqual(["Bash(./tools/run.sh:*)"]);
+  });
+
+  it("skips an interpreter and its flags to reach the script", () => {
+    expect(
+      suggestAllowRules([
+        denial("PowerShell", 'powershell -NoProfile -File "C:/Dev/app/x.ps1" -Key 1'),
+      ]),
+    ).toEqual(["PowerShell(C:/Dev/app/x.ps1:*)"]);
+  });
+
+  it("prefers the fragment the validator named as offending", () => {
+    // The message says exactly which part needed approval; the rest is setup.
+    const rules = suggestAllowRules([
+      denial(
+        "PowerShell",
+        'Set-Location C:/Dev/app; & ./tools/jira/Get-JiraAttachment.ps1 -IssueKey X',
+        "This PowerShell command contains multiple operations. The following part requires approval: & ./tools/jira/Get-JiraAttachment.ps1 -IssueKey X",
+      ),
+    ]);
+    expect(rules).toEqual(["PowerShell(./tools/jira/Get-JiraAttachment.ps1:*)"]);
+  });
+
+  it("skips a leading environment assignment", () => {
+    expect(suggestAllowRules([denial("Bash", "FOO=bar ./run.sh")])).toEqual([
+      "Bash(./run.sh:*)",
+    ]);
+  });
+
+  it("still grants an ordinary command", () => {
+    expect(suggestAllowRules([denial("Bash", "sqlcmd -Q 'select 1'")])).toEqual([
+      "Bash(sqlcmd:*)",
+    ]);
+  });
+});

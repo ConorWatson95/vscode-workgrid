@@ -132,11 +132,21 @@ export class StageTreeItem extends vscode.TreeItem {
     readonly stage: TaskStage,
   ) {
     const outstanding = (stage.checklist ?? []).filter((i) => !i.checked);
+    // Refusals nest here too, so they have to count towards expansion — a stage
+    // with refusals and no checklist was a leaf, which made the rows that grant
+    // them unreachable.
+    const denials =
+      task.pipeline?.pendingDenials?.stageId === stage.id
+        ? (task.pipeline?.pendingDenials?.items ?? [])
+        : [];
+    const children = (stage.checklist ?? []).length + denials.length;
+    const needsAttention =
+      outstanding.length > 0 || denials.some((d) => !d.granted);
     // Only expand when there is something underneath worth seeing.
     super(
       stage.name,
-      (stage.checklist ?? []).length > 0
-        ? outstanding.length > 0
+      children > 0
+        ? needsAttention
           ? vscode.TreeItemCollapsibleState.Expanded
           : vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
