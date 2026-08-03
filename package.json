@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.19.1",
+  "version": "0.19.2",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -226,6 +226,12 @@
         "title": "Ignore This Refusal",
         "category": "Task Workspaces",
         "icon": "$(close)"
+      },
+      {
+        "command": "taskWorkspaces.allowAllDenials",
+        "title": "Allow All Refused Commands",
+        "category": "Task Workspaces",
+        "icon": "$(shield)"
       }
     ],
     "menus": {
@@ -252,6 +258,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "taskWorkspaces.allowAllDenials",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /hasDenials/",
+          "group": "inline@0"
+        },
         {
           "command": "taskWorkspaces.grantDenial",
           "when": "view == taskWorkspaces.tree && viewItem == denialPending",

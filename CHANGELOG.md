@@ -2,6 +2,22 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.19.2
+
+- **Fixed: suggested allow rules were noise for file tools.** A refused `Write`
+  produced `Write(C:	emp
+mgb2792q.ps1:*)` — the `:*` prefix form belongs to
+  shell commands, and a rule naming one scratch file under a ticket-specific
+  folder is replaced by a new dead entry every ticket. Rules are now tool-aware:
+  command tools keep `Tool(executable:*)`, file tools get a **directory glob**,
+  and a path under a temp root generalises to that root — so many scratch files
+  collapse into one `Write(C:/temp/**)` instead of one rule each.
+- **Added "Allow All Refused Commands"** on a task with outstanding refusals.
+  Retrying is not free: the subtask re-runs in a fresh session from the start, so
+  approving one rule and advancing, then the next and advancing again, pays for
+  the stage twice. Granting them together costs one re-run. The task row now
+  shows "2 to approve".
+
 ## 0.19.1
 
 - **Refusals are a row in the sidebar, not a toast.** They are persisted on the

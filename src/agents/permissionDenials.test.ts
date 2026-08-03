@@ -148,6 +148,70 @@ describe("suggestAllowRules", () => {
   it("suggests nothing when there was no command to key on", () => {
     expect(suggestAllowRules([{ tool: "Bash", reason: "r", attempts: 1 }])).toEqual([]);
   });
+
+  describe("file tools", () => {
+    const denial = (tool: string, path: string): PermissionDenial => ({
+      tool,
+      command: path,
+      reason: "requires approval",
+      attempts: 1,
+    });
+
+    /** Windows paths as the stream reports them, with real backslashes. */
+    const win = (...segments: string[]) => segments.join("\\");
+
+    it("uses a directory glob, not the command-prefix form", () => {
+      // ":*" is for shell commands. A path rule needs a path pattern, and naming
+      // a single file would never match again.
+      const path = win("C:", "Dev", "app", "src", "x.cs");
+      expect(suggestAllowRules([denial("Write", path)])).toEqual([
+        "Write(C:/Dev/app/src/**)",
+      ]);
+    });
+
+    it("generalises a scratch path to its root, not the ticket folder", () => {
+      // The reported case. A rule naming one file under a ticket-specific temp
+      // folder is replaced by a new one every ticket, so the allow list fills
+      // with dead entries.
+      const path = win("C:", "temp", "nmgb2792", "q.ps1");
+      expect(suggestAllowRules([denial("Write", path)])).toEqual([
+        "Write(C:/temp/**)",
+      ]);
+    });
+
+    it("collapses many scratch files into one rule", () => {
+      const rules = suggestAllowRules([
+        denial("Write", win("C:", "temp", "nmgb2792", "q.ps1")),
+        denial("Write", win("C:", "temp", "nmgb2792", "r.ps1")),
+        denial("Write", win("C:", "temp", "nmgb3001", "s.ps1")),
+      ]);
+      expect(rules).toEqual(["Write(C:/temp/**)"]);
+    });
+
+    it("recognises the usual temporary locations", () => {
+      expect(suggestAllowRules([denial("Write", "/tmp/build/x.sh")])).toEqual([
+        "Write(/tmp/**)",
+      ]);
+      const appData = win(
+        "C:", "Users", "Someone", "AppData", "Local", "Temp", "a", "b.txt",
+      );
+      expect(suggestAllowRules([denial("Read", appData)])).toEqual([
+        "Read(C:/Users/Someone/AppData/Local/Temp/**)",
+      ]);
+    });
+
+    it("keeps different real directories apart", () => {
+      const rules = suggestAllowRules([
+        denial("Edit", "C:/Dev/app/src/a.cs"),
+        denial("Edit", "C:/Dev/app/tools/b.ps1"),
+      ]);
+      expect(rules).toEqual(["Edit(C:/Dev/app/src/**)", "Edit(C:/Dev/app/tools/**)"]);
+    });
+
+    it("suggests nothing for a bare filename with no directory", () => {
+      expect(suggestAllowRules([denial("Write", "notes.md")])).toEqual([]);
+    });
+  });
 });
 
 describe("formatDenialReport", () => {

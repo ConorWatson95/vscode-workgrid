@@ -58,11 +58,15 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     );
     const harnessed = (task.pipeline?.stages.length ?? 0) > 0;
     const questions = task.pipeline?.pendingQuestion?.items.length ?? 0;
+    const denied = (task.pipeline?.pendingDenials?.items ?? []).filter(
+      (i) => !i.granted,
+    ).length;
     this.contextValue = buildContextValue(
       task.status,
       task.agent?.status,
       harnessed,
       questions > 0,
+      denied > 0,
     );
 
     const descriptionParts = [statusLabel];
@@ -71,6 +75,11 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     if (questions > 0) {
       descriptionParts.unshift(
         questions === 1 ? "1 question" : `${questions} questions`,
+      );
+    }
+    if (denied > 0) {
+      descriptionParts.unshift(
+        denied === 1 ? "1 to approve" : `${denied} to approve`,
       );
     }
     if (live?.isDirty) {

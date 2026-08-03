@@ -108,6 +108,7 @@ export function buildContextValue(
   agentStatus: AgentSessionStatus | undefined,
   harnessed = false,
   hasQuestions = false,
+  hasDenials = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -125,5 +126,7 @@ export function buildContextValue(
   // An outstanding question is the one thing a route cannot recover on its own,
   // so the row has to offer a way back to it however the panel was closed.
   if (hasQuestions) tokens.push("hasQuestions");
+  // A refused tool call blocks the route just as an unanswered question does.
+  if (hasDenials) tokens.push("hasDenials");
   return tokens.join(" ");
 }

@@ -90,6 +90,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
     register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
+    register("taskWorkspaces.allowAllDenials", (arg) => allowAllDenialsCommand(ctx, arg)),
     register("taskWorkspaces.dismissDenial", (arg) => dismissDenialCommand(ctx, arg)),
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
@@ -196,6 +197,83 @@ async function grantDenialCommand(ctx: CommandContext, arg: unknown): Promise<vo
       });
       ctx.tree.refresh();
     }
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/**
+ * Grants every outstanding refusal at once, then offers to advance.
+ *
+ * Worth having as one action because retrying is not free: the subtask re-runs
+ * in a fresh session from the beginning, so approving one rule and advancing,
+ * then approving the next and advancing again, pays for the stage twice over.
+ * Granting them together costs one re-run.
+ */
+async function allowAllDenialsCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task?.pipeline?.pendingDenials) {
+    void vscode.window.showInformationMessage("Nothing is waiting for approval.");
+    return;
+  }
+
+  const outstanding = ungrantedDenials(task.pipeline);
+  const rules = outstanding.map((item) => item.rule).filter((r): r is string => !!r);
+  const unmappable = outstanding.length - rules.length;
+
+  if (rules.length === 0) {
+    void vscode.window.showWarningMessage(
+      "No rules could be derived from those calls — grant them by hand in .claude/settings.local.json.",
+    );
+    return;
+  }
+
+  const confirm = await vscode.window.showWarningMessage(
+    `Allow ${rules.length} command(s) for this project?`,
+    { modal: true, detail: rules.join("\n") },
+    "Allow",
+  );
+  if (confirm !== "Allow") return;
+
+  const written = ctx.permissionRules.addAllowRules(task.repositoryRoot, rules);
+  if (written.problem) {
+    void vscode.window.showErrorMessage(written.problem);
+    return;
+  }
+  ctx.provisioner.provision(
+    ctx.configuration.copyIntoWorktree(ctx.repositoryUri()),
+    task.repositoryRoot,
+    task.worktreePath,
+  );
+
+  let pipeline = task.pipeline;
+  for (const item of outstanding) {
+    if (!item.rule) continue;
+    const granted = grantDenial(pipeline, item.id);
+    if (granted.ok) pipeline = granted.value;
+  }
+  // Everything grantable is granted, so the record has served its purpose.
+  if (unmappable === 0) pipeline = clearDenials(pipeline);
+
+  await ctx.repository.save({
+    ...task,
+    pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] allowed ${written.added.length} rule(s): ${rules.join(", ")}`,
+  );
+
+  const next = await vscode.window.showInformationMessage(
+    `Allowed ${rules.length} command(s).` +
+      (unmappable > 0 ? ` ${unmappable} could not be turned into a rule.` : "") +
+      " Advancing re-runs the step that was refused.",
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
     await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
   }
 }
