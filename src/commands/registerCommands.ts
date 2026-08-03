@@ -36,6 +36,7 @@ import {
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
+import { withStatus } from "../ui/statusProgress";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -200,13 +201,10 @@ async function advanceRouteCommand(
   // that actually need an answer. The sidebar already shows which stage and
   // subtask each task is on, and Stop Agent is the cancel affordance — so only
   // outcomes that need a human get a notification, below.
-  const report = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Window,
-      title: `Advancing "${task.name}"…`,
-    },
-    () => ctx.runner.advance(task),
-  );
+  const report = await withStatus(`Advancing "${task.name}"`, (step) => {
+    step("asking the engine what is next");
+    return ctx.runner.advance(task);
+  });
 
   ctx.tree.refresh();
   for (const step of report.steps) {
@@ -813,24 +811,35 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   const force = live.isDirty;
   const deleteBranch = choice === withBranch;
 
-  // Preserve Claude history before the worktree (and its transcripts) vanish.
-  const archived = ctx.archive.archiveWorktree(os.homedir(), task.worktreePath, task.id);
-  if (archived.length > 0) {
-    await ctx.archivedHistory.add({
-      taskId: task.id,
-      name: task.name,
-      branchName: task.branchName,
-      archivedAt: new Date().toISOString(),
-      sessions: archived,
-    });
-    ctx.logger.info(`Archived ${archived.length} session(s) for "${task.name}".`);
-  }
+  // Removal archives transcripts, stops the agent and shells out to git, none of
+  // which reported anything — so a slow `git worktree remove` was
+  // indistinguishable from a click that had not registered.
+  const result = await withStatus(`Removing "${task.name}"`, async (step) => {
+    // Preserve Claude history before the worktree (and its transcripts) vanish.
+    step("archiving agent transcripts");
+    const archived = ctx.archive.archiveWorktree(os.homedir(), task.worktreePath, task.id);
+    if (archived.length > 0) {
+      await ctx.archivedHistory.add({
+        taskId: task.id,
+        name: task.name,
+        branchName: task.branchName,
+        archivedAt: new Date().toISOString(),
+        sessions: archived,
+      });
+      ctx.logger.info(`Archived ${archived.length} session(s) for "${task.name}".`);
+    }
 
-  // Stop any associated agent session/terminal before removing the folder.
-  ctx.sessions.stop(task.id);
-  ctx.terminals.disposeTerminal(task.id);
+    // Cancel the route first: stopping only the session ends the current subtask,
+    // which the driver reads as a finished turn and answers by starting the next
+    // one — against a worktree that is about to be deleted.
+    step("stopping the agent");
+    ctx.runner.cancel(task.id);
+    ctx.sessions.stop(task.id);
+    ctx.terminals.disposeTerminal(task.id);
 
-  const result = await ctx.service.removeTask(task.id, { force });
+    step("removing the worktree");
+    return ctx.service.removeTask(task.id, { force });
+  });
   if (!result.ok) {
     const message =
       result.error.kind === "worktree" && "error" in result.error
@@ -861,7 +870,11 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
  * commits not merged elsewhere. Non-fatal: the worktree is already gone.
  */
 async function deleteTaskBranch(ctx: CommandContext, task: TaskWorkspace): Promise<void> {
-  let res = await ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: false });
+  // Each git call gets its own status-bar item, so the confirmation below sits
+  // between them rather than under a spinner.
+  let res = await withStatus(`Deleting ${task.branchName}`, () =>
+    ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: false }),
+  );
   if (!res.ok && res.error.kind === "unmerged") {
     const choice = await vscode.window.showWarningMessage(
       `Branch "${task.branchName}" has commits not merged elsewhere. Delete it anyway?`,
@@ -869,7 +882,9 @@ async function deleteTaskBranch(ctx: CommandContext, task: TaskWorkspace): Promi
       "Delete Branch",
     );
     if (choice !== "Delete Branch") return;
-    res = await ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: true });
+    res = await withStatus(`Force-deleting ${task.branchName}`, () =>
+      ctx.worktrees.deleteBranch(task.repositoryRoot, task.branchName, { force: true }),
+    );
   }
   if (!res.ok) {
     void vscode.window.showErrorMessage(

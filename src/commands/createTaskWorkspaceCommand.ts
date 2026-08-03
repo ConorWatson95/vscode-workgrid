@@ -4,6 +4,7 @@ import { ServiceError } from "../services/taskWorkspaceService";
 import { RouteDefinition } from "../domain/taskRoute";
 import { createPipeline } from "../domain/pipelineEngine";
 import { loadHarness } from "../services/reviewRulesService";
+import { withStatus } from "../ui/statusProgress";
 
 /**
  * Multi-step create flow: name → branch type → base branch → description,
@@ -125,64 +126,72 @@ export async function createTaskWorkspaceCommand(
   );
   if (confirm !== "Create") return;
 
-  const created = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Creating worktree…", cancellable: true },
-    (_progress, token) => {
-      const controller = new AbortController();
-      token.onCancellationRequested(() => controller.abort());
-      return ctx.service.createTask(
-        {
-          repositoryRoot,
-          name,
-          branchPrefix,
-          baseBranch: baseBranch.trim(),
-          description,
-          configuredParentDir,
-        },
-        controller.signal,
-      );
-    },
-  );
+  // One status-bar item covers the whole creation, not just the git call:
+  // checking out a large worktree, copying config into it and attaching the
+  // route all take time, and the last two used to happen with no indication at
+  // all once the git progress had closed.
+  const outcome = await withStatus(`Creating "${name.trim()}"`, async (step) => {
+    step(`checking out ${proposal.value.branchName}`);
+    const created = await ctx.service.createTask({
+      repositoryRoot,
+      name,
+      branchPrefix,
+      baseBranch: baseBranch.trim(),
+      description,
+      configuredParentDir,
+    });
+    if (!created.ok) return { created };
 
+    // Bring across untracked local config before anything runs in the worktree,
+    // so the first agent session sees the same settings as the main checkout.
+    step("copying local config into the worktree");
+    const provisioned = ctx.provisioner.provision(
+      ctx.configuration.copyIntoWorktree(scope),
+      repositoryRoot,
+      created.value.worktreePath,
+    );
+
+    // Attach the pipeline after the worktree exists, so a failed creation never
+    // leaves a harnessed task with no worktree behind it.
+    let routeFailed = false;
+    if (routeChoice.route) {
+      step(`attaching the ${routeChoice.route.label} route`);
+      const harnessed = {
+        ...created.value,
+        pipeline: createPipeline(routeChoice.route),
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await ctx.repository.save(harnessed);
+        created.value.pipeline = harnessed.pipeline;
+      } catch (error) {
+        // The worktree is real and usable; only the route failed to stick.
+        ctx.logger.error(
+          `Created "${created.value.name}" but could not attach the ${routeChoice.route.id} route`,
+          error,
+        );
+        routeFailed = true;
+      }
+    }
+
+    return { created, provisioned, routeFailed };
+  });
+
+  const created = outcome.created;
   if (!created.ok) {
     void vscode.window.showErrorMessage(describeCreateError(created.error));
     return;
   }
 
-  // Bring across untracked local config before anything runs in the worktree, so
-  // the first agent session sees the same settings as the main checkout.
-  const provisioned = ctx.provisioner.provision(
-    ctx.configuration.copyIntoWorktree(scope),
-    repositoryRoot,
-    created.value.worktreePath,
-  );
-  if (provisioned.problems.length > 0) {
+  if (outcome.provisioned && outcome.provisioned.problems.length > 0) {
     void vscode.window.showWarningMessage(
-      `Task created, but ${provisioned.problems.length} file(s) could not be copied into the worktree. See the output channel.`,
+      `Task created, but ${outcome.provisioned.problems.length} file(s) could not be copied into the worktree. See the output channel.`,
     );
   }
-
-  // Attach the pipeline after the worktree exists, so a failed creation never
-  // leaves a harnessed task with no worktree behind it.
-  if (routeChoice.route) {
-    const harnessed = {
-      ...created.value,
-      pipeline: createPipeline(routeChoice.route),
-      updatedAt: new Date().toISOString(),
-    };
-    try {
-      await ctx.repository.save(harnessed);
-      created.value.pipeline = harnessed.pipeline;
-    } catch (error) {
-      // The worktree is real and usable; only the route failed to stick.
-      ctx.logger.error(
-        `Created "${created.value.name}" but could not attach the ${routeChoice.route.id} route`,
-        error,
-      );
-      void vscode.window.showWarningMessage(
-        `Task created, but its route could not be saved. It will behave as an unharnessed task.`,
-      );
-    }
+  if (outcome.routeFailed) {
+    void vscode.window.showWarningMessage(
+      `Task created, but its route could not be saved. It will behave as an unharnessed task.`,
+    );
   }
 
   ctx.tree.refresh();

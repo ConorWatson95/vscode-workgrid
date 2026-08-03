@@ -2,6 +2,20 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.16.3
+
+- **Creating and removing a task now report progress in the status bar.** Removal
+  had no indication at all while it archived transcripts, stopped the agent and
+  shelled out to `git worktree remove`, so a slow removal was indistinguishable
+  from a click that had not registered. Creation only covered the git call —
+  copying local config into the worktree and attaching the route happened after
+  the progress had closed. Each step now names itself.
+- **Fixed: removing a task did not stop its route.** Only the session was
+  stopped, which the driver reads as a finished turn and answers by starting the
+  next subtask — against a worktree about to be deleted.
+- Confirmation prompts now sit between progress items rather than underneath
+  one, so the unmerged-branch warning is not shown behind a spinner.
+
 ## 0.16.2
 
 - **Fixed: MCP servers were silently missing in every task worktree.** A worktree
