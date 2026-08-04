@@ -160,6 +160,17 @@ export class HarnessSettings {
   }
 
   /**
+   * Whether answering a stage's questions advances the route by itself.
+   *
+   * On by default: answering is already deliberate, and unblocking the route is
+   * the only reason to do it. Leaving it stopped behind one more button press is
+   * how a task sits idle overnight.
+   */
+  advanceAfterAnswering(): boolean {
+    return this.flag("advanceAfterAnswering", true);
+  }
+
+  /**
    * What runs the gate's hook script.
    *
    * Node rather than a shell, because the script has to poll a directory and

@@ -88,6 +88,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).gateInterpreter();
   }
 
+  advanceAfterAnswering(scope?: vscode.Uri): boolean {
+    return this.settings(scope).advanceAfterAnswering();
+  }
+
   interactivePermissions(scope?: vscode.Uri): boolean {
     return this.settings(scope).interactivePermissions();
   }

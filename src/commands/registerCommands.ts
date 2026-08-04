@@ -492,6 +492,18 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
         `Harness [${latest.name}] answered ${pending.items.length} question(s) for "${pending.stageName}".`,
       );
 
+      // Carry straight on. Answering is deliberate and its only purpose is to
+      // unblock the route, so stopping to ask "shall I continue?" only creates a
+      // window in which the task sits idle. The panel is closed by then, so the
+      // status bar is where the run becomes visible; Stop Agent still interrupts.
+      if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+        ctx.logger.info(
+          `Harness [${latest.name}] advancing automatically after answers.`,
+        );
+        await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", taskId);
+        return;
+      }
+
       const next = await vscode.window.showInformationMessage(
         `Added ${pending.items.length} answer(s) to the brief.`,
         "Advance Route",

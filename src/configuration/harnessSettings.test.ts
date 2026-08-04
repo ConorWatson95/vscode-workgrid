@@ -25,6 +25,9 @@ describe("HarnessSettings defaults", () => {
   it("defaults the permission gate to holding refusals, not to passing them", () => {
     expect(defaults.pauseOnPermissionDenial()).toBe(true);
     expect(defaults.interactivePermissions()).toBe(true);
+    // On: answering exists to unblock the route, so requiring one more click
+    // afterwards is how a task sits idle waiting for a button press.
+    expect(defaults.advanceAfterAnswering()).toBe(true);
     // Off: the gate holds only what the CLI already refused, so it never has to
     // replicate the CLI's idea of a safe command.
     expect(defaults.holdEveryToolCall()).toBe(false);
@@ -99,6 +102,9 @@ describe("HarnessSettings normalisation", () => {
     expect(settings({ stageTimeoutMinutes: 90 }).stageTimeoutMinutes()).toBe(90);
     expect(settings({ holdEveryToolCall: true }).holdEveryToolCall()).toBe(true);
     expect(settings({ pauseOnPermissionDenial: false }).pauseOnPermissionDenial()).toBe(
+      false,
+    );
+    expect(settings({ advanceAfterAnswering: false }).advanceAfterAnswering()).toBe(
       false,
     );
   });
