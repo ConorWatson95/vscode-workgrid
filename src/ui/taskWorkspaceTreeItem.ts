@@ -182,7 +182,13 @@ export class StageTreeItem extends vscode.TreeItem {
     // spinner was identical whether it was running or sitting on seven
     // unanswered questions. `contextValue` is untouched, because it drives the
     // menu actions that resolve the block.
-    const base = stagePresentation(stage);
+    // The gate is blocked by every outstanding item in the pipeline, including the
+    // ones another stage raised — which is all of them, since a gate raises none.
+    const outstandingInPipeline = (task.pipeline?.stages ?? []).reduce(
+      (total, s) => total + (s.checklist ?? []).filter((i) => !i.checked).length,
+      0,
+    );
+    const base = stagePresentation(stage, outstandingInPipeline);
     const block = stageBlock(task.pipeline, stage);
     const visual = block ? { ...base, ...blockedStageVisual(block) } : base;
 
@@ -227,17 +233,33 @@ export class ChecklistTreeItem extends vscode.TreeItem {
       visual.colorId ? new vscode.ThemeColor(visual.colorId) : undefined,
     );
     this.contextValue = visual.contextValue;
-    this.description = item.checked ? "verified" : "";
+    // Says whose job it is. A behaviour-review stage's own prompt tells the agent
+    // it is a planner and not a judge, so nothing here is waiting on the agent —
+    // but an unchecked item with no description read as the agent having left
+    // something undone, rather than as a job for the person reading it.
+    this.description = item.checked ? "verified" : "for you to verify";
     this.tooltip = new vscode.MarkdownString(
       [
         item.text,
         "",
-        item.checked ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.` : "Not yet verified.",
+        item.checked
+          ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.`
+          : "**Not yet verified.** Exercise this in the running application, then " +
+            "click the row to tick it. The sign-off stage cannot pass while any " +
+            "item is outstanding.",
         item.note ? `\nNote: ${item.note}` : "",
       ]
         .filter(Boolean)
         .join("\n"),
     );
+    // Clicking the row toggles it. Previously only the inline icon did, which VS
+    // Code reveals on hover — so the item was plainly visible and the means to act
+    // on it was not. Questions and refusals both learned this; so does this.
+    this.command = {
+      command: "taskWorkspaces.toggleChecklistItem",
+      title: item.checked ? "Mark Unverified" : "Mark Verified",
+      arguments: [this],
+    };
   }
 }
 

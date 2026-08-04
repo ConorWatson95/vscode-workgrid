@@ -71,7 +71,45 @@ describe("stagePresentation", () => {
       stage({ status: "awaiting-approval", checklist: [item("c1", false), item("c2", true)] }),
     );
     expect(visual.description).toContain("awaiting approval");
-    expect(visual.description).toContain("1 to verify");
+    // "for you" because the items are the reader's job, not work the agent left
+    // undone — a behaviour-review stage is a planner, by its own prompt.
+    expect(visual.description).toContain("1 for you to verify");
+  });
+
+  it("still reports outstanding items on a stage that has passed", () => {
+    // The bug this fixes: a behaviour-review stage passes as soon as it has
+    // *written* the checklist, because planning was its whole job. With an empty
+    // description it then said nothing about the items it had just raised, so they
+    // were invisible on a green row.
+    const visual = stagePresentation(
+      stage({ status: "passed", checklist: [item("c1", false), item("c2", false)] }),
+    );
+    expect(visual.description).toContain("2 for you to verify");
+  });
+
+  it("says nothing extra on a passed stage with nothing outstanding", () => {
+    const visual = stagePresentation(stage({ status: "passed" }));
+    expect(visual.description).toBe("");
+  });
+
+  it("shows the pipeline total on the gate, not its own empty checklist", () => {
+    // A human-verification stage raises no items itself but is blocked by all of
+    // them, so reading only its own checklist left it refusing to pass while
+    // displaying no reason.
+    const gate = stage({
+      status: "awaiting-approval",
+      kind: "humanVerification",
+      checklist: undefined,
+    });
+    expect(stagePresentation(gate, 3).description).toContain("3 for you to verify");
+  });
+
+  it("leaves a non-gate stage reporting its own items", () => {
+    const review = stage({
+      status: "awaiting-approval",
+      checklist: [item("c1", false)],
+    });
+    expect(stagePresentation(review, 9).description).toContain("1 for you to verify");
   });
 
   it("shows the failure reason rather than just 'failed'", () => {

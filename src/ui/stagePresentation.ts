@@ -16,8 +16,18 @@ export interface StageVisual {
   contextValue: string;
 }
 
-export function stagePresentation(stage: TaskStage): StageVisual {
-  const detail = stageDetail(stage);
+export function stagePresentation(
+  stage: TaskStage,
+  /**
+   * Unchecked verification items across the **whole pipeline**.
+   *
+   * Passed in because a human-verification stage is blocked by every outstanding
+   * item, not only the ones it raised itself — and it raises none. Reading
+   * `stage.checklist` alone left the gate showing no count while refusing to pass.
+   */
+  outstandingInPipeline?: number,
+): StageVisual {
+  const detail = stageDetail(stage, outstandingInPipeline);
 
   switch (stage.status) {
     case "active":
@@ -41,7 +51,12 @@ export function stagePresentation(stage: TaskStage): StageVisual {
         iconId: "pass-filled",
         colorId: "charts.green",
         label: "Passed",
-        description: "",
+        // A behaviour-review stage passes as soon as it has *written* the
+        // checklist — planning was its whole job. So the stage holding the items
+        // is green and, with an empty description, said nothing about them at all,
+        // while the gate they block belongs to a different stage. The items were
+        // invisible from both ends.
+        description: detail,
         contextValue: "stage-passed",
       };
     case "failed":
@@ -74,7 +89,7 @@ export function stagePresentation(stage: TaskStage): StageVisual {
  * Progress detail for a stage: subtask counts and outstanding verification.
  * Omits a count for a single-unit stage, where "0/1" is noise.
  */
-function stageDetail(stage: TaskStage): string {
+function stageDetail(stage: TaskStage, outstandingInPipeline?: number): string {
   const parts: string[] = [];
 
   if (stage.subtasks.length > 1) {
@@ -84,9 +99,17 @@ function stageDetail(stage: TaskStage): string {
     parts.push(`${done}/${stage.subtasks.length}`);
   }
 
-  const outstanding = (stage.checklist ?? []).filter((i) => !i.checked).length;
+  // A human-verification stage raises no items of its own but is blocked by all of
+  // them, so it reports the pipeline total; every other stage reports its own.
+  const outstanding =
+    stage.kind === "humanVerification" && outstandingInPipeline !== undefined
+      ? outstandingInPipeline
+      : (stage.checklist ?? []).filter((i) => !i.checked).length;
   if (outstanding > 0) {
-    parts.push(`${outstanding} to verify`);
+    // "for you" because a passed stage carrying unchecked items looks stalled
+    // otherwise — as though the agent had left something undone. It has not: a
+    // behaviour-review stage is a planner, and the items are the reader's job.
+    parts.push(`${outstanding} for you to verify`);
   }
   return parts.join(" · ");
 }
