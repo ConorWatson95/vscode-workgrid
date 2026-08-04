@@ -67,6 +67,17 @@ export interface CommandContext {
    * Optional so the command degrades to reverting without a reload.
    */
   stageDefinitions?: () => StageDefinitionSource;
+  /**
+   * The MCP config a session should load: the project's, reduced to the servers
+   * `stageMcpServers` names. Supplied rather than computed here because the
+   * reduced copy is written to extension storage, which only `activate` knows.
+   */
+  reducedMcpConfigPath: (taskRepositoryRoot: string) => string | undefined;
+  /**
+   * Whether that reduction is in force. Sessions must pass `--strict-mcp-config`
+   * when it is, or the worktree's own approved config reinstates everything.
+   */
+  mcpNarrowed: () => boolean;
   resolveRepositoryRoot: () => string | undefined;
   repositoryUri: () => vscode.Uri | undefined;
 }

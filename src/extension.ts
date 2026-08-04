@@ -461,19 +461,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   /**
-   * The MCP config a *stage* session should load.
+   * The MCP config any session this extension starts should load.
    *
-   * Every subtask is a fresh CLI, and the CLI starts every server in the config
+   * Every session is a fresh CLI, and the CLI starts every server in the config
    * before emitting its first event — nine servers measured at 182 seconds of
-   * connect timeouts, paid per subtask. When `stageMcpServers` names the ones a
-   * route needs, a reduced copy is written to extension storage and passed
-   * instead.
+   * connect timeouts. When `stageMcpServers` names the ones the work needs, a
+   * reduced copy is written to extension storage and passed instead.
+   *
+   * Applied to task chat sessions as well as route stages. It was stages only, on
+   * the reasoning that a chat is exploratory and might want any tool — but the
+   * wait is the same, and a person sitting in front of it notices three minutes
+   * far more than a subtask does. Clearing the setting is the way back to all of
+   * them.
    *
    * Written outside the repository on purpose: it must not appear in a worktree,
    * where it would land in the changed paths the review rules key off. Filtering
    * only removes servers, so this cannot widen what a branch can reach.
    */
-  const stageMcpConfigPath = (taskRepositoryRoot: string): string | undefined => {
+  const reducedMcpConfigPath = (taskRepositoryRoot: string): string | undefined => {
     const resolved = resolveMcpConfigPath(
       taskRepositoryRoot,
       configuration.mcpConfigPath(repositoryUri),
@@ -524,7 +529,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // A stage session runs in a worktree the CLI has never seen, so the
       // project's MCP servers are unapproved there and silently absent — which
       // is how a planning stage loses the ability to read its own ticket.
-      mcpConfigPath: stageMcpConfigPath(task.repositoryRoot),
+      mcpConfigPath: reducedMcpConfigPath(task.repositoryRoot),
       // Enforced, not merely offered: without strict mode the worktree's own
       // approved `.mcp.json` starts every server anyway, and a reduced config
       // achieves nothing. Only when the set was narrowed on purpose, since strict
@@ -676,6 +681,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     permissionGate,
     askUser,
     stageDefinitions: () => currentHarness() ?? { routes: [], rules: [] },
+    reducedMcpConfigPath,
+    mcpNarrowed: () => configuration.stageMcpServers(repositoryUri).length > 0,
     service,
     worktrees: worktreeService,
     status: statusService,

@@ -47,7 +47,6 @@ import {
 } from "../agents/transcriptReader";
 import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
-import { resolveMcpConfigPath } from "../agents/claudeCliArgs";
 import { PermissionDenial } from "../agents/permissionDenials";
 import { withStatus } from "../ui/statusProgress";
 import { QuestionPanel } from "../ui/questionPanel";
@@ -1310,12 +1309,14 @@ function contextOptions(ctx: CommandContext, task: TaskWorkspace) {
   return {
     contextStrategy: ctx.configuration.contextStrategy(ctx.repositoryUri()),
     // Worktrees are unapproved directories, so the project's .mcp.json has to be
-    // passed explicitly or none of its servers start.
-    mcpConfigPath: resolveMcpConfigPath(
-      task.repositoryRoot,
-      ctx.configuration.mcpConfigPath(ctx.repositoryUri()),
-      (p) => fs.existsSync(p),
-    ),
+    // passed explicitly or none of its servers start — reduced to the named
+    // servers, exactly as a stage session is. A person waiting on a chat pays the
+    // same connect timeouts a subtask does, and notices them more.
+    mcpConfigPath: ctx.reducedMcpConfigPath(task.repositoryRoot),
+    // Without strict mode the worktree's own approved config starts everything
+    // anyway and the reduction achieves nothing. Only when the set was narrowed on
+    // purpose, because strict mode also drops the user's own user-scope servers.
+    strictMcpConfig: ctx.mcpNarrowed(),
     taskName: task.name,
     onCheckpoint: ({ raw, brief }: { raw: string; brief: string }) => {
       ctx.logger.info(
