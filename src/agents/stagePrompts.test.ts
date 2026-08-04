@@ -72,6 +72,37 @@ describe("the ask-for-information escape hatch", () => {
   });
 });
 
+describe("operator guidance from approvals", () => {
+  it("is absent when the operator has said nothing", () => {
+    expect(splitPrompt(CONTEXT, stage())).not.toContain("operator has given");
+  });
+
+  it("reaches the stage, and says it outranks the brief", () => {
+    // The case this is for: at approval the operator knows something the route
+    // does not — "deploy only this project". Guidance that the agent treats as a
+    // suggestion is guidance that gets ignored.
+    const prompt = splitPrompt(
+      {
+        ...CONTEXT,
+        guidance: ["Deploy only this ticket's project, with -Project."],
+      },
+      stage(),
+    );
+    expect(prompt).toContain("Deploy only this ticket's project, with -Project.");
+    expect(prompt).toContain("override");
+  });
+
+  it("carries every note, in the order they were given", () => {
+    const prompt = splitPrompt(
+      { ...CONTEXT, guidance: ["First thing.", "Second thing."] },
+      stage(),
+    );
+    expect(prompt.indexOf("First thing.")).toBeLessThan(
+      prompt.indexOf("Second thing."),
+    );
+  });
+});
+
 describe("project documentation guidance", () => {
   const withDocs = { ...CONTEXT, docsPath: "docs/" };
 

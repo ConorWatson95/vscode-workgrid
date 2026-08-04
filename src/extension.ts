@@ -544,6 +544,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     },
   );
+  /**
+   * The project's routes and rules as they are on disk right now.
+   *
+   * Read per use rather than cached, because the whole point is that editing
+   * `harness.json` takes effect on the next stage rather than the next task.
+   */
+  const currentHarness = () => {
+    const root = repositoryUri?.fsPath;
+    if (!root) return undefined;
+    return loadHarness(root, {
+      configuredPath: configuration.harnessConfigPath(repositoryUri),
+    });
+  };
+
   const permissionRules = new PermissionRulesService(logger);
   // Shared: also used when granting a rule, to refresh an existing worktree's copy.
   const provisioner = new WorktreeProvisioner(logger);
@@ -626,13 +640,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => configuration.pauseOnPermissionDenial(repositoryUri),
     // Read per advance rather than cached: editing a stage's model in
     // harness.json should take effect on the next stage, not the next task.
-    () => {
-      const repositoryRoot = repositoryUri?.fsPath;
-      if (!repositoryRoot) return undefined;
-      return loadHarness(repositoryRoot, {
-        configuredPath: configuration.harnessConfigPath(repositoryUri),
-      });
-    },
+    () => currentHarness(),
   );
 
   // --- Commands ---------------------------------------------------------
@@ -640,6 +648,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     permissionRules,
     permissionGate,
     askUser,
+    stageDefinitions: () => currentHarness() ?? { routes: [], rules: [] },
     service,
     worktrees: worktreeService,
     status: statusService,

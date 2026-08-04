@@ -2,6 +2,8 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import { StreamSessionOptions } from "./claudeStreamSession";
 import { ChatItem } from "./streamJson";
 import { DenialWatcher, PermissionDenial } from "./permissionDenials";
+import { StageActivityWatcher } from "./stageActivity";
+import { SubtaskActivity } from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 
@@ -92,6 +94,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     sessionId?: string;
     error?: string;
     denials?: PermissionDenial[];
+    activity?: SubtaskActivity;
   }> {
     const override = options?.model?.trim();
     this.logger.info(
@@ -133,6 +136,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         sessionId?: string;
         error?: string;
         denials?: PermissionDenial[];
+        activity?: SubtaskActivity;
       }) => {
         if (settled) return;
         settled = true;
@@ -161,13 +165,18 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           sessionId: session.sessionId,
           error: `timed out after ${minutes} minute(s)`,
           denials: denials(),
+          activity: activity(),
         });
       }, this.timeoutMs);
 
       // Watched live rather than scanned at the end: the refusal happens seconds
       // in, and the agent then spends turns working around it.
       const watcher = new DenialWatcher();
+      // Fed from the same subscription, so recording what the stage did costs
+      // nothing beyond the memory it holds.
+      const activityWatcher = new StageActivityWatcher();
       const onItem = (item: ChatItem) => {
+        activityWatcher.observe(item);
         const denial = watcher.observe(item);
         if (!denial) return;
         this.logger.warn(
@@ -176,6 +185,8 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         options?.onDenial?.(denial);
       };
       const denials = (): PermissionDenial[] => watcher.all();
+      const activity = (): SubtaskActivity | undefined =>
+        activityWatcher.isEmpty() ? undefined : activityWatcher.result();
 
       const lastAssistantText = (): string => {
         const reply = [...session.items]
@@ -195,6 +206,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             sessionId: session.sessionId,
             error: errored ? "the agent reported an error" : undefined,
             denials: denials(),
+            activity: activity(),
           });
           return;
         }
@@ -208,6 +220,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             sessionId: session.sessionId,
             error: text.length > 0 ? undefined : `session ${status}`,
             denials: denials(),
+            activity: activity(),
           });
         }
       };

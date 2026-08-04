@@ -26,6 +26,14 @@ export interface StageContext {
    * is the one place a finding can outlive the session that produced it.
    */
   docsPath?: string;
+  /**
+   * What the operator said while approving earlier stages, oldest first.
+   *
+   * Carried into every later stage because guidance given at a gate is almost
+   * always about the work that follows — "deploy only this project" is worthless
+   * if it expires at the next stage boundary.
+   */
+  guidance?: string[];
 }
 
 /**
@@ -80,6 +88,14 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `run in-process, while every shell call pays a process launch. Reserve the shell`,
     `for work that genuinely needs it, and when you do use it, combine the steps`,
     `into one command rather than issuing several.`,
+    ...(context.guidance && context.guidance.length > 0
+      ? [
+          "",
+          "The operator has given the following instructions while approving earlier",
+          "stages. They override your own judgement and the brief where they conflict:",
+          ...context.guidance.map((note) => `- ${note}`),
+        ]
+      : []),
     ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
   ]
     .filter(Boolean)

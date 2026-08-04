@@ -1,5 +1,5 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import { SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import {
   resolveStageModel,
   StageModelSource,
@@ -68,6 +68,8 @@ export interface StageSessionRunner {
     error?: string;
     /** Tool calls the permission layer refused during this run. */
     denials?: PermissionDenial[];
+    /** What the run actually did, for the stage report. */
+    activity?: SubtaskActivity;
   }>;
 }
 
@@ -180,6 +182,9 @@ export class PipelineRunner {
       branchName: task.branchName,
       baseBranch: task.baseBranch,
       docsPath: this.docsPath() || undefined,
+      // Every later stage sees it: guidance given at a gate is about the work that
+      // follows, so expiring it at the next stage boundary would waste it.
+      guidance: (task.pipeline?.guidance ?? []).map((note) => note.text),
     };
   }
 
@@ -586,6 +591,10 @@ export class PipelineRunner {
       status: reply.ok ? "done" : "failed",
       at: new Date().toISOString(),
       reason,
+      // Kept so the stage is not invisible afterwards. On failure especially: a
+      // stage that went wrong is the one you most want to be able to read.
+      reply: reply.text,
+      activity: reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
 

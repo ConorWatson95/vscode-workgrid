@@ -4,6 +4,7 @@ import {
   DenialItem,
   QuestionItem,
   Subtask,
+  SubtaskActivity,
   TaskPipeline,
   TaskStage,
 } from "./taskPipeline";
@@ -268,7 +269,15 @@ export function startSubtask(
 export function finishSubtask(
   pipeline: TaskPipeline,
   subtaskId: string,
-  outcome: { status: "done" | "failed" | "skipped"; at: string; reason?: string },
+  outcome: {
+    status: "done" | "failed" | "skipped";
+    at: string;
+    reason?: string;
+    /** What the agent said, kept so the stage is not invisible afterwards. */
+    reply?: string;
+    /** What it actually did: tools, commands, files, output. */
+    activity?: SubtaskActivity;
+  },
 ): Result<TaskPipeline, PipelineError> {
   const found = locate(pipeline, subtaskId);
   if (!found) return err(unknownSubtask(subtaskId));
@@ -287,6 +296,9 @@ export function finishSubtask(
           status: outcome.status,
           finishedAt: outcome.at,
           failureReason: outcome.status === "failed" ? outcome.reason : undefined,
+          // Kept on failure too — a failed stage is the one you most want to read.
+          reply: outcome.reply?.trim() || s.reply,
+          activity: outcome.activity ?? s.activity,
         }
       : s,
   );
@@ -621,6 +633,12 @@ export function approveStage(
   pipeline: TaskPipeline,
   stageId: string,
   at: string,
+  /**
+   * Something the operator wants later stages to know, given at the moment they
+   * have just read what this stage produced. Recorded rather than acted on here:
+   * the engine runs nothing.
+   */
+  note?: string,
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
@@ -643,9 +661,24 @@ export function approveStage(
     });
   }
 
+  const trimmed = note?.trim();
+  const guidance = trimmed
+    ? [
+        ...(pipeline.guidance ?? []),
+        {
+          id: `g${(pipeline.guidance?.length ?? 0) + 1}`,
+          stageId: stage.id,
+          stageName: stage.name,
+          text: trimmed,
+          at,
+        },
+      ]
+    : pipeline.guidance;
+
   return ok({
     ...replaceStage(pipeline, { ...stage, status: "passed", finishedAt: at }),
     currentStage: undefined,
+    guidance,
   });
 }
 

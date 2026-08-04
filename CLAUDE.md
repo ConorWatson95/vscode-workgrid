@@ -210,6 +210,33 @@ worked out.
   same tree row, panel and answer flow as a `NEEDS-INFO` one, and only the submit
   handler differs — answer the waiting call, or enrich the brief and re-run.
 
+### Seeing and steering a run
+
+Three related facilities, all answers to "the pipeline is a snapshot and the
+sessions are invisible":
+
+- **`domain/stageRefresh.ts`** — `refreshPendingStages` reloads `intent` and
+  `model` from current config for stages that have **not started**, run at the top
+  of every advance. A stage that has already run keeps what it ran with, so history
+  stays truthful. `splittable` is deliberately excluded: it decides how many
+  subtasks a stage has, so refreshing it would reshape a pipeline mid-flight.
+  `revertToStage` re-opens a stage *and everything after it*, discarding those runs
+  (including their checklist items, which otherwise gate the task on evidence about
+  work that no longer exists) but **keeping the operator's guidance**.
+- **Approval notes** (`TaskPipeline.guidance`) — approving asks for an optional
+  note. It is cumulative, handed to every later stage via `StageContext.guidance`,
+  and the prompt says it outranks the brief. The gate is the one moment a human has
+  just read what a stage produced and knows something the route does not; without
+  somewhere to put it, acting on it meant editing the brief or re-running a stage.
+- **`agents/stageActivity.ts` + `ui/stageReport.ts`** — a stage session's reply used
+  to be parsed for a marker and discarded, so a deployment preview that printed
+  pages of output left nothing behind. `StageActivityWatcher` (fed from the same
+  subscription as `DenialWatcher`) records tool counts, commands **verbatim**, files
+  written/read and command output; `formatStageReport` renders it as markdown.
+  Output is capped (`MAX_OUTPUT_CHARS`) because it lands in the state file, which is
+  read and rewritten whole — and truncation is announced, since output that just
+  stops reads as the command having stopped.
+
 **Status:** wired end to end — route picker → stages in the tree → Advance Route
 drives split/run/checklist → approve gate. Remaining gap: stage outcomes are
 **self-reported**. `finishSubtask(..., "done")` records that the agent session

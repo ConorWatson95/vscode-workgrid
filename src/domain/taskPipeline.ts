@@ -41,6 +41,52 @@ export interface Subtask {
   finishedAt?: string;
   /** Set when status is "failed" — why it failed, for display and retry. */
   failureReason?: string;
+  /**
+   * What the agent said at the end, kept verbatim.
+   *
+   * A stage session is otherwise invisible: the reply was parsed for a marker and
+   * then discarded, so a preview that produced pages of output left nothing to
+   * look at and had to be run again by hand to be seen.
+   */
+  reply?: string;
+  /** What the subtask actually did: tools, commands, files, output. */
+  activity?: SubtaskActivity;
+}
+
+/**
+ * A record of what one subtask did.
+ *
+ * Deliberately a summary rather than a transcript: this lives in the task state
+ * file, which is read and rewritten whole on every update, so an unbounded
+ * transcript here would make every later write more expensive. See
+ * `agents/stageActivity.ts` for what is kept and why.
+ */
+export interface SubtaskActivity {
+  /** Tool name to call count. */
+  toolCounts?: Record<string, number>;
+  /** Shell commands run, verbatim, so a wrong flag is visible afterwards. */
+  commands?: string[];
+  pathsWritten?: string[];
+  pathsRead?: string[];
+  /** Command output, capped. */
+  output?: string;
+}
+
+/**
+ * Something the operator said when approving a stage.
+ *
+ * The gate is the moment a human has just read what a stage produced and knows
+ * something the route does not — "deploy only this project", "skip the Motability
+ * variant". Without somewhere to put it, acting on it meant editing the brief or
+ * re-running a stage, so the knowledge was either lost or expensive.
+ */
+export interface GuidanceNote {
+  id: string;
+  /** Stage that was being approved, so the note can be attributed. */
+  stageId: string;
+  stageName: string;
+  text: string;
+  at: string;
 }
 
 /**
@@ -123,6 +169,14 @@ export interface TaskPipeline {
    * of what was refused and which rule would fix it.
    */
   pendingDenials?: PendingDenials;
+  /**
+   * What the operator told the route while approving stages, oldest first.
+   *
+   * Cumulative and handed to every later stage, because guidance given at one gate
+   * is usually about the work that follows — "deploy only this project" has to
+   * survive past the next stage to be worth anything.
+   */
+  guidance?: GuidanceNote[];
 }
 
 /** Refusals from one stage, waiting on a decision. */
@@ -229,7 +283,31 @@ export function normalizePipeline(
     currentStage: raw.currentStage,
     pendingQuestion: normalizeQuestion(raw.pendingQuestion),
     pendingDenials: normalizeDenials(raw.pendingDenials),
+    guidance: normalizeGuidance(raw.guidance),
   };
+}
+
+/**
+ * Keeps stored approval notes, dropping any that lost their text.
+ *
+ * Returns undefined rather than an empty array so a pipeline that never had
+ * guidance round-trips unchanged.
+ */
+function normalizeGuidance(stored: unknown): GuidanceNote[] | undefined {
+  if (!Array.isArray(stored)) return undefined;
+  const notes = stored
+    .filter(
+      (note): note is GuidanceNote =>
+        Boolean(note) && typeof note.text === "string" && note.text.trim().length > 0,
+    )
+    .map((note, index) => ({
+      id: note.id ?? `g${index + 1}`,
+      stageId: note.stageId ?? "",
+      stageName: note.stageName ?? note.stageId ?? "",
+      text: note.text.trim(),
+      at: note.at ?? "",
+    }));
+  return notes.length > 0 ? notes : undefined;
 }
 
 /** Keeps stored refusals only when there is something actionable left. */

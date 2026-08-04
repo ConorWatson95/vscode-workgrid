@@ -20,6 +20,7 @@ import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { PermissionRulesService } from "../services/permissionRulesService";
 import { PermissionGateService } from "../services/permissionGateService";
 import { AskUserService } from "../services/askUserService";
+import { StageDefinitionSource } from "../domain/stageRefresh";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -55,6 +56,11 @@ export interface CommandContext {
    * degrades to enriching the brief and re-running when it is not installed.
    */
   askUser?: AskUserService;
+  /**
+   * Current project config, for reloading a re-opened stage's instructions.
+   * Optional so the command degrades to reverting without a reload.
+   */
+  stageDefinitions?: () => StageDefinitionSource;
   resolveRepositoryRoot: () => string | undefined;
   repositoryUri: () => vscode.Uri | undefined;
 }

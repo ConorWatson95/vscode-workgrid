@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -256,6 +256,18 @@
         "title": "Deny",
         "category": "Task Workspaces",
         "icon": "$(circle-slash)"
+      },
+      {
+        "command": "taskWorkspaces.showStageReport",
+        "title": "Show What This Did",
+        "category": "Task Workspaces",
+        "icon": "$(output)"
+      },
+      {
+        "command": "taskWorkspaces.revertToStage",
+        "title": "Re-run This Stage…",
+        "category": "Task Workspaces",
+        "icon": "$(debug-restart)"
       }
     ],
     "menus": {
@@ -466,6 +478,26 @@
           "command": "taskWorkspaces.denyHeldCall",
           "when": "view == taskWorkspaces.tree && viewItem =~ /heldCall/",
           "group": "heldCall@4"
+        },
+        {
+          "command": "taskWorkspaces.showStageReport",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /stage/",
+          "group": "inline@0"
+        },
+        {
+          "command": "taskWorkspaces.showStageReport",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /stage/",
+          "group": "stage@1"
+        },
+        {
+          "command": "taskWorkspaces.revertToStage",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /stage/",
+          "group": "stage@9"
+        },
+        {
+          "command": "taskWorkspaces.showStageReport",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
+          "group": "harness@5"
         }
       ],
       "commandPalette": [
@@ -713,7 +745,7 @@
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "Advance the route automatically once you have answered all of a stage's questions.\n\nAnswering is already a deliberate act and its only purpose is to unblock the route, so the confirmation afterwards only created a window in which the task sat idle. The answers are appended to the brief and the stage that asked them re-runs with it.\n\nTurn this off to be asked first. Either way, progress shows in the status bar and **Stop Agent** interrupts it."
+          "markdownDescription": "Advance the route automatically once you have answered all of a stage's questions, or approved a stage.\n\nAnswering and approving are both deliberate acts whose only purpose is to unblock the route, so the confirmation afterwards only created a window in which the task sat idle.\n\nTurn this off to be asked first. Either way, progress shows in the status bar and **Stop Agent** interrupts it."
         },
         "taskWorkspaces.interactiveQuestions": {
           "type": "boolean",

@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
+import { formatStageReport, formatTaskReport } from "../ui/stageReport";
+import { refreshPendingStages, revertToStage } from "../domain/stageRefresh";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -90,6 +92,8 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.advanceRoute", (arg) => advanceRouteCommand(ctx, arg)),
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
+    register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
+    register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
     register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
     register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
     register("taskWorkspaces.allowAllDenials", (arg) => allowAllDenialsCommand(ctx, arg)),
@@ -559,6 +563,120 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
  * Approves a stage held at a human gate. The engine refuses while verification
  * items are outstanding, so this reports which ones rather than forcing through.
  */
+/**
+ * Shows what a stage actually did, in a read-only document.
+ *
+ * A stage session is otherwise invisible: it runs headless, and its reply used to
+ * be parsed for a marker and then discarded. A deployment preview that produced
+ * pages of output left nothing behind, so the only way to see it was to run the
+ * command again by hand.
+ */
+async function showStageReportCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const stageItem = arg instanceof StageTreeItem ? arg : undefined;
+  const task = await ctx.repository.get(
+    stageItem?.task.id ?? (arg instanceof TaskWorkspaceTreeItem ? arg.task.id : ""),
+  );
+  if (!task) {
+    void vscode.window.showInformationMessage("No task selected.");
+    return;
+  }
+
+  // A stage row reports that stage; the task row reports everything it has done.
+  const content = stageItem
+    ? formatStageReport(
+        task.name,
+        task.pipeline?.stages.find((s) => s.id === stageItem.stage.id) ??
+          stageItem.stage,
+        task.pipeline,
+      )
+    : formatTaskReport(task.name, task.pipeline);
+
+  // An untitled document rather than a custom scheme: it is markdown, so preview
+  // works, and the user can keep, edit or paste it without any of it being ours.
+  const document = await vscode.workspace.openTextDocument({
+    content,
+    language: "markdown",
+  });
+  await vscode.window.showTextDocument(document, { preview: true });
+}
+
+/**
+ * Re-opens a stage that has already run, reloading its definition from config.
+ *
+ * The case this is for: a stage ran with an instruction that turned out to be
+ * wrong, the instruction has been fixed in `harness.json`, and the stage needs
+ * doing again. Recreating the task would work but throws away its history and
+ * everything already approved.
+ */
+async function revertToStageCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop the agent before reverting.`,
+    );
+    return;
+  }
+
+  const preview = revertToStage(task.pipeline, arg.stage.id);
+  if (!preview) return;
+
+  // Confirmed because it discards work: later stages were built on output that is
+  // about to go, and their checklist items with them.
+  const also = preview.reopened.length - 1;
+  const confirmed = await vscode.window.showWarningMessage(
+    `Re-run "${arg.stage.name}"?`,
+    {
+      modal: true,
+      detail:
+        (also > 0
+          ? `${also} later stage(s) will be re-opened too, because they were built on output this discards. `
+          : "") +
+        "Recorded output and verification items for those stages are discarded. " +
+        "Your approval notes are kept, and stage instructions are reloaded from harness.json.",
+    },
+    "Re-run Stage",
+  );
+  if (confirmed !== "Re-run Stage") return;
+
+  // Reloaded after reverting, not before: the stages that just became pending are
+  // exactly the ones whose instructions should come from current config.
+  const refreshed = ctx.stageDefinitions
+    ? refreshPendingStages(preview.pipeline, ctx.stageDefinitions())
+    : { pipeline: preview.pipeline, changed: [] as string[] };
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: refreshed.pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] reverted to "${arg.stage.name}"; re-opened ${preview.reopened.join(", ")}` +
+      (refreshed.changed.length > 0
+        ? `; reloaded ${refreshed.changed.join(", ")} from harness.json.`
+        : "."),
+  );
+
+  const next = await vscode.window.showInformationMessage(
+    refreshed.changed.length > 0
+      ? `Re-opened ${preview.reopened.length} stage(s) and reloaded their instructions.`
+      : `Re-opened ${preview.reopened.length} stage(s).`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
 async function approveStageCommand(
   ctx: CommandContext,
   arg: unknown,
@@ -567,7 +685,26 @@ async function approveStageCommand(
   const task = await ctx.repository.get(arg.task.id);
   if (!task?.pipeline) return;
 
-  const result = approveStage(task.pipeline, arg.stage.id, new Date().toISOString());
+  // Approval is the one moment a human has just read what a stage produced and
+  // knows something the route does not — "deploy only this project", "leave the
+  // Motability variant alone". Without somewhere to put it, acting on it meant
+  // editing the brief or re-running a stage, so it was either lost or expensive.
+  // Blank is the common case and costs one Enter.
+  const note = await vscode.window.showInputBox({
+    title: `Approve "${arg.stage.name}"`,
+    prompt: "Anything the following stages should know? Leave blank to just approve.",
+    placeHolder: "e.g. deploy only this ticket's project, with -Project",
+    ignoreFocusOut: true,
+  });
+  // Escape means "I did not mean to approve"; an empty string means "approve, no note".
+  if (note === undefined) return;
+
+  const result = approveStage(
+    task.pipeline,
+    arg.stage.id,
+    new Date().toISOString(),
+    note,
+  );
   if (!result.ok) {
     const choice = await vscode.window.showWarningMessage(
       result.error.message,
@@ -583,7 +720,17 @@ async function approveStageCommand(
     updatedAt: new Date().toISOString(),
   });
   ctx.tree.refresh();
-  ctx.logger.info(`Harness [${task.name}] approved "${arg.stage.name}".`);
+  ctx.logger.info(
+    `Harness [${task.name}] approved "${arg.stage.name}"` +
+      (note?.trim() ? ` with guidance: ${note.trim()}` : "."),
+  );
+
+  // Approving is as deliberate as answering a question, and its only purpose is to
+  // let the route continue — so it continues, on the same setting.
+  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+    return;
+  }
 
   const next = await vscode.window.showInformationMessage(
     `Approved "${arg.stage.name}".`,
@@ -666,6 +813,27 @@ async function advanceRouteCommand(
     return;
   }
 
+  // Reload the instructions of stages that have not started yet. A pipeline is a
+  // snapshot, which is right for its *structure* — a route edited mid-flight must
+  // not rewrite a task already moving through it — but it also froze each stage's
+  // intent, so a wrong instruction could only be fixed by recreating the task.
+  // Stages that have already run keep what they ran with, so history stays true.
+  let advancing = task;
+  if (ctx.stageDefinitions && task.pipeline) {
+    const refreshed = refreshPendingStages(task.pipeline, ctx.stageDefinitions());
+    if (refreshed.changed.length > 0) {
+      advancing = {
+        ...task,
+        pipeline: refreshed.pipeline,
+        updatedAt: new Date().toISOString(),
+      };
+      await ctx.repository.save(advancing);
+      ctx.logger.info(
+        `Harness [${task.name}] reloaded ${refreshed.changed.join(", ")} from harness.json.`,
+      );
+    }
+  }
+
   // Status-bar progress, not a notification. A route runs for many minutes and
   // several can run at once; one dismissable toast per task would bury the ones
   // that actually need an answer. The sidebar already shows which stage and
@@ -673,7 +841,7 @@ async function advanceRouteCommand(
   // outcomes that need a human get a notification, below.
   const report = await withStatus(`Advancing "${task.name}"`, (step) => {
     step("asking the engine what is next");
-    return ctx.runner.advance(task);
+    return ctx.runner.advance(advancing);
   });
 
   ctx.tree.refresh();
