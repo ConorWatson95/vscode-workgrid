@@ -23,6 +23,9 @@ import {
 
 /** Every stage kind a route may declare. Routes own the whole lifecycle. */
 const ROUTE_STAGE_KINDS: readonly StageKind[] = [
+  // Neither planning nor deployment may come from a rule: a rule adds
+  // verification, and both of these are the route lifecycle's own business.
+  "planning",
   "implementation",
   // A rule may not contribute one: shipping work is the route lifecycle's job.
   "deployment",

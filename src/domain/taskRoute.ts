@@ -16,6 +16,18 @@
  * correctness depends on business behaviour rather than static analysis.
  */
 export type StageKind =
+  /**
+   * Decides what should be done, and changes nothing.
+   *
+   * Separate from `implementation` for the same reason `deployment` is: only one
+   * of them authored the work a review has findings about. Sending findings to
+   * planning is a real and sometimes necessary move — a review that says an object
+   * is in the wrong layer has found a *planning* error, and re-implementing
+   * against the same wrong plan reproduces it — but it re-opens everything after
+   * planning, so it must be asked for by name rather than picked up by a review
+   * that only meant "back to whoever wrote this".
+   */
+  | "planning"
   /** Produces or changes code. */
   | "implementation"
   /**
@@ -45,6 +57,7 @@ export type StageKind =
 
 /** Every stage kind, for validating config that names one. */
 export const ALL_STAGE_KINDS: readonly StageKind[] = [
+  "planning",
   "implementation",
   "deployment",
   "test",

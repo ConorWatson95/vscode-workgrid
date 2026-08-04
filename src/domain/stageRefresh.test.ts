@@ -429,3 +429,29 @@ describe("sendBackTargets and deployment stages", () => {
     expect(sendBackTargets(p, "review").map((s) => s.id)).toEqual(["write"]);
   });
 });
+
+describe("sendBackTargets and planning stages", () => {
+  const route = (sendBackTo: string[]) =>
+    pipeline([
+      stage({ id: "plan", name: "Plan", kind: "planning" }),
+      stage({ id: "write", name: "Write it", kind: "implementation" }),
+      stage({ id: "deploy", name: "Deploy", kind: "deployment" }),
+      stage({ id: "review", name: "Review", kind: "domainReview", sendBackTo }),
+    ]);
+
+  it("does not offer planning for kind:implementation", () => {
+    // "Back to whoever wrote this" must not silently mean "plan it all again":
+    // re-opening planning discards every stage after it.
+    expect(sendBackTargets(route(["kind:implementation"]), "review").map((s) => s.id)).toEqual([
+      "write",
+    ]);
+  });
+
+  it("offers planning when it is asked for by name", () => {
+    // A review that finds an object in the wrong layer has found a planning error,
+    // and re-implementing against the same plan reproduces it.
+    expect(
+      sendBackTargets(route(["kind:implementation", "kind:planning"]), "review").map((s) => s.id),
+    ).toEqual(["write", "plan"]);
+  });
+});
