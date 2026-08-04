@@ -4,6 +4,7 @@ import {
   revertToStage,
   sendBackTargets,
   sendBackToStage,
+  repositionRuleStages,
 } from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 import { RouteDefinition } from "./taskRoute";
@@ -453,5 +454,68 @@ describe("sendBackTargets and planning stages", () => {
     expect(
       sendBackTargets(route(["kind:implementation", "kind:planning"]), "review").map((s) => s.id),
     ).toEqual(["write", "plan"]);
+  });
+});
+
+describe("repositionRuleStages", () => {
+  const barrier = (stages: readonly TaskStage[]) => {
+    const at = stages.findIndex(
+      (s) =>
+        (s.status === "pending" || s.status === "awaiting-approval") &&
+        (s.kind === "deployment" || s.kind === "humanVerification"),
+    );
+    return at === -1 ? stages.length : at;
+  };
+
+  const spoiled = () =>
+    pipeline([
+      stage({ id: "migration", kind: "implementation", status: "passed" }),
+      stage({ id: "deploy", name: "Deploy to DEV", kind: "deployment", status: "pending" }),
+      stage({ id: "verify", kind: "test", status: "pending" }),
+      stage({ id: "r-sql", kind: "domainReview", status: "pending", addedByRule: "SQL changed" }),
+      stage({ id: "signoff", kind: "humanVerification", status: "pending" }),
+    ]);
+
+  it("moves a pending review ahead of the deployment it should precede", () => {
+    // The repair for an existing task: an earlier build spliced reviews before the
+    // first human gate, which in this route is after the deploy.
+    const result = repositionRuleStages(spoiled(), barrier);
+    expect(result.moved).toEqual(["r-sql"]);
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "migration",
+      "r-sql",
+      "deploy",
+      "verify",
+      "signoff",
+    ]);
+  });
+
+  it("leaves a review that has already run where it ran", () => {
+    // Re-ordering history to match the current rule would misreport what happened.
+    const p = spoiled();
+    p.stages[3].status = "passed";
+    const result = repositionRuleStages(p, barrier);
+    expect(result.moved).toEqual([]);
+    expect(result.pipeline).toBe(p);
+  });
+
+  it("leaves route stages alone, however they are ordered", () => {
+    const p = spoiled();
+    delete p.stages[3].addedByRule;
+    expect(repositionRuleStages(p, barrier).moved).toEqual([]);
+  });
+
+  it("does nothing when the reviews are already in front", () => {
+    const p = pipeline([
+      stage({ id: "r-sql", kind: "domainReview", status: "pending", addedByRule: "x" }),
+      stage({ id: "deploy", kind: "deployment", status: "pending" }),
+    ]);
+    expect(repositionRuleStages(p, barrier).moved).toEqual([]);
+  });
+
+  it("does not mutate the pipeline it was given", () => {
+    const p = spoiled();
+    repositionRuleStages(p, barrier);
+    expect(p.stages.map((s) => s.id)[1]).toBe("deploy");
   });
 });

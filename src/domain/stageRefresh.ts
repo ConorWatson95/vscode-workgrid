@@ -148,6 +148,43 @@ export function revertToStage(
 }
 
 /**
+ * Moves rule-added reviews that have not run yet back in front of the barrier.
+ *
+ * A repair, for tasks whose reviews were spliced by an earlier build that placed
+ * them before the first human gate — which in a route that deploys to dev before
+ * signing off meant *after* the deployment. A pipeline is a snapshot, so fixing
+ * the splice rule fixed new tasks and left existing ones with a SQL review
+ * scheduled after the SQL had been deployed.
+ *
+ * Only **pending** rule stages move. A review that has already run stays where it
+ * ran: re-ordering history to match the current rule would misreport what actually
+ * happened, which is worse than an out-of-date order.
+ */
+export function repositionRuleStages(
+  pipeline: TaskPipeline,
+  insertionIndex: (stages: readonly TaskStage[]) => number,
+): { pipeline: TaskPipeline; moved: string[] } {
+  const barrier = insertionIndex(pipeline.stages);
+  const movable = pipeline.stages.filter(
+    (stage, index) =>
+      index > barrier && stage.addedByRule !== undefined && stage.status === "pending",
+  );
+  if (movable.length === 0) return { pipeline, moved: [] };
+
+  const rest = pipeline.stages.filter((stage) => !movable.includes(stage));
+  // Recomputed against the remaining stages: removing the movable ones can shift
+  // where the barrier sits, so splicing at the old index could land past it.
+  const target = insertionIndex(rest);
+  const stages = [...rest];
+  stages.splice(target, 0, ...movable);
+
+  return {
+    pipeline: { ...pipeline, stages },
+    moved: movable.map((stage) => stage.id),
+  };
+}
+
+/**
  * Stages a given stage's findings may be sent back to, nearest first.
  *
  * Only what the stage declares in `sendBackTo`, so an undeclared stage offers

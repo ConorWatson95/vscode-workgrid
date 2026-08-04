@@ -2,11 +2,13 @@ import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
+import { ruleInsertionIndex } from "../domain/pipelineEngine";
 import {
   refreshPendingStages,
   revertToStage,
   sendBackTargets,
   sendBackToStage,
+  repositionRuleStages,
 } from "../domain/stageRefresh";
 import {
   formatFindings,
@@ -986,6 +988,28 @@ async function advanceRouteCommand(
       await ctx.repository.save(advancing);
       ctx.logger.info(
         `Harness [${task.name}] reloaded ${refreshed.changed.join(", ")} from harness.json.`,
+      );
+    }
+  }
+
+  // Repairs a task whose reviews were spliced after a deployment by an earlier
+  // build. Done here rather than as a stored-state migration because it depends on
+  // stage *kinds*, which only became distinct recently — a task created before that
+  // has no deployment stage to get in front of, and repairs itself once its route
+  // is reloaded. Only stages that have not run move.
+  if (advancing.pipeline) {
+    const ordered = repositionRuleStages(advancing.pipeline, ruleInsertionIndex);
+    if (ordered.moved.length > 0) {
+      advancing = {
+        ...advancing,
+        pipeline: ordered.pipeline,
+        updatedAt: new Date().toISOString(),
+      };
+      await ctx.repository.save(advancing);
+      ctx.tree.refresh();
+      ctx.logger.info(
+        `Harness [${advancing.name}] moved ${ordered.moved.join(", ")} ahead of the ` +
+          "first deployment or gate, so they run before anything is shipped.",
       );
     }
   }
