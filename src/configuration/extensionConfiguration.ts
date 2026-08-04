@@ -1,215 +1,140 @@
 import * as vscode from "vscode";
 import { CopyEntry } from "../domain/worktreeCopyPlan";
+import {
+  AgentMode,
+  ContextStrategy,
+  HarnessSettings,
+  PermissionMode,
+} from "./harnessSettings";
 
 const SECTION = "taskWorkspaces";
 
-/** Typed accessor over the extension's contributed settings. */
+/**
+ * Typed accessor over the extension's contributed settings.
+ *
+ * A shell: every default and every normalisation rule lives in
+ * `HarnessSettings`, which knows nothing about VS Code. All this adds is the
+ * value source and resource scoping — plus the two writers, which stay here
+ * because persisting a setting is inherently the editor's job. A headless
+ * caller uses `HarnessSettings` directly and gets the readers only.
+ */
 export class ExtensionConfiguration {
-  private config(scope?: vscode.Uri): vscode.WorkspaceConfiguration {
-    return vscode.workspace.getConfiguration(SECTION, scope ?? null);
+  private settings(scope?: vscode.Uri): HarnessSettings {
+    // WorkspaceConfiguration already satisfies SettingsReader.
+    return new HarnessSettings(vscode.workspace.getConfiguration(SECTION, scope ?? null));
   }
 
   worktreeParentDir(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("worktreeParentDir", "").trim();
+    return this.settings(scope).worktreeParentDir();
   }
 
   branchPrefixes(scope?: vscode.Uri): string[] {
-    const prefixes = this.config(scope).get<string[]>("branchPrefixes", []);
-    return prefixes.length > 0
-      ? prefixes
-      : ["feature", "bug", "fix", "perf", "refactor", "chore"];
+    return this.settings(scope).branchPrefixes();
   }
 
   defaultBaseBranch(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("defaultBaseBranch", "").trim();
+    return this.settings(scope).defaultBaseBranch();
   }
 
-  /**
-   * Files and directories copied into every new worktree. A fresh worktree lacks
-   * everything git does not track, so untracked local config has to be brought
-   * across or an agent behaves differently there than in the main checkout.
-   */
   copyIntoWorktree(scope?: vscode.Uri): CopyEntry[] {
-    return this.config(scope).get<CopyEntry[]>("copyIntoWorktree", []);
+    return this.settings(scope).copyIntoWorktree();
   }
 
-  /**
-   * Location of the project's review-rules file. Empty means the conventional
-   * path inside the repository. Resource-scoped, so each project can differ.
-   */
   reviewRulesPath(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("reviewRulesPath", "").trim();
+    return this.settings(scope).reviewRulesPath();
   }
 
-  /**
-   * Location of the project's harness config (routes + review rules). Falls back
-   * to the older `reviewRulesPath` when only that is set, so an existing
-   * configuration keeps working.
-   */
   harnessConfigPath(scope?: vscode.Uri): string {
-    const configured = this.config(scope).get<string>("harnessConfigPath", "").trim();
-    return configured || this.reviewRulesPath(scope);
+    return this.settings(scope).harnessConfigPath();
   }
 
   claudeCommand(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("claudeCommand", "claude").trim() || "claude";
+    return this.settings(scope).claudeCommand();
   }
 
-  agentMode(scope?: vscode.Uri): "native" | "chat" | "terminal" {
-    return this.config(scope).get<"native" | "chat" | "terminal">("agentMode", "native");
+  agentMode(scope?: vscode.Uri): AgentMode {
+    return this.settings(scope).agentMode();
   }
 
-  permissionMode(scope?: vscode.Uri): "default" | "acceptEdits" | "plan" | "bypassPermissions" {
-    return this.config(scope).get("permissionMode", "acceptEdits");
+  permissionMode(scope?: vscode.Uri): PermissionMode {
+    return this.settings(scope).permissionMode();
+  }
+
+  model(scope?: vscode.Uri): string {
+    return this.settings(scope).model();
+  }
+
+  trackNativeActivity(scope?: vscode.Uri): boolean {
+    return this.settings(scope).trackNativeActivity();
+  }
+
+  compactPromptThreshold(scope?: vscode.Uri): number {
+    return this.settings(scope).compactPromptThreshold();
+  }
+
+  contextStrategy(scope?: vscode.Uri): ContextStrategy {
+    return this.settings(scope).contextStrategy();
+  }
+
+  autoCompactThreshold(scope?: vscode.Uri): number {
+    return this.settings(scope).autoCompactThreshold();
+  }
+
+  pauseOnPermissionDenial(scope?: vscode.Uri): boolean {
+    return this.settings(scope).pauseOnPermissionDenial();
+  }
+
+  gateInterpreter(scope?: vscode.Uri): string {
+    return this.settings(scope).gateInterpreter();
+  }
+
+  interactivePermissions(scope?: vscode.Uri): boolean {
+    return this.settings(scope).interactivePermissions();
+  }
+
+  gatedTools(scope?: vscode.Uri): string[] {
+    return this.settings(scope).gatedTools();
+  }
+
+  permissionWaitMinutes(scope?: vscode.Uri): number {
+    return this.settings(scope).permissionWaitMinutes();
+  }
+
+  holdEveryToolCall(scope?: vscode.Uri): boolean {
+    return this.settings(scope).holdEveryToolCall();
+  }
+
+  projectDocsPath(scope?: vscode.Uri): string {
+    return this.settings(scope).projectDocsPath();
+  }
+
+  mcpConfigPath(scope?: vscode.Uri): string {
+    return this.settings(scope).mcpConfigPath();
+  }
+
+  stageTimeoutMinutes(scope?: vscode.Uri): number {
+    return this.settings(scope).stageTimeoutMinutes();
   }
 
   /**
    * Persists the permission mode so subsequent chats default to it. Writes to
    * workspace settings when a workspace is open, else to global settings.
    */
-  async setPermissionMode(
-    mode: "default" | "acceptEdits" | "plan" | "bypassPermissions",
-    scope?: vscode.Uri,
-  ): Promise<void> {
-    const target = vscode.workspace.workspaceFolders?.length
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
-    await this.config(scope).update("permissionMode", mode, target);
-  }
-
-  /** Model alias/id for chat sessions ("" = CLI default). */
-  model(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("model", "").trim();
+  async setPermissionMode(mode: PermissionMode, scope?: vscode.Uri): Promise<void> {
+    await this.write("permissionMode", mode, scope);
   }
 
   /** Persists the chosen model so subsequent chats default to it. */
   async setModel(model: string, scope?: vscode.Uri): Promise<void> {
+    await this.write("model", model, scope);
+  }
+
+  private async write(key: string, value: unknown, scope?: vscode.Uri): Promise<void> {
     const target = vscode.workspace.workspaceFolders?.length
       ? vscode.ConfigurationTarget.Workspace
       : vscode.ConfigurationTarget.Global;
-    await this.config(scope).update("model", model, target);
-  }
-
-  trackNativeActivity(scope?: vscode.Uri): boolean {
-    return this.config(scope).get<boolean>("trackNativeActivity", true);
-  }
-
-  compactPromptThreshold(scope?: vscode.Uri): number {
-    return this.config(scope).get<number>("compactPromptThreshold", 120000);
-  }
-
-  /**
-   * What to do when a session crosses `autoCompactThreshold`: summarise in place
-   * ("compact") or write a handoff and continue in a fresh session
-   * ("checkpoint"). Checkpointing keeps carried-forward context bounded.
-   */
-  contextStrategy(scope?: vscode.Uri): "compact" | "checkpoint" {
-    return this.config(scope).get<"compact" | "checkpoint">(
-      "contextStrategy",
-      "compact",
-    );
-  }
-
-  autoCompactThreshold(scope?: vscode.Uri): number {
-    return this.config(scope).get<number>("autoCompactThreshold", 0);
-  }
-
-  /**
-   * Whether a refused tool call stops the route so the permission can be granted.
-   *
-   * On by default: a stage that could not run a command it judged necessary has
-   * not done its job, and carrying on buries that behind whatever it did instead.
-   */
-  pauseOnPermissionDenial(scope?: vscode.Uri): boolean {
-    return this.config(scope).get<boolean>("pauseOnPermissionDenial", true);
-  }
-
-  /**
-   * What runs the gate's hook script.
-   *
-   * Node rather than a shell, because the script has to poll a directory and
-   * answer on stdout, and a portable shell script that does that does not exist
-   * across cmd, PowerShell and bash. Configurable for the case where node is
-   * installed somewhere off PATH.
-   */
-  gateInterpreter(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("gateInterpreter", "node").trim() || "node";
-  }
-
-  /** Whether a refused tool call is held open for approval instead of failing. */
-  interactivePermissions(scope?: vscode.Uri): boolean {
-    return this.config(scope).get<boolean>("interactivePermissions", true);
-  }
-
-  /**
-   * Tools the gate hook is installed for. Others never reach it, so they cost
-   * nothing — which is why this is a list rather than "everything".
-   */
-  gatedTools(scope?: vscode.Uri): string[] {
-    const configured = this.config(scope).get<string[]>("gatedTools", []);
-    const cleaned = (configured ?? [])
-      .map((tool) => tool.trim())
-      .filter((tool) => tool.length > 0);
-    return cleaned.length > 0
-      ? cleaned
-      : ["Bash", "PowerShell", "Write", "Edit", "NotebookEdit"];
-  }
-
-  /**
-   * How long a held call may wait, in minutes.
-   *
-   * Enforced by the CLI's own hook timeout. Verified honoured to well past four
-   * minutes; the default leaves room for a person who has stepped away briefly.
-   */
-  permissionWaitMinutes(scope?: vscode.Uri): number {
-    const value = this.config(scope).get<number>("permissionWaitMinutes", 15);
-    return Number.isFinite(value) && value > 0 ? value : 15;
-  }
-
-  /**
-   * Hold every gated call rather than only capabilities already refused.
-   *
-   * Off by default: the pass-by-default gate exists so safe reads are not stopped
-   * and so this extension does not have to guess at the CLI's own idea of a safe
-   * command.
-   */
-  holdEveryToolCall(scope?: vscode.Uri): boolean {
-    return this.config(scope).get<boolean>("holdEveryToolCall", false);
-  }
-
-  /**
-   * Where the project keeps its own documentation, named to every stage.
-   *
-   * Empty disables the guidance entirely — a project with no documentation
-   * convention should not be told to invent one mid-task.
-   */
-  projectDocsPath(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("projectDocsPath", "docs/").trim();
-  }
-
-  /**
-   * MCP config to load explicitly into every session, relative to the
-   * repository root (or absolute). Empty disables it.
-   *
-   * Read from the **repository root**, never the worktree, for the same reason
-   * review rules are: MCP servers grant tool access, and a branch must not be
-   * able to hand itself new capabilities by editing a file.
-   */
-  mcpConfigPath(scope?: vscode.Uri): string {
-    return this.config(scope).get<string>("mcpConfigPath", ".mcp.json").trim();
-  }
-
-  /**
-   * Hard stop for one subtask, so a hung CLI cannot stall a route forever.
-   *
-   * Generous by default: a planning stage on a large repository legitimately
-   * takes tens of minutes, and per-process overhead on the host machine (virus
-   * scanning on spawn, most often) can multiply that several times over. A cap
-   * that fires during normal work is worse than no cap, because the stage is
-   * recorded as failed.
-   */
-  stageTimeoutMinutes(scope?: vscode.Uri): number {
-    const minutes = this.config(scope).get<number>("stageTimeoutMinutes", 45);
-    return minutes > 0 ? minutes : 45;
+    await vscode.workspace
+      .getConfiguration(SECTION, scope ?? null)
+      .update(key, value, target);
   }
 }

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { OutputChannelLogger } from "./logging/logger";
+import { OutputChannelLogger } from "./logging/outputChannelLogger";
 import { GitClient } from "./git/gitClient";
 import { GitStatusService } from "./git/gitStatusService";
 import { GitWorktreeService } from "./git/gitWorktreeService";

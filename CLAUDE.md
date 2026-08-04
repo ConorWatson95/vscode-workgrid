@@ -32,10 +32,20 @@ clean typecheck as evidence the tests still compile.
 
 Examples: `storedStateMigration.ts` (pure) vs `extensionStateTaskRepository.ts`
 (Memento shell); `reviewRulesFile.ts` (parsing) vs `reviewRulesService.ts` (fs);
-`taskPhase.ts`/`statusPresentation.ts` (pure derivation) vs the tree provider.
+`taskPhase.ts`/`statusPresentation.ts` (pure derivation) vs the tree provider;
+`harnessSettings.ts` (defaults + normalisation) vs `extensionConfiguration.ts`
+(scoping + the two writers); `logger.ts` (interface only) vs
+`outputChannelLogger.ts`.
 
 If you find yourself unable to test something, that's the signal to split it, not
 to skip the test.
+
+**`headlessBoundary.test.ts` enforces this.** It statically walks relative
+imports from every module a headless run must construct — services, persistence,
+settings, git, and the whole route-execution path in `agents/` — and fails with
+the offending chain if any reaches `vscode`. One convenience import in a shared
+module taints everything above it, so add new headless entry points to its root
+list rather than discovering the breakage later.
 
 ## Layout
 

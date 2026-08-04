@@ -1,8 +1,11 @@
-import * as vscode from "vscode";
-
 /**
  * Minimal structured logging surface. Services depend on this interface, not on
  * the VS Code output channel directly, so they stay testable.
+ *
+ * The interface lives apart from any implementation on purpose: importing it
+ * must not drag `vscode` in, or every module that logs would become
+ * unreachable from a headless run and untestable under vitest. The VS Code
+ * implementation is in `outputChannelLogger.ts`.
  */
 export interface Logger {
   info(message: string): void;
@@ -13,31 +16,42 @@ export interface Logger {
   show?(): void;
 }
 
-export class OutputChannelLogger implements Logger {
-  constructor(private readonly channel: vscode.LogOutputChannel) {}
+/** Formats an optional error the way every implementation should. */
+export function formatLogError(error: unknown): string {
+  return error instanceof Error ? error.stack ?? error.message : String(error);
+}
+
+/**
+ * Logger for runs with no editor attached. Levels go to the matching console
+ * stream so a caller can separate diagnostics from output by redirecting
+ * stderr.
+ */
+export class ConsoleLogger implements Logger {
+  constructor(private readonly debugEnabled = false) {}
 
   info(message: string): void {
-    this.channel.info(message);
+    console.error(`info  ${message}`);
   }
 
   warn(message: string): void {
-    this.channel.warn(message);
+    console.error(`warn  ${message}`);
   }
 
   error(message: string, error?: unknown): void {
-    if (error === undefined) {
-      this.channel.error(message);
-    } else {
-      const detail = error instanceof Error ? error.stack ?? error.message : String(error);
-      this.channel.error(`${message}\n${detail}`);
-    }
+    console.error(
+      error === undefined ? `error ${message}` : `error ${message}\n${formatLogError(error)}`,
+    );
   }
 
   debug(message: string): void {
-    this.channel.debug(message);
+    if (this.debugEnabled) console.error(`debug ${message}`);
   }
+}
 
-  show(): void {
-    this.channel.show(true);
-  }
+/** Discards everything. For tests and for callers that do not want output. */
+export class NullLogger implements Logger {
+  info(): void {}
+  warn(): void {}
+  error(): void {}
+  debug(): void {}
 }
