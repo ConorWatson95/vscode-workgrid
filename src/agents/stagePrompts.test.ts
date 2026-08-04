@@ -359,3 +359,21 @@ describe("parseChecklistReply", () => {
     expect(parseChecklistReply("")).toEqual([]);
   });
 });
+
+describe("re-run awareness", () => {
+  it("tells every stage its earlier output may already exist", () => {
+    // A stage is the unit of re-run, so a cold session reading "write the migration
+    // and a paired rollback" writes them again when only a folder was missing.
+    const prompt = subtaskPrompt(
+      CONTEXT,
+      stage({ intent: "Write the forward migration and a PAIRED rollback." }),
+      { id: "s1-1", title: "Migration", prompt: "Write it.", status: "pending" },
+    );
+    expect(prompt).toContain("may have run before");
+    expect(prompt).toContain("do not rewrite work that is already correct");
+  });
+
+  it("says it in a behaviour review too, since those are re-opened as well", () => {
+    expect(behaviourReviewPrompt(CONTEXT, stage())).toContain("may have run before");
+  });
+});

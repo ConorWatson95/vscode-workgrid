@@ -59,6 +59,16 @@ function preamble(context: StageContext, stage: TaskStage): string {
     "",
     "You are one stage of a defined workflow and have no memory of earlier stages.",
     "",
+    // Without this a re-run redoes the whole stage. A stage is the unit of re-run —
+    // sending findings back, reverting, retrying after a refused tool all re-open
+    // one — and a cold session reading "write the migration and a paired rollback"
+    // duly writes them again, when the actual defect was a missing folder. Minutes
+    // of model time to change one thing, and the correct work churned on the way.
+    `This stage may have run before, and its earlier output may already be in the`,
+    `worktree. Look at what is there before creating anything. Change only what is`,
+    `actually wrong or missing; do not rewrite work that is already correct, and say`,
+    `what you found already in place and what you changed.`,
+    "",
     `If the brief does not tell you enough to do this properly — it may be only a`,
     `ticket reference — do NOT guess and do NOT proceed. First check whether the`,
     `answer is already available to you: read the code, and use any ticket tooling`,
