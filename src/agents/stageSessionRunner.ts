@@ -30,6 +30,20 @@ export interface StageSessions {
 }
 
 /**
+ * The permission gate, as far as a stage run needs it: somewhere to install the
+ * hook before the session starts, and somewhere to hand it back afterwards.
+ *
+ * Narrowed to an interface so the run loop keeps its existing tests, which have
+ * no filesystem.
+ */
+export interface StageGate {
+  /** Installs the hook and returns the settings file to pass the CLI. */
+  prepare(taskId: string): { settingsPath: string } | undefined;
+  /** Stops watching. Also tells any still-blocked hook that nobody is listening. */
+  release(taskId: string): void;
+}
+
+/**
  * Runs one stage prompt to completion in a **fresh** Claude session.
  *
  * `AgentSessionManager.create` stops any existing session for the task first, so
@@ -46,6 +60,12 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     private readonly logger: Logger,
     /** Hard stop per subtask, so a hung CLI cannot stall the route forever. */
     private readonly timeoutMs = 15 * 60 * 1000,
+    /**
+     * Holds refused tool calls open for the user instead of letting them be
+     * denied. Optional: without it a stage behaves as it did before the gate
+     * existed, which is also the fallback when the hook cannot be installed.
+     */
+    private readonly gate?: StageGate,
   ) {}
 
   run(
@@ -76,10 +96,14 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
     // already finished with. Left enabled it spent a model turn summarising a
     // context nobody would read again, once per subtask.
     const base = this.optionsFor(task);
+    // Installed per subtask, because each one is a fresh CLI process and the
+    // hook is passed as a command-line argument.
+    const gateSession = this.gate?.prepare(task.id);
     const session = this.sessions.create(
       task.id,
       {
         ...base,
+        settingsPath: gateSession?.settingsPath ?? base.settingsPath,
         autoCompactThreshold: 0,
         // A stage's own model wins; an absent or blank one leaves the
         // extension-wide setting in place rather than clearing it.
@@ -102,6 +126,9 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         clearTimeout(timer);
         session.off("status", onStatus);
         session.off("item", onItem);
+        // The CLI has gone, so anything still holding is holding for nothing —
+        // and a row the user could click but never satisfy is worse than none.
+        if (gateSession) this.gate?.release(task.id);
         resolve(result);
       };
 

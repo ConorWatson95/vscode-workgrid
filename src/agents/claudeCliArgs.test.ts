@@ -66,9 +66,47 @@ describe("buildCliArgs", () => {
         model: "opus",
         addDirs: ["C:/repo"],
         mcpConfigPath: "C:/repo/.mcp.json",
+        settingsPath: "C:/gates/t1/settings.json",
       });
       expect(args[args.length - 2]).toBe("--mcp-config");
       expect(args[args.length - 1]).toBe("C:/repo/.mcp.json");
+    });
+  });
+
+  describe("--settings", () => {
+    it("passes the gate settings file when one is given", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        settingsPath: "C:/gates/t1/settings.json",
+      });
+      expect(valueOf(args, "--settings")).toBe("C:/gates/t1/settings.json");
+    });
+
+    it("is omitted when absent or blank", () => {
+      expect(buildCliArgs(BASE)).not.toContain("--settings");
+      expect(buildCliArgs({ ...BASE, settingsPath: "   " })).not.toContain(
+        "--settings",
+      );
+    });
+
+    it("quotes a path with spaces when a shell will re-parse it", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        settingsPath: "C:/Users/Conor Watson/gates/settings.json",
+        useShell: true,
+      });
+      expect(valueOf(args, "--settings")).toBe(
+        '"C:/Users/Conor Watson/gates/settings.json"',
+      );
+    });
+
+    it("comes before --mcp-config, which swallows what follows it", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        settingsPath: "C:/gates/t1/settings.json",
+        mcpConfigPath: "C:/repo/.mcp.json",
+      });
+      expect(args.indexOf("--settings")).toBeLessThan(args.indexOf("--mcp-config"));
     });
   });
 

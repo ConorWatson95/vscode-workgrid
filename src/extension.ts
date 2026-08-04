@@ -31,7 +31,9 @@ import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import * as fs from "node:fs";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
 import { PermissionRulesService } from "./services/permissionRulesService";
-import { suggestAllowRules } from "./agents/permissionDenials";
+import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials";
+import { PermissionGateService } from "./services/permissionGateService";
+import { nodeGateFileSystem } from "./services/gateFileSystem";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -127,6 +129,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffProvider),
   );
 
+  // Holds a refused tool call open until the user decides, so the agent carries
+  // on mid-turn instead of the stage being re-run once a rule is added. Created
+  // before the tree because the tree renders what it is holding.
+  const permissionGate = new PermissionGateService(
+    vscode.Uri.joinPath(context.globalStorageUri, "permission-gates").fsPath,
+    nodeGateFileSystem,
+    logger,
+    () => configuration.gateInterpreter(repositoryUri),
+    () => configuration.gatedTools(repositoryUri),
+    () => Math.round(configuration.permissionWaitMinutes(repositoryUri) * 60),
+    () => configuration.holdEveryToolCall(repositoryUri),
+  );
+  context.subscriptions.push({ dispose: () => permissionGate.dispose() });
+
   // --- Tree view --------------------------------------------------------
   const tree = new TaskWorkspaceTreeProvider(
     service,
@@ -143,6 +159,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       return undefined;
     },
+    (taskId) => permissionGate.waiting(taskId),
+    (held) =>
+      // Reuses the denial rule derivation, so "Always allow" produces the same
+      // shape of rule as the after-the-fact flow — tool-aware, and generalised
+      // past the ticket-specific filename.
+      suggestAllowRule({
+        tool: held.request.toolName,
+        command: held.detail,
+        reason: "held for approval",
+        attempts: 1,
+      }),
   );
   context.subscriptions.push(tree);
 
@@ -248,6 +275,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }),
   );
 
+  // A held call is live state the tree cannot derive, so it has to be told.
+  context.subscriptions.push({
+    dispose: permissionGate.onChanged(() => tree.refresh()),
+  });
+
   // Each subtask runs in a fresh session, so route stages never share context.
   const stageRunner = new ClaudeStageSessionRunner(
     sessions,
@@ -270,6 +302,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
+    {
+      prepare: (taskId) =>
+        configuration.interactivePermissions(repositoryUri)
+          ? permissionGate.prepare(taskId)
+          : undefined,
+      release: (taskId) => permissionGate.release(taskId),
+    },
   );
   const permissionRules = new PermissionRulesService(logger);
   // Shared: also used when granting a rule, to refresh an existing worktree's copy.
@@ -284,6 +323,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Announced the instant it happens, so the user is not left waiting out a
     // stage that has already lost the tool it wanted.
     (task, denial) => {
+      // The refusal that teaches the gate. From here on this capability is held
+      // for the user rather than refused again, so the agent's retry — which it
+      // was going to make anyway — becomes the interactive prompt.
+      permissionGate.noteDenial(task.id, denial.tool, denial.command);
+
       const rule = suggestAllowRules([denial])[0];
       void vscode.window
         .showWarningMessage(
@@ -331,6 +375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {
     permissionRules,
+    permissionGate,
     service,
     worktrees: worktreeService,
     status: statusService,

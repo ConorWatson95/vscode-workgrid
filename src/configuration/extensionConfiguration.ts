@@ -125,6 +125,59 @@ export class ExtensionConfiguration {
   }
 
   /**
+   * What runs the gate's hook script.
+   *
+   * Node rather than a shell, because the script has to poll a directory and
+   * answer on stdout, and a portable shell script that does that does not exist
+   * across cmd, PowerShell and bash. Configurable for the case where node is
+   * installed somewhere off PATH.
+   */
+  gateInterpreter(scope?: vscode.Uri): string {
+    return this.config(scope).get<string>("gateInterpreter", "node").trim() || "node";
+  }
+
+  /** Whether a refused tool call is held open for approval instead of failing. */
+  interactivePermissions(scope?: vscode.Uri): boolean {
+    return this.config(scope).get<boolean>("interactivePermissions", true);
+  }
+
+  /**
+   * Tools the gate hook is installed for. Others never reach it, so they cost
+   * nothing — which is why this is a list rather than "everything".
+   */
+  gatedTools(scope?: vscode.Uri): string[] {
+    const configured = this.config(scope).get<string[]>("gatedTools", []);
+    const cleaned = (configured ?? [])
+      .map((tool) => tool.trim())
+      .filter((tool) => tool.length > 0);
+    return cleaned.length > 0
+      ? cleaned
+      : ["Bash", "PowerShell", "Write", "Edit", "NotebookEdit"];
+  }
+
+  /**
+   * How long a held call may wait, in minutes.
+   *
+   * Enforced by the CLI's own hook timeout. Verified honoured to well past four
+   * minutes; the default leaves room for a person who has stepped away briefly.
+   */
+  permissionWaitMinutes(scope?: vscode.Uri): number {
+    const value = this.config(scope).get<number>("permissionWaitMinutes", 15);
+    return Number.isFinite(value) && value > 0 ? value : 15;
+  }
+
+  /**
+   * Hold every gated call rather than only capabilities already refused.
+   *
+   * Off by default: the pass-by-default gate exists so safe reads are not stopped
+   * and so this extension does not have to guess at the CLI's own idea of a safe
+   * command.
+   */
+  holdEveryToolCall(scope?: vscode.Uri): boolean {
+    return this.config(scope).get<boolean>("holdEveryToolCall", false);
+  }
+
+  /**
    * Where the project keeps its own documentation, named to every stage.
    *
    * Empty disables the guidance entirely — a project with no documentation

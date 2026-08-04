@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { ApprovalScope } from "../domain/permissionGatePolicy";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -11,6 +12,7 @@ import {
   StageTreeItem,
   ChecklistTreeItem,
   DenialTreeItem,
+  HeldCallTreeItem,
 } from "../ui/taskWorkspaceTreeItem";
 import {
   answerQuestion,
@@ -92,10 +94,135 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
     register("taskWorkspaces.allowAllDenials", (arg) => allowAllDenialsCommand(ctx, arg)),
     register("taskWorkspaces.dismissDenial", (arg) => dismissDenialCommand(ctx, arg)),
+    register("taskWorkspaces.decideHeldCall", (arg) => decideHeldCallCommand(ctx, arg)),
+    register("taskWorkspaces.approveHeldCall", (arg) =>
+      answerHeldCall(ctx, arg, "allow", "session"),
+    ),
+    register("taskWorkspaces.approveHeldCallOnce", (arg) =>
+      answerHeldCall(ctx, arg, "allow", "once"),
+    ),
+    register("taskWorkspaces.denyHeldCall", (arg) =>
+      answerHeldCall(ctx, arg, "deny", "session"),
+    ),
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
     ),
   ];
+}
+
+/**
+ * Offers the choices for a tool call the agent is currently blocked on.
+ *
+ * A quick pick rather than a modal or a webview: the agent is paused, so this
+ * wants to be answerable in one keystroke, and it must not steal focus from
+ * whatever the user is reading. "Always allow" is offered last and only when a
+ * rule can actually be derived — a rule that would never match again is the noise
+ * the previous version of this generated.
+ */
+async function decideHeldCallCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof HeldCallTreeItem)) return;
+  const gate = ctx.permissionGate;
+  if (!gate) return;
+
+  type Choice = vscode.QuickPickItem & {
+    decision?: "allow" | "deny";
+    scope?: ApprovalScope;
+  };
+
+  const choices: Choice[] = [
+    {
+      label: "$(check) Allow for this task",
+      description: "and stop asking about this capability",
+      detail: "Nothing is written to disk; the approval lasts until the window closes.",
+      decision: "allow",
+      scope: "session",
+    },
+    {
+      label: "$(debug-step-over) Allow once",
+      description: "just this call",
+      decision: "allow",
+      scope: "once",
+    },
+    {
+      label: "$(circle-slash) Deny",
+      description: "the agent is told it may not do this",
+      detail: "It will work around it or say why it cannot continue.",
+      decision: "deny",
+      scope: "session",
+    },
+  ];
+  if (arg.rule) {
+    choices.push({
+      label: "$(law) Always allow",
+      description: arg.rule,
+      detail: "Adds the rule to .claude/settings.local.json, so future tasks skip this.",
+      decision: "allow",
+      scope: "always",
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(choices, {
+    title: `${arg.held.request.toolName} is waiting`,
+    placeHolder: arg.held.detail,
+    ignoreFocusOut: true,
+  });
+  if (!picked?.decision) return;
+
+  await answerHeldCall(ctx, arg, picked.decision, picked.scope ?? "once");
+}
+
+/**
+ * Answers a held call, and for "always" writes the rule too.
+ *
+ * The decision reaches the waiting hook through the gate's inbox, so the agent
+ * continues from exactly where it stopped. Nothing here re-runs a stage: that was
+ * the cost of the old after-the-fact flow, and removing it is the point.
+ */
+async function answerHeldCall(
+  ctx: CommandContext,
+  arg: unknown,
+  decision: "allow" | "deny",
+  scope: ApprovalScope,
+): Promise<void> {
+  if (!(arg instanceof HeldCallTreeItem)) return;
+  const gate = ctx.permissionGate;
+  if (!gate) return;
+
+  if (scope === "always" && arg.rule) {
+    const written = ctx.permissionRules.addAllowRules(arg.task.repositoryRoot, [
+      arg.rule,
+    ]);
+    if (written.problem) {
+      // Answer the call anyway: the agent is blocked, and failing to write a
+      // convenience rule is no reason to leave it that way.
+      void vscode.window.showErrorMessage(
+        `${written.problem} The call was still allowed for this task.`,
+      );
+      gate.decide(arg.held.request.id, decision, "session");
+      ctx.tree.refresh();
+      return;
+    }
+    // The worktree gets its own copy of the settings file, so refresh it or the
+    // rule only takes effect for tasks created afterwards.
+    ctx.provisioner.provision(
+      ctx.configuration.copyIntoWorktree(ctx.repositoryUri()),
+      arg.task.repositoryRoot,
+      arg.task.worktreePath,
+    );
+  }
+
+  const answered = gate.decide(arg.held.request.id, decision, scope);
+  if (!answered) {
+    // The CLI gave up waiting, or the stage ended. Saying so beats a row that
+    // silently does nothing.
+    void vscode.window.showWarningMessage(
+      "That call is no longer waiting — the stage moved on or timed out.",
+    );
+  }
+  ctx.tree.refresh();
 }
 
 /**

@@ -19,13 +19,23 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     readonly task: TaskWorkspace,
     readonly live: TaskWorkspaceLiveState | undefined,
     readonly agentActivity: AgentActivity | undefined,
+    /**
+     * Tool calls the agent is blocked on right now. Counted here because they
+     * decide whether the row can be expanded at all — a held call the user cannot
+     * reach is a route stopped with no way to restart it.
+     */
+    readonly heldCallCount = 0,
   ) {
     // A harnessed task expands to show its route; an unharnessed one has no
-    // children, so it stays a leaf exactly as before.
+    // children, so it stays a leaf exactly as before — unless something is
+    // waiting on the user, which is always reachable.
+    const hasChildren = (task.pipeline?.stages.length ?? 0) > 0 || heldCallCount > 0;
     super(
       task.name,
-      (task.pipeline?.stages.length ?? 0) > 0
-        ? vscode.TreeItemCollapsibleState.Collapsed
+      hasChildren
+        ? heldCallCount > 0
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
     );
     this.id = task.id;
@@ -72,6 +82,13 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     const descriptionParts = [statusLabel];
     // Lead with the block: a route waiting on an answer is doing nothing, and
     // that is invisible otherwise.
+    if (heldCallCount > 0) {
+      descriptionParts.unshift(
+        heldCallCount === 1
+          ? "paused — 1 call waiting"
+          : `paused — ${heldCallCount} calls waiting`,
+      );
+    }
     if (questions > 0) {
       descriptionParts.unshift(
         questions === 1 ? "1 question" : `${questions} questions`,
@@ -250,6 +267,66 @@ export class DenialTreeItem extends vscode.TreeItem {
         .join("\n"),
     );
   }
+}
+
+/**
+ * A tool call the agent is **currently blocked on**, waiting for a decision.
+ *
+ * Distinct from `DenialTreeItem`, which reports a refusal after the fact. This
+ * one is live: the CLI is paused on it, and approving lets the agent carry on
+ * mid-turn. Rendered urgently for that reason — the route is doing nothing at all
+ * until it is answered.
+ */
+export class HeldCallTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly task: TaskWorkspace,
+    readonly held: {
+      request: { id: string; toolName: string };
+      detail: string;
+      waitingSince: string;
+    },
+    /** The rule "Always allow" would add, when one can be derived. */
+    readonly rule: string | undefined,
+  ) {
+    super(held.detail, vscode.TreeItemCollapsibleState.None);
+    this.id = `${task.id}/held/${held.request.id}`;
+    this.iconPath = new vscode.ThemeIcon(
+      "debug-pause",
+      new vscode.ThemeColor("notificationsWarningIcon.foreground"),
+    );
+    this.contextValue = rule ? "heldCallWithRule" : "heldCall";
+    this.description = `${held.request.toolName} · waiting ${formatWaited(held.waitingSince)}`;
+    this.tooltip = new vscode.MarkdownString(
+      [
+        `**${held.request.toolName} is waiting for you**`,
+        "",
+        "```",
+        held.detail,
+        "```",
+        `The agent is paused on this call — the route will not progress until you decide.`,
+        "",
+        rule
+          ? `"Always allow" also adds \`${rule}\` to \`.claude/settings.local.json\`.`
+          : "No rule can be derived from this call, so it can only be approved for now or for this session.",
+      ].join("\n"),
+    );
+    // Clicking is the common case, so make it the safe one: show the choices
+    // rather than granting anything.
+    this.command = {
+      command: "taskWorkspaces.decideHeldCall",
+      title: "Decide",
+      arguments: [this],
+    };
+  }
+}
+
+/** Rough, and deliberately so: the point is "a while", not a stopwatch. */
+function formatWaited(since: string): string {
+  const started = Date.parse(since);
+  if (Number.isNaN(started)) return "…";
+  const seconds = Math.max(0, Math.round((Date.now() - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 /** A node representing an untracked git worktree that can be adopted. */

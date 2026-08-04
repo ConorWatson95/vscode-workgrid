@@ -18,6 +18,7 @@ import { ReviewPlanService } from "../services/reviewPlanService";
 import { PipelineRunner } from "../services/pipelineRunner";
 import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { PermissionRulesService } from "../services/permissionRulesService";
+import { PermissionGateService } from "../services/permissionGateService";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -43,6 +44,11 @@ export interface CommandContext {
   globalState: vscode.Memento;
   /** Adds allow rules to the project's local Claude settings. */
   permissionRules: PermissionRulesService;
+  /**
+   * Holds refused tool calls open for approval. Optional so the commands degrade
+   * to the after-the-fact denial flow when the gate could not be installed.
+   */
+  permissionGate?: PermissionGateService;
   resolveRepositoryRoot: () => string | undefined;
   repositoryUri: () => vscode.Uri | undefined;
 }

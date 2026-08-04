@@ -27,6 +27,15 @@ export interface CliArgsInput {
    */
   mcpConfigPath?: string;
   /**
+   * Extra settings file layered over the user's own, used to install the
+   * permission gate hook.
+   *
+   * A file the extension owns, never the user's `.claude/settings.local.json`:
+   * the hook is machinery for one run and must not accumulate in a file they
+   * maintain. It adds no permissions, so it cannot widen what the agent may do.
+   */
+  settingsPath?: string;
+  /**
    * True when the process is spawned through a shell (Windows), in which case
    * arguments carrying paths have to be quoted or a space ends the argument.
    */
@@ -105,6 +114,11 @@ export function buildCliArgs(input: CliArgsInput): string[] {
   for (const dir of input.addDirs ?? []) {
     if (dir.trim().length === 0) continue;
     args.push("--add-dir", quoteForShell(dir, input.useShell));
+  }
+
+  // Before --mcp-config, which must stay last.
+  if (input.settingsPath && input.settingsPath.trim().length > 0) {
+    args.push("--settings", quoteForShell(input.settingsPath.trim(), input.useShell));
   }
 
   // Deliberately not --strict-mcp-config: this adds the project's servers, it

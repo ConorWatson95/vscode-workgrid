@@ -42,6 +42,12 @@ export interface StreamSessionOptions {
    * the project's `.mcp.json` is unapproved there and none of its servers start.
    */
   mcpConfigPath?: string;
+  /**
+   * Absolute path to an extra settings file (`--settings`), layered over the
+   * user's own. Used to install the permission gate hook, which holds a tool call
+   * open while the user decides instead of letting it be refused outright.
+   */
+  settingsPath?: string;
   /** Resume this existing Claude session id instead of starting a new one. */
   resumeSessionId?: string;
   /** Auto-compact once context exceeds this many tokens (0 = never). */
@@ -159,12 +165,16 @@ export class ClaudeStreamSession {
       model: this.options.model,
       addDirs: this.options.addDirs,
       mcpConfigPath: this.options.mcpConfigPath,
+      settingsPath: this.options.settingsPath,
       useShell,
     });
 
     this.logger.info(`Starting Claude stream session in ${this.options.worktreePath}`);
     if (this.options.mcpConfigPath) {
       this.logger.info(`MCP servers from ${this.options.mcpConfigPath}`);
+    }
+    if (this.options.settingsPath) {
+      this.logger.info(`Permission gate active (${this.options.settingsPath}).`);
     }
     this.child = spawn(this.options.command, args, {
       cwd: this.options.worktreePath,

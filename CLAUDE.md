@@ -115,6 +115,42 @@ are outstanding.
 - `agents/stageSessionRunner.ts` — the real adapter over `AgentSessionManager`.
   `create()` stops any existing session, so each subtask starts empty.
 
+### The permission gate
+
+A headless stage has nobody to approve anything, so any call not covered by
+`permissions.allow` is refused; the agent rewords it several times, works around
+it, and the stage has to be re-run once a rule is added. The gate replaces that:
+a `PreToolUse` command hook (`agents/permissionGateScript.ts`, shipped as a
+string) parks the call in a per-task inbox and blocks; `PermissionGateService`
+sweeps the inbox, applies `domain/permissionGatePolicy.ts`, and writes back
+`allow`/`deny`. The agent then continues **mid-turn** — no re-run, and no rule
+needed just to unblock.
+
+Facts established by probing the CLI, so they are not re-derived:
+
+- **`can_use_tool` is unreachable.** It is a real CLI→host control request, but
+  it is only emitted down the CLI's own bridge channel. Advertising the
+  capability over stdin changes nothing.
+- **`PermissionRequest` hooks do not fire in print mode.** There is no prompt
+  surface headlessly, so there is no request to hook — the call is just denied.
+- **`permissionDecision: "ask"` becomes a denial.** It does not raise a prompt
+  to the host either.
+- So `PreToolUse` + `allow`/`deny` is the whole mechanism, and it fires for
+  **every** tool call.
+- **A hook may block for a long time.** Verified honoured to 282s with
+  `timeout: 900`; the run then completed with `permission_denials: []`.
+
+Two invariants follow from that last point, and both are load-bearing:
+
+- **Emitting no stdout means "pass".** Any `permissionDecision` at all overrides
+  the CLI's own classifier, so a pass spelled as `allow` would silently grant
+  everything the gate declined to hold. The gate passes by default and holds only
+  capabilities the CLI has *already* refused — which is why it does not need to
+  replicate the CLI's idea of a safe command, and must not start.
+- **Paths in the settings file must be absolute and the hook command quoted.**
+  The CLI reads it with the *worktree* as cwd, so a relative path silently never
+  fires, which looks exactly like the feature being off.
+
 **Status:** wired end to end — route picker → stages in the tree → Advance Route
 drives split/run/checklist → approve gate. Remaining gap: stage outcomes are
 **self-reported**. `finishSubtask(..., "done")` records that the agent session

@@ -7,9 +7,11 @@ import {
   StageTreeItem,
   ChecklistTreeItem,
   DenialTreeItem,
+  HeldCallTreeItem,
 } from "./taskWorkspaceTreeItem";
 import { Logger } from "../logging/logger";
 import { AgentActivity } from "./statusPresentation";
+import { PendingGate } from "../services/permissionGateService";
 
 type TreeNode =
   | TaskWorkspaceTreeItem
@@ -17,7 +19,8 @@ type TreeNode =
   | MessageTreeItem
   | StageTreeItem
   | ChecklistTreeItem
-  | DenialTreeItem;
+  | DenialTreeItem
+  | HeldCallTreeItem;
 
 /**
  * Tree data provider for the Task Workspaces view. Resolves the active
@@ -38,6 +41,15 @@ export class TaskWorkspaceTreeProvider
     private readonly getAgentActivity: (
       task: import("../domain/taskWorkspace").TaskWorkspace,
     ) => AgentActivity | undefined,
+    /**
+     * Tool calls the agent is blocked on right now. Live rather than persisted:
+     * a held call only exists while a CLI process is waiting on it, so it must
+     * come from the gate and not from the task record.
+     */
+    private readonly getHeldCalls: (taskId: string) => PendingGate[] = () => [],
+    /** The rule "Always allow" would add for a held call, when one exists. */
+    private readonly ruleForHeldCall: (held: PendingGate) => string | undefined = () =>
+      undefined,
   ) {}
 
   refresh(): void {
@@ -63,9 +75,17 @@ export class TaskWorkspaceTreeProvider
     // A harnessed task expands into its route's stages; a stage expands into the
     // verification items it raised. Everything else is a leaf.
     if (element instanceof TaskWorkspaceTreeItem) {
-      return (element.task.pipeline?.stages ?? []).map(
+      // Held calls lead, and sit under the task rather than a stage: the agent is
+      // stopped dead on them, and burying one inside a collapsed stage is how the
+      // last version of this made rows the user could not reach.
+      const held = this.getHeldCalls(element.task.id).map(
+        (call) =>
+          new HeldCallTreeItem(element.task, call, this.ruleForHeldCall(call)),
+      );
+      const stages = (element.task.pipeline?.stages ?? []).map(
         (stage) => new StageTreeItem(element.task, stage),
       );
+      return [...held, ...stages];
     }
     if (element instanceof StageTreeItem) {
       const checklist = (element.stage.checklist ?? []).map(
@@ -110,7 +130,12 @@ export class TaskWorkspaceTreeProvider
     for (const { task } of reconciled) {
       const live = await this.service.getLiveState(task);
       nodes.push(
-        new TaskWorkspaceTreeItem(task, live, this.getAgentActivity(task)),
+        new TaskWorkspaceTreeItem(
+          task,
+          live,
+          this.getAgentActivity(task),
+          this.getHeldCalls(task.id).length,
+        ),
       );
     }
 
