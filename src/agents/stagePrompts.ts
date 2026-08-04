@@ -34,6 +34,13 @@ export interface StageContext {
    * if it expires at the next stage boundary.
    */
   guidance?: string[];
+  /**
+   * What earlier stages concluded, oldest first.
+   *
+   * The counterweight to a fresh session per subtask: independence is worth
+   * paying for, re-deriving what the last stage established is not.
+   */
+  handoffs?: { stageName: string; text: string }[];
 }
 
 /**
@@ -52,11 +59,11 @@ export const NEEDS_INFO_MARKER = "NEEDS-INFO:";
  */
 function preamble(context: StageContext, stage: TaskStage): string {
   return [
-    `Task: ${context.taskName}`,
-    context.taskDescription ? `Brief: ${context.taskDescription}` : "",
-    `Branch: ${context.branchName} (based on ${context.baseBranch})`,
-    `Stage: ${stage.name}`,
-    "",
+    // Invariant text first, task-specific text last. Prompt caching matches on a
+    // *prefix*, so leading with "Task: <name>" made every stage's prompt differ from
+    // the first character and nothing was reusable across the dozen sessions a route
+    // spawns. This block is byte-identical for every stage of every task, which is
+    // the only way any of it can be cached.
     "You are one stage of a defined workflow and have no memory of earlier stages.",
     "",
     // Without this a re-run redoes the whole stage. A stage is the unit of re-run —
@@ -98,6 +105,25 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `run in-process, while every shell call pays a process launch. Reserve the shell`,
     `for work that genuinely needs it, and when you do use it, combine the steps`,
     `into one command rather than issuing several.`,
+    ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
+
+    // Everything below varies per task and per stage, so it comes after the block
+    // above — see the note at the top of this function.
+    "",
+    `Task: ${context.taskName}`,
+    context.taskDescription ? `Brief: ${context.taskDescription}` : "",
+    `Branch: ${context.branchName} (based on ${context.baseBranch})`,
+    `Stage: ${stage.name}`,
+    ...(context.handoffs && context.handoffs.length > 0
+      ? [
+          "",
+          "Earlier stages of this task concluded the following. Treat it as established",
+          "and do not re-derive it; go and look only if something contradicts it:",
+          ...context.handoffs.map(
+            (handoff) => `\n[${handoff.stageName}]\n${handoff.text}`,
+          ),
+        ]
+      : []),
     ...(context.guidance && context.guidance.length > 0
       ? [
           "",
@@ -106,7 +132,6 @@ function preamble(context: StageContext, stage: TaskStage): string {
           ...context.guidance.map((note) => `- ${note}`),
         ]
       : []),
-    ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
   ]
     .filter(Boolean)
     .join("\n");

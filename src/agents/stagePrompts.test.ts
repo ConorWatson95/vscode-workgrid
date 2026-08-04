@@ -377,3 +377,36 @@ describe("re-run awareness", () => {
     expect(behaviourReviewPrompt(CONTEXT, stage())).toContain("may have run before");
   });
 });
+
+describe("prompt prefix and handoffs", () => {
+  it("leads with invariant text, so a prefix is cacheable across stages", () => {
+    // Leading with "Task: <name>" made every stage's prompt differ from the first
+    // character, so nothing was reusable across the dozen sessions a route spawns.
+    const a = subtaskPrompt({ ...CONTEXT, taskName: "One" }, stage(), {
+      id: "s1-1", title: "t", prompt: "p", status: "pending",
+    });
+    const b = subtaskPrompt({ ...CONTEXT, taskName: "Two" }, stage(), {
+      id: "s1-1", title: "t", prompt: "p", status: "pending",
+    });
+    let shared = 0;
+    while (shared < a.length && a[shared] === b[shared]) shared++;
+    expect(shared).toBeGreaterThan(800);
+  });
+
+  it("passes earlier conclusions on, marked as established", () => {
+    const prompt = subtaskPrompt(
+      { ...CONTEXT, handoffs: [{ stageName: "Plan", text: "Put it in apps/, not the overlay." }] },
+      stage(),
+      { id: "s1-1", title: "t", prompt: "p", status: "pending" },
+    );
+    expect(prompt).toContain("Put it in apps/, not the overlay.");
+    expect(prompt).toContain("do not re-derive it");
+    expect(prompt).toContain("[Plan]");
+  });
+
+  it("says nothing about handoffs when there are none", () => {
+    expect(subtaskPrompt(CONTEXT, stage(), {
+      id: "s1-1", title: "t", prompt: "p", status: "pending",
+    })).not.toContain("do not re-derive");
+  });
+});

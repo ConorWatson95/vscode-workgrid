@@ -7,6 +7,8 @@ import {
   nextAction,
   outstandingChecklist,
   ruleInsertionIndex,
+  recordHandoff,
+  handoffsBefore,
   pipelineProgress,
   planStage,
   answerQuestion,
@@ -979,5 +981,65 @@ describe("ruleInsertionIndex", () => {
 
   it("appends when there is no barrier at all", () => {
     expect(ruleInsertionIndex([s("write", "implementation")])).toBe(1);
+  });
+});
+
+describe("stage handoffs", () => {
+  const withHandoff = (): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        { id: "plan", name: "Plan", kind: "planning", status: "pending", intent: "", splittable: false, requiresApproval: false, handoff: true, subtasks: [] },
+        { id: "build", name: "Build", kind: "implementation", status: "pending", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "review", name: "Review", kind: "codeReview", status: "pending", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+      ],
+    }) as TaskPipeline;
+
+  it("records a conclusion for a stage that opted in", () => {
+    const p = recordHandoff(withHandoff(), "plan", "  Put it in apps/, not the overlay.  ", "t1");
+    expect(p.handoffs).toEqual([
+      { stageId: "plan", stageName: "Plan", text: "Put it in apps/, not the overlay.", at: "t1" },
+    ]);
+  });
+
+  it("ignores a stage that did not opt in", () => {
+    // The fresh session is what makes a stage cheap; carrying every reply forward
+    // would rebuild the long conversation the design avoids.
+    const p = withHandoff();
+    expect(recordHandoff(p, "build", "something", "t1")).toBe(p);
+  });
+
+  it("replaces its own earlier entry rather than appending", () => {
+    // Otherwise a re-run leaves two versions of the truth for later stages.
+    let p = recordHandoff(withHandoff(), "plan", "first", "t1");
+    p = recordHandoff(p, "plan", "second", "t2");
+    expect(p.handoffs).toHaveLength(1);
+    expect(p.handoffs![0].text).toBe("second");
+  });
+
+  it("caps a long conclusion and says it did", () => {
+    const p = recordHandoff(withHandoff(), "plan", "x".repeat(5000), "t1");
+    expect(p.handoffs![0].text.length).toBeLessThan(2000);
+    expect(p.handoffs![0].text).toContain("truncated");
+  });
+
+  it("ignores an empty conclusion", () => {
+    const p = withHandoff();
+    expect(recordHandoff(p, "plan", "   ", "t1")).toBe(p);
+  });
+
+  it("gives a later stage only what came before it", () => {
+    let p = recordHandoff(withHandoff(), "plan", "layering decided", "t1");
+    expect(handoffsBefore(p, "review").map((h) => h.stageName)).toEqual(["Plan"]);
+    expect(handoffsBefore(p, "plan")).toEqual([]);
+  });
+
+  it("orders handoffs by the route, not by when they were recorded", () => {
+    // A re-run would otherwise put an early stage's conclusion last.
+    const base = withHandoff();
+    base.stages[1].handoff = true;
+    let p = recordHandoff(base, "build", "built it", "t2");
+    p = recordHandoff(p, "plan", "planned it", "t1");
+    expect(handoffsBefore(p, "review").map((h) => h.stageName)).toEqual(["Plan", "Build"]);
   });
 });

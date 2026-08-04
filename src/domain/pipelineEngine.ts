@@ -7,6 +7,7 @@ import {
   SubtaskActivity,
   TaskPipeline,
   TaskStage,
+  truncateHandoff,
 } from "./taskPipeline";
 import { RouteDefinition, RouteStageDefinition } from "./taskRoute";
 import {
@@ -80,6 +81,7 @@ function createStage(
     ...(definition.sendBackTo && definition.sendBackTo.length > 0
       ? { sendBackTo: [...definition.sendBackTo] }
       : {}),
+    ...(definition.handoff ? { handoff: true } : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.
@@ -192,6 +194,65 @@ export function ruleInsertionIndex(stages: readonly TaskStage[]): number {
       (stage.kind === "deployment" || stage.kind === "humanVerification"),
   );
   return barrier === -1 ? stages.length : barrier;
+}
+
+/**
+ * Records what a stage concluded, for the stages after it.
+ *
+ * The counterweight to subtask-per-session. The fresh session is what makes a
+ * review independent and a stage cheap to reason about, and that is worth paying
+ * for — but paying for it *twice*, by making every stage re-derive what the last
+ * one had just established, buys nothing. This carries the conclusion and nothing
+ * else: not the transcript, not the output, not the files.
+ *
+ * Only stages the route marks `handoff` contribute, so a project decides where
+ * continuity is worth the prompt space. Re-recording a stage replaces its earlier
+ * entry rather than appending, so a re-run does not leave two versions of the
+ * truth for a later stage to choose between.
+ */
+export function recordHandoff(
+  pipeline: TaskPipeline,
+  stageId: string,
+  text: string,
+  at: string,
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage?.handoff) return pipeline;
+
+  const trimmed = truncateHandoff(text);
+  if (!trimmed) return pipeline;
+
+  const others = (pipeline.handoffs ?? []).filter((h) => h.stageId !== stageId);
+  return {
+    ...pipeline,
+    handoffs: [
+      ...others,
+      { stageId, stageName: stage.name, text: trimmed, at },
+    ],
+  };
+}
+
+/**
+ * Handoffs from stages *before* a given one, in route order.
+ *
+ * Ordered by the route rather than by when they were recorded, because a reader —
+ * human or model — follows the sequence of the work, and a re-run would otherwise
+ * put an early stage's conclusion last.
+ */
+export function handoffsBefore(
+  pipeline: TaskPipeline,
+  stageId: string,
+): { stageName: string; text: string }[] {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index <= 0) return [];
+  const order = new Map(pipeline.stages.map((stage, at) => [stage.id, at]));
+  return (pipeline.handoffs ?? [])
+    .filter((handoff) => {
+      const at = order.get(handoff.stageId);
+      return at !== undefined && at < index;
+    })
+    .sort((a, b) => (order.get(a.stageId) ?? 0) - (order.get(b.stageId) ?? 0))
+    .map((handoff) => ({ stageName: handoff.stageName, text: handoff.text }));
 }
 
 /** A subtask as proposed by a planning agent, before the engine assigns ids. */

@@ -12,6 +12,8 @@ import {
   recordChecklist,
   recordDenials,
   recordQuestion,
+  recordHandoff,
+  handoffsBefore,
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
@@ -203,7 +205,7 @@ export class PipelineRunner {
   }
 
   /** What every stage is told about the task it is working on. */
-  private contextFor(task: TaskWorkspace): StageContext {
+  private contextFor(task: TaskWorkspace, stageId?: string): StageContext {
     return {
       taskName: task.name,
       taskDescription: task.description,
@@ -213,6 +215,7 @@ export class PipelineRunner {
       // Every later stage sees it: guidance given at a gate is about the work that
       // follows, so expiring it at the next stage boundary would waste it.
       guidance: (task.pipeline?.guidance ?? []).map((note) => note.text),
+      handoffs: stageId ? handoffsBefore(task.pipeline!, stageId) : undefined,
     };
   }
 
@@ -435,7 +438,7 @@ export class PipelineRunner {
   ): Promise<TaskWorkspace | undefined> {
     const reply = await this.sessions.run(
       task,
-      splitPrompt(this.contextFor(task), action.stage),
+      splitPrompt(this.contextFor(task, action.stage.id), action.stage),
       `plan:${action.stage.id}`,
       { model: this.modelFor(task, action.stage) },
     );
@@ -493,7 +496,7 @@ export class PipelineRunner {
     denied?: PermissionDenial[];
   }> {
     const { stage, subtask } = action;
-    const context = this.contextFor(task);
+    const context = this.contextFor(task, stage.id);
 
     // A behaviour review is asked for a checklist; everything else does the work.
     const prompt = producesChecklist(stage.kind)
@@ -639,6 +642,18 @@ export class PipelineRunner {
       activity: reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
+
+    // Recorded only on success, and only for stages the route marks `handoff`. A
+    // failed stage's conclusion is not a conclusion, and carrying it forward would
+    // present a guess to every stage after it as established fact.
+    if (reply.ok && reply.text.trim()) {
+      pipeline = recordHandoff(
+        pipeline,
+        stage.id,
+        reply.text,
+        new Date().toISOString(),
+      );
+    }
 
     return {
       task: await this.save(task, pipeline),

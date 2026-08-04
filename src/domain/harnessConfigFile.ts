@@ -200,6 +200,7 @@ function parseStage(
     model: str(raw.model),
     splittable: raw.splittable === true,
     gate: gate as StageGate,
+    ...(raw.handoff === true ? { handoff: true } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
   };
 }

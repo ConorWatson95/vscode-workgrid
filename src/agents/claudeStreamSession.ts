@@ -347,6 +347,24 @@ export class ClaudeStreamSession {
       this.emitter.emit("tokens", tokens);
     }
 
+    // Logged on the turn's result, because a route's cost is otherwise
+    // unattributable: it spawns a dozen sessions and the only visible number is a
+    // total. Cache reads specifically, since a fresh session per subtask means
+    // every prompt is a candidate for reuse and nothing said whether any of it was.
+    if (event.type === "result") {
+      const usage = event.usage ?? event.message?.usage;
+      const cached = usage?.cache_read_input_tokens ?? 0;
+      const fresh = usage?.input_tokens ?? 0;
+      if (cached > 0 || fresh > 0) {
+        const share = cached + fresh > 0 ? Math.round((cached / (cached + fresh)) * 100) : 0;
+        this.logger.info(
+          `Session usage: ${fresh.toLocaleString("en-GB")} fresh input tokens, ` +
+            `${cached.toLocaleString("en-GB")} from cache (${share}% cached)` +
+            (this.costUsd !== undefined ? `, $${this.costUsd.toFixed(4)} so far` : ""),
+        );
+      }
+    }
+
     for (const item of toChatItems(event)) {
       this.pushItem(item);
     }

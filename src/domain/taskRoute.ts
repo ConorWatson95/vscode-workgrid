@@ -147,6 +147,17 @@ export interface RouteStageDefinition {
    * target the stage itself or anything after it.
    */
   sendBackTo?: readonly string[];
+  /**
+   * Carry this stage's conclusion forward to the stages after it.
+   *
+   * Off by default. A fresh session per subtask is what makes a review independent
+   * and a stage cheap to reason about, and carrying every stage's reply forward
+   * would rebuild the long conversation the design avoids. Set it on the stages
+   * whose *conclusions* later stages need — a planning stage, a stage that
+   * established where something lives — not on ones whose output is the code
+   * itself, which the next stage can simply read.
+   */
+  handoff?: boolean;
 }
 
 export interface RouteDefinition {

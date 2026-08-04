@@ -90,6 +90,33 @@ export interface GuidanceNote {
 }
 
 /**
+ * What one stage concluded, for the stages after it.
+ *
+ * Capped hard: this is prompt text every later stage pays for, and an uncapped
+ * one would grow the context of every subsequent session — the exact cost the
+ * fresh-session design exists to avoid.
+ */
+export interface StageHandoff {
+  stageId: string;
+  stageName: string;
+  /** Trimmed to `MAX_HANDOFF_CHARS`, with the truncation announced. */
+  text: string;
+  at: string;
+}
+
+/** Per-stage ceiling on carried-forward text. */
+export const MAX_HANDOFF_CHARS = 1500;
+
+/** Normalises and caps a handoff's text. */
+export function truncateHandoff(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= MAX_HANDOFF_CHARS) return trimmed;
+  // Announced, so a later stage knows it is reading a summary and can go and look
+  // rather than assuming this is everything.
+  return `${trimmed.slice(0, MAX_HANDOFF_CHARS)}\n…(truncated; read the files it names for the rest)`;
+}
+
+/**
  * One thing a human must verify. Produced by behaviour-review stages and
  * consumed at the human-verification gate — this is the evidence a task must
  * present before it can be called complete.
@@ -135,6 +162,8 @@ export interface TaskStage {
    * the default — see `RouteStageDefinition.sendBackTo`.
    */
   sendBackTo?: string[];
+  /** Carry this stage's conclusion to later stages; see the route definition. */
+  handoff?: boolean;
   /**
    * Empty on a splittable stage means "not yet planned". Non-splittable stages
    * are created with exactly one synthesized subtask, so every runnable stage
@@ -183,6 +212,21 @@ export interface TaskPipeline {
    * survive past the next stage to be worth anything.
    */
   guidance?: GuidanceNote[];
+  /**
+   * What earlier stages concluded, carried forward to later ones.
+   *
+   * The answer to the harness's central cost: subtask-per-session means every
+   * stage starts cold, so each one re-derived what the last had just worked out —
+   * re-reading the same files, re-querying the same objects, re-deciding the same
+   * layering. Independence is what the fresh session buys and is worth keeping;
+   * amnesia is not, and this separates the two.
+   *
+   * Bounded and opt-in per stage (`RouteStageDefinition.handoff`), because the
+   * whole point of a fresh session is a small context, and carrying every stage's
+   * full reply forward would rebuild the long conversation the harness exists to
+   * avoid.
+   */
+  handoffs?: StageHandoff[];
 }
 
 /** Refusals from one stage, waiting on a decision. */
@@ -276,6 +320,7 @@ export function normalizePipeline(
       checklist: Array.isArray(stage.checklist) ? stage.checklist : undefined,
       addedByRule: stage.addedByRule,
       model: stage.model,
+      handoff: stage.handoff === true ? true : undefined,
       sendBackTo: Array.isArray(stage.sendBackTo)
         ? stage.sendBackTo.filter((id): id is string => typeof id === "string")
         : undefined,
@@ -293,7 +338,22 @@ export function normalizePipeline(
     pendingQuestion: normalizeQuestion(raw.pendingQuestion),
     pendingDenials: normalizeDenials(raw.pendingDenials),
     guidance: normalizeGuidance(raw.guidance),
+    handoffs: normalizeHandoffs(raw.handoffs),
   };
+}
+
+function normalizeHandoffs(stored: unknown): StageHandoff[] | undefined {
+  if (!Array.isArray(stored)) return undefined;
+  const handoffs = stored
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .map((entry) => ({
+      stageId: String(entry.stageId ?? ""),
+      stageName: String(entry.stageName ?? entry.stageId ?? "Stage"),
+      text: truncateHandoff(String(entry.text ?? "")),
+      at: String(entry.at ?? ""),
+    }))
+    .filter((handoff) => handoff.stageId && handoff.text);
+  return handoffs.length > 0 ? handoffs : undefined;
 }
 
 /**
