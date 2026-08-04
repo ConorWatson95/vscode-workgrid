@@ -1,8 +1,11 @@
 import { ReviewRule } from "./reviewRules";
 import { parseReviewRules } from "./reviewRulesFile";
 import {
+  ALL_STAGE_KINDS,
+  looksLikeKindEntry,
   RouteDefinition,
   RouteStageDefinition,
+  sendBackEntryKind,
   StageGate,
   StageKind,
 } from "./taskRoute";
@@ -127,6 +130,8 @@ function parseRoute(
     return undefined;
   }
 
+  if (!checkSendBackTargets(id, stages, problems)) return undefined;
+
   return {
     id,
     label,
@@ -173,6 +178,14 @@ function parseStage(
     return undefined;
   }
 
+  const sendBackTo = strList(raw.sendBackTo);
+  if (raw.sendBackTo !== undefined && sendBackTo === undefined) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "sendBackTo" must be an array of stage ids.`,
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -182,7 +195,72 @@ function parseStage(
     model: str(raw.model),
     splittable: raw.splittable === true,
     gate: gate as StageGate,
+    ...(sendBackTo ? { sendBackTo } : {}),
   };
+}
+
+/**
+ * Rejects a route whose `sendBackTo` names a stage that is missing, is itself, or
+ * comes later.
+ *
+ * Checked across the whole route rather than per stage because that is the only
+ * place the ordering is known — and it is the ordering that makes the difference
+ * between "send this back to be reimplemented" and a cycle. A stage allowed to
+ * send work forward, or to itself, could loop a route indefinitely, so it is
+ * refused at load rather than guarded at every use.
+ */
+function checkSendBackTargets(
+  routeId: string,
+  stages: readonly RouteStageDefinition[],
+  problems: string[],
+): boolean {
+  let ok = true;
+  stages.forEach((stage, index) => {
+    for (const target of stage.sendBackTo ?? []) {
+      if (looksLikeKindEntry(target)) {
+        // A kind entry matches whatever earlier stage has that kind, so there is no
+        // ordering to check — only the spelling, since a misspelled kind silently
+        // matches nothing and looks exactly like the feature not working.
+        if (!sendBackEntryKind(target)) {
+          problems.push(
+            `Route "${routeId}" stage "${stage.id}": "sendBackTo" names ` +
+              `"${target}", which is not a stage kind. Expected one of ` +
+              ALL_STAGE_KINDS.map((kind) => `kind:${kind}`).join(", "),
+          );
+          ok = false;
+        }
+        continue;
+      }
+      const targetIndex = stages.findIndex((s) => s.id === target);
+      if (targetIndex === -1) {
+        problems.push(
+          `Route "${routeId}" stage "${stage.id}": "sendBackTo" names "${target}", ` +
+            "which is not a stage of this route.",
+        );
+        ok = false;
+      } else if (targetIndex >= index) {
+        problems.push(
+          `Route "${routeId}" stage "${stage.id}": "sendBackTo" names "${target}", ` +
+            "which is not an earlier stage. Sending work forward, or to itself, " +
+            "would let the route loop.",
+        );
+        ok = false;
+      }
+    }
+  });
+  return ok;
+}
+
+/**
+ * A list of non-empty strings, or undefined when the value is not one.
+ *
+ * Distinguishes "not an array of ids" from "an empty list": the first is a
+ * mistake worth reporting, the second is a stage deliberately allowing nothing.
+ */
+function strList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map((entry) => str(entry)).filter((entry): entry is string => !!entry);
+  return items.length === value.length ? items : undefined;
 }
 
 function str(value: unknown): string | undefined {

@@ -32,6 +32,38 @@ export type StageKind =
   /** A human works through the accumulated checklist before merge. */
   | "humanVerification";
 
+/** Every stage kind, for validating config that names one. */
+export const ALL_STAGE_KINDS: readonly StageKind[] = [
+  "implementation",
+  "test",
+  "codeReview",
+  "domainReview",
+  "behaviourReview",
+  "humanVerification",
+];
+
+/** Marks a `sendBackTo` entry as naming a stage kind rather than a stage id. */
+export const SEND_BACK_KIND_PREFIX = "kind:";
+
+/**
+ * The kind a `sendBackTo` entry names, or undefined when it names an id.
+ *
+ * Returns undefined for a misspelled kind as well as for an id, so a caller that
+ * resolves targets treats `kind:implementaton` as matching nothing rather than as
+ * an id that happens to start with "kind:". The config loaders report the typo;
+ * resolution stays quiet and safe.
+ */
+export function sendBackEntryKind(entry: string): StageKind | undefined {
+  if (!entry.startsWith(SEND_BACK_KIND_PREFIX)) return undefined;
+  const kind = entry.slice(SEND_BACK_KIND_PREFIX.length).trim();
+  return ALL_STAGE_KINDS.find((candidate) => candidate === kind);
+}
+
+/** Whether an entry is meant as a kind, however badly spelled. */
+export function looksLikeKindEntry(entry: string): boolean {
+  return entry.startsWith(SEND_BACK_KIND_PREFIX);
+}
+
 /** Stage kinds whose output is a checklist rather than a pass/fail judgement. */
 export function producesChecklist(kind: StageKind): boolean {
   return kind === "behaviourReview" || kind === "humanVerification";
@@ -73,6 +105,23 @@ export interface RouteStageDefinition {
    */
   splittable: boolean;
   gate: StageGate;
+  /**
+   * Stages this one's findings may be sent back to.
+   *
+   * Each entry is either a stage id, or `kind:<StageKind>` for "the nearest
+   * earlier stage of that kind". The second form exists because **a rule's stage
+   * cannot name route stage ids**: one rule applies to every route whose diff
+   * matches it, and it has no idea what those routes call their stages. A SQL
+   * review spliced in by a rule says `kind:implementation` and lands correctly
+   * wherever it is spliced.
+   *
+   * Opt-in per stage, and empty by default, because the capability is only safe
+   * where the route says it is: a planning stage able to send work back to
+   * planning plans forever. Naming a kind rather than an id does not weaken that —
+   * resolution only ever looks at *earlier* stages, so no entry of either form can
+   * target the stage itself or anything after it.
+   */
+  sendBackTo?: readonly string[];
 }
 
 export interface RouteDefinition {

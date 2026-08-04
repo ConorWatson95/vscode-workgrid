@@ -77,6 +77,9 @@ function createStage(
     model: definition.model,
     splittable: definition.splittable,
     requiresApproval: definition.gate === "approval",
+    ...(definition.sendBackTo && definition.sendBackTo.length > 0
+      ? { sendBackTo: [...definition.sendBackTo] }
+      : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.

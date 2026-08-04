@@ -180,3 +180,57 @@ describe("parseHarnessConfig", () => {
     expect(parsed.routes).toEqual([]);
   });
 });
+
+describe("sendBackTo", () => {
+  const routeWith = (sendBackTo: unknown) => ({
+    routes: [
+      {
+        id: "r1",
+        label: "R1",
+        stages: [
+          { id: "build", label: "Build", kind: "implementation", intent: "Build it." },
+          { id: "review", label: "Review", kind: "codeReview", intent: "Review it.", sendBackTo },
+          { id: "signoff", label: "Sign-off", kind: "humanVerification", intent: "Sign.", gate: "approval" },
+        ],
+      },
+    ],
+  });
+
+  it("accepts an earlier stage id", () => {
+    const parsed = parseHarnessConfig(routeWith(["build"]));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].sendBackTo).toEqual(["build"]);
+  });
+
+  it("accepts a kind entry", () => {
+    const parsed = parseHarnessConfig(routeWith(["kind:implementation"]));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].sendBackTo).toEqual(["kind:implementation"]);
+  });
+
+  it("rejects a route whose target comes later", () => {
+    // A forward target is either a typo or a cycle, and a route that can loop
+    // indefinitely must not reach a task.
+    const parsed = parseHarnessConfig(routeWith(["signoff"]));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("not an earlier stage");
+  });
+
+  it("rejects a route whose target does not exist", () => {
+    const parsed = parseHarnessConfig(routeWith(["nope"]));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("not a stage of this route");
+  });
+
+  it("rejects a misspelled kind, which would silently match nothing", () => {
+    const parsed = parseHarnessConfig(routeWith(["kind:implementaton"]));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("not a stage kind");
+  });
+
+  it("rejects a value that is not an array of ids", () => {
+    const parsed = parseHarnessConfig(routeWith("build"));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("array of stage ids");
+  });
+});

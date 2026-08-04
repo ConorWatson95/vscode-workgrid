@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.30.1",
+  "version": "0.31.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -268,6 +268,12 @@
         "title": "Re-run This Stage…",
         "category": "Task Workspaces",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "taskWorkspaces.sendBackToStage",
+        "title": "Send Findings Back to an Earlier Stage…",
+        "category": "Task Workspaces",
+        "icon": "$(reply)"
       }
     ],
     "menus": {
@@ -488,6 +494,11 @@
           "command": "taskWorkspaces.showStageReport",
           "when": "view == taskWorkspaces.tree && viewItem =~ /stage/",
           "group": "stage@1"
+        },
+        {
+          "command": "taskWorkspaces.sendBackToStage",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /stage-(passed|failed|awaiting-approval)/",
+          "group": "stage@8"
         },
         {
           "command": "taskWorkspaces.revertToStage",

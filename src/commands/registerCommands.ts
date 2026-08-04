@@ -2,7 +2,18 @@ import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
-import { refreshPendingStages, revertToStage } from "../domain/stageRefresh";
+import {
+  refreshPendingStages,
+  revertToStage,
+  sendBackTargets,
+  sendBackToStage,
+} from "../domain/stageRefresh";
+import {
+  formatFindings,
+  parseReviewFindings,
+  summariseFindings,
+} from "../domain/reviewFindings";
+import { TaskStage } from "../domain/taskPipeline";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -94,6 +105,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
+    register("taskWorkspaces.sendBackToStage", (arg) => sendBackToStageCommand(ctx, arg)),
     register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
     register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
     register("taskWorkspaces.allowAllDenials", (arg) => allowAllDenialsCommand(ctx, arg)),
@@ -676,6 +688,149 @@ async function revertToStageCommand(
   if (next === "Advance Route") {
     await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
   }
+}
+
+/**
+ * Sends a review stage's findings back to an earlier stage.
+ *
+ * The gap: a review reported a critical problem and several lesser ones, and the
+ * only route back to implementation was "Re-run This Stage" on the *earlier*
+ * stage — which discards everything after it, the review's own findings
+ * included. So the act of sending work back destroyed the reason for it, and the
+ * findings had to be copied out by hand first.
+ */
+async function sendBackToStageCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop the agent first.`,
+    );
+    return;
+  }
+
+  const stage = task.pipeline.stages.find((s) => s.id === arg.stage.id) ?? arg.stage;
+  const targets = sendBackTargets(task.pipeline, stage.id);
+  if (targets.length === 0) {
+    // Named rather than vague: the answer is a line of route config, and without
+    // saying which key it is this reads as the feature being broken.
+    void vscode.window.showInformationMessage(
+      `"${stage.name}" has no stages it may send work back to. Add "sendBackTo": ` +
+        `["<stage id>"] to it in harness.json — earlier stages only, so a route cannot loop.`,
+    );
+    return;
+  }
+
+  const findings = stageFindings(stage);
+  if (!findings.trim()) {
+    void vscode.window.showInformationMessage(
+      `"${stage.name}" recorded nothing to send back.`,
+    );
+    return;
+  }
+
+  // Even with one candidate the choice is shown, because the cost is not obvious
+  // from the stage's name: `kind:implementation` can match several stages, and
+  // going further back re-opens everything after it. Reaching past the nearest
+  // match is sometimes right — a finding can invalidate the plan, not just the
+  // code — so the count of discarded stages is on the row rather than the target
+  // being decided for the operator.
+  const stages = task.pipeline.stages;
+  const picked = await vscode.window.showQuickPick(
+    targets.map((candidate, index) => {
+      const discarded = stages.slice(stages.findIndex((s) => s.id === candidate.id));
+      return {
+        label: candidate.name,
+        description: index === 0 ? `${candidate.id} · nearest` : candidate.id,
+        detail:
+          `Re-opens ${discarded.length} stage(s), discarding their output: ` +
+          discarded.map((s) => s.name).join(" → "),
+        stage: candidate,
+      };
+    }),
+    {
+      title: `Send findings from "${stage.name}" back to…`,
+      placeHolder: "The nearest stage discards the least work",
+    },
+  );
+  const target = picked?.stage;
+  if (!target) return;
+
+  const parsed = parseReviewFindings(findings);
+  const summary = summariseFindings(parsed) ?? "the stage's report";
+
+  const note = await vscode.window.showInputBox({
+    title: `Send back to ${target.name}`,
+    prompt: `Anything to add? The findings themselves (${summary}) go with it.`,
+    placeHolder: "Optional — e.g. leave the Motability variant alone for now",
+  });
+  // Escape means "no note", not "cancel": the findings are the payload, and
+  // losing the whole action for want of an optional sentence would be worse.
+
+  const preview = sendBackToStage(task.pipeline, {
+    targetStageId: target.id,
+    fromStageId: stage.id,
+    // The parsed form when it parsed, so the stage being redone reads a tidy list
+    // rather than a review's prose; verbatim otherwise, because a parser that
+    // found nothing must not be allowed to silently drop the findings.
+    findings: parsed.length > 0 ? formatFindings(parsed) : findings.trim(),
+    note,
+    at: new Date().toISOString(),
+  });
+  if (!preview) return;
+
+  const also = preview.reopened.length - 1;
+  const confirmed = await vscode.window.showWarningMessage(
+    `Send ${summary} back to "${target.name}"?`,
+    {
+      modal: true,
+      detail:
+        `${target.name}${also > 0 ? ` and ${also} later stage(s)` : ""} will be re-opened, ` +
+        "and their recorded output discarded — including this review's, which is why " +
+        "the findings travel as guidance instead. Every stage from here on is given " +
+        "them, and your earlier approval notes are kept.",
+    },
+    "Send Back",
+  );
+  if (confirmed !== "Send Back") return;
+
+  // Instructions reloaded from config for the stages that just re-opened, exactly
+  // as a revert does — the fix may well be in harness.json too.
+  const refreshed = ctx.stageDefinitions
+    ? refreshPendingStages(preview.pipeline, ctx.stageDefinitions())
+    : { pipeline: preview.pipeline, changed: [] as string[] };
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: refreshed.pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] sent findings from "${stage.name}" back to "${target.name}" ` +
+      `(${summary}); re-opened ${preview.reopened.join(", ")}.\n${preview.note}`,
+  );
+
+  const next = await vscode.window.showInformationMessage(
+    `Sent back to "${target.name}" with ${summary}.`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/** Everything a stage's subtasks reported, which is where findings live. */
+function stageFindings(stage: TaskStage): string {
+  return stage.subtasks
+    .map((subtask) => subtask.reply?.trim())
+    .filter((reply): reply is string => !!reply)
+    .join("\n\n");
 }
 
 async function approveStageCommand(

@@ -1,4 +1,5 @@
 import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import { parseReviewFindings, summariseFindings } from "../domain/reviewFindings";
 
 /**
  * Presentation for pipeline stages in the tree. Pure, so the labelling rules are
@@ -105,6 +106,14 @@ function stageDetail(stage: TaskStage, outstandingInPipeline?: number): string {
     stage.kind === "humanVerification" && outstandingInPipeline !== undefined
       ? outstandingInPipeline
       : (stage.checklist ?? []).filter((i) => !i.checked).length;
+  // A review's findings, on the row. A stage that reported a critical problem and
+  // then passed — because reviewing was its job and it did it — was a green row
+  // saying nothing, so the findings were only discoverable by opening the report.
+  const findings = summariseFindings(
+    parseReviewFindings(stage.subtasks.map((s) => s.reply ?? "").join("\n\n")),
+  );
+  if (findings) parts.push(findings);
+
   if (outstanding > 0) {
     // "for you" because a passed stage carrying unchecked items looks stalled
     // otherwise — as though the agent had left something undone. It has not: a

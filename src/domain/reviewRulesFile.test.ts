@@ -215,3 +215,46 @@ describe("shipped templates round-trip through the parser", () => {
     expect(rendered).toContain('"gate": "approval"');
   });
 });
+
+describe("rule stage sendBackTo", () => {
+  const rule = (sendBackTo: unknown) => ({
+    rules: [
+      {
+        id: "sql",
+        pathPattern: "\.sql$",
+        stage: {
+          id: "sql-review",
+          label: "SQL review",
+          kind: "domainReview",
+          intent: "Review the objects.",
+          sendBackTo,
+        },
+      },
+    ],
+  });
+
+  it("accepts a kind entry, which is the only form a rule can use portably", () => {
+    const parsed = parseReviewRules(rule(["kind:implementation"]));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.rules[0].stage.sendBackTo).toEqual(["kind:implementation"]);
+  });
+
+  it("rejects a misspelled kind", () => {
+    const parsed = parseReviewRules(rule(["kind:implementaton"]));
+    expect(parsed.rules).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("not a stage kind");
+  });
+
+  it("accepts a bare id, which only resolves in routes that have it", () => {
+    // Not an error: a project with one route may legitimately name its stages.
+    const parsed = parseReviewRules(rule(["build"]));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.rules[0].stage.sendBackTo).toEqual(["build"]);
+  });
+
+  it("rejects a value that is not an array of strings", () => {
+    const parsed = parseReviewRules(rule([{ id: "build" }]));
+    expect(parsed.rules).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("array of stage ids");
+  });
+});

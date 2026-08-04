@@ -1,5 +1,5 @@
 import { ReviewRule } from "./reviewRules";
-import { RouteDefinition } from "./taskRoute";
+import { RouteDefinition, sendBackEntryKind, StageKind } from "./taskRoute";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 
 /**
@@ -145,6 +145,127 @@ export function revertToStage(
     },
     reopened,
   };
+}
+
+/**
+ * Stages a given stage's findings may be sent back to, nearest first.
+ *
+ * Only what the stage declares in `sendBackTo`, so an undeclared stage offers
+ * nothing. Restrictive by default and deliberately so: a planning stage that
+ * could send work back to planning would plan forever, and the route is the only
+ * thing that knows which loops are the useful ones.
+ */
+export function sendBackTargets(
+  pipeline: TaskPipeline,
+  fromStageId: string,
+): TaskStage[] {
+  const index = pipeline.stages.findIndex((s) => s.id === fromStageId);
+  if (index <= 0) return [];
+
+  const allowed = pipeline.stages[index].sendBackTo ?? [];
+  if (allowed.length === 0) return [];
+
+  const kinds = allowed
+    .map((entry) => sendBackEntryKind(entry))
+    .filter((kind): kind is StageKind => kind !== undefined);
+
+  // Reversed: the stage that produced the work under review is the likely target,
+  // and it is the one immediately before, not the start of the route. Only earlier
+  // stages are ever considered, which is what keeps a kind entry as safe as an id.
+  return pipeline.stages
+    .slice(0, index)
+    .filter((stage) => allowed.includes(stage.id) || kinds.includes(stage.kind))
+    .reverse();
+}
+
+/**
+ * Sends work back to an earlier stage, carrying the findings that justify it.
+ *
+ * The gap this fills: a review stage reports a critical problem and several
+ * lesser ones, and the only way back to implementation was `revertToStage` —
+ * which discards the reviewing stage's reply along with everything after the
+ * target. So the act of sending work back destroyed the reason for sending it,
+ * and the findings had to be copied out by hand first or retyped from memory.
+ *
+ * Guidance is the carrier. It survives a revert, and every subsequent stage
+ * prompt is given all of it, so the re-opened stage reads the findings as
+ * instructions without the review's own output needing to be preserved.
+ */
+export function sendBackToStage(
+  pipeline: TaskPipeline,
+  input: {
+    targetStageId: string;
+    /** The stage whose findings these are; must be later than the target. */
+    fromStageId: string;
+    /** The findings themselves, usually the reviewing stage's reply. */
+    findings: string;
+    /** Anything the operator wants to add to them. */
+    note?: string;
+    at: string;
+  },
+): { pipeline: TaskPipeline; reopened: string[]; note: string } | undefined {
+  const targetIndex = pipeline.stages.findIndex((s) => s.id === input.targetStageId);
+  const fromIndex = pipeline.stages.findIndex((s) => s.id === input.fromStageId);
+  if (targetIndex === -1 || fromIndex === -1) return undefined;
+  // Strictly backwards. Sending a stage's findings to itself would discard them
+  // as it re-ran, and "back" to a later stage is not a thing this can mean.
+  if (targetIndex >= fromIndex) return undefined;
+  // Checked here as well as when offering the choice: this is the transition that
+  // reshapes the pipeline, and a target the route never sanctioned must not become
+  // reachable through a stale menu, a headless caller or a hand-edited state file.
+  if (!sendBackTargets(pipeline, input.fromStageId).some((s) => s.id === input.targetStageId)) {
+    return undefined;
+  }
+
+  const from = pipeline.stages[fromIndex];
+  const target = pipeline.stages[targetIndex];
+  const text = formatSendBackNote(from.name, input.findings, input.note);
+
+  const reverted = revertToStage(pipeline, input.targetStageId);
+  if (!reverted) return undefined;
+
+  return {
+    pipeline: {
+      ...reverted.pipeline,
+      // Attached to the target, not to the stage that raised it: the reviewing
+      // stage is about to be re-opened and re-run, and a note filed under it would
+      // read as guidance for the review rather than for the work being redone.
+      guidance: [
+        ...(reverted.pipeline.guidance ?? []),
+        {
+          // Derived from the stages and the timestamp rather than random, so the
+          // transition stays pure and a replay produces the same pipeline.
+          id: `sendback-${from.id}-${target.id}-${input.at}`,
+          stageId: target.id,
+          stageName: target.name,
+          text,
+          at: input.at,
+        },
+      ],
+    },
+    reopened: reverted.reopened,
+    note: text,
+  };
+}
+
+/**
+ * The guidance note a send-back leaves behind.
+ *
+ * Names the stage that raised the findings, because by the time the re-opened
+ * stage reads this that stage's own output has been discarded — without the
+ * attribution the findings would arrive from nowhere.
+ */
+export function formatSendBackNote(
+  fromStageName: string,
+  findings: string,
+  note?: string,
+): string {
+  const parts = [
+    `Sent back from "${fromStageName}". Address these findings, and say what you changed for each:`,
+    findings.trim(),
+  ];
+  if (note?.trim()) parts.push(`Also, from the operator: ${note.trim()}`);
+  return parts.join("\n\n");
 }
 
 function findDefinition(

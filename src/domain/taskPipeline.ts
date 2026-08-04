@@ -130,6 +130,12 @@ export interface TaskStage {
    */
   model?: string;
   /**
+   * Earlier stages this stage's findings may be sent back to, copied from the
+   * route. Empty or absent means the stage cannot send work back at all, which is
+   * the default — see `RouteStageDefinition.sendBackTo`.
+   */
+  sendBackTo?: string[];
+  /**
    * Empty on a splittable stage means "not yet planned". Non-splittable stages
    * are created with exactly one synthesized subtask, so every runnable stage
    * has a uniform shape.
@@ -270,6 +276,9 @@ export function normalizePipeline(
       checklist: Array.isArray(stage.checklist) ? stage.checklist : undefined,
       addedByRule: stage.addedByRule,
       model: stage.model,
+      sendBackTo: Array.isArray(stage.sendBackTo)
+        ? stage.sendBackTo.filter((id): id is string => typeof id === "string")
+        : undefined,
       subtasks: Array.isArray(stage.subtasks) ? stage.subtasks : [],
       startedAt: stage.startedAt,
       finishedAt: stage.finishedAt,

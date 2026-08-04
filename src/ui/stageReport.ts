@@ -1,4 +1,9 @@
 import { Subtask, SubtaskActivity, TaskStage, TaskPipeline } from "../domain/taskPipeline";
+import {
+  formatFindings,
+  parseReviewFindings,
+  summariseFindings,
+} from "../domain/reviewFindings";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -42,6 +47,23 @@ export function formatStageReport(
 
   for (const subtask of stage.subtasks) {
     lines.push("", "---", "", ...formatSubtask(subtask));
+  }
+
+  // Lifted out of the prose and put where a reader looks first. A review's whole
+  // output is a list of things to do about the code, and it used to be buried in
+  // whatever paragraphs the agent wrote around it.
+  const findings = parseReviewFindings(
+    stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
+  );
+  if (findings.length > 0) {
+    lines.splice(
+      lines.indexOf("## Intent"),
+      0,
+      `## Findings — ${summariseFindings(findings)}`,
+      "",
+      formatFindings(findings),
+      "",
+    );
   }
 
   const checklist = stage.checklist ?? [];

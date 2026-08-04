@@ -1,0 +1,190 @@
+/**
+ * Reads the findings out of a review stage's reply.
+ *
+ * A review reports a critical problem, a couple of important ones and some
+ * suggestions — and all of it was a wall of prose that got parsed for a marker,
+ * summarised as "passed", and otherwise left for someone to go and find. So the
+ * one stage whose entire output is a list of things to do about the code was the
+ * stage that said least on screen.
+ *
+ * Tolerant on purpose, and pure so the tolerance is testable. The agent is told a
+ * format but writes prose, and a parser that only understood one spelling would
+ * quietly report no findings — which reads as a clean review, the most dangerous
+ * thing this could get wrong. When nothing matches, callers fall back to showing
+ * the reply verbatim rather than claiming there was nothing to report.
+ */
+
+export type FindingSeverity = "critical" | "important" | "suggestion";
+
+export interface ReviewFinding {
+  severity: FindingSeverity;
+  /** The finding itself, with its severity marker and list punctuation removed. */
+  text: string;
+}
+
+/** Severity order for display: worst first, which is the order they get acted on. */
+export const SEVERITY_ORDER: readonly FindingSeverity[] = [
+  "critical",
+  "important",
+  "suggestion",
+];
+
+/**
+ * Words that mean each severity, including the ones agents reach for instead of
+ * the ones they were asked for. `blocker` and `must fix` are critical; `nit` and
+ * `consider` are suggestions.
+ */
+const SEVERITY_WORDS: Record<FindingSeverity, readonly string[]> = {
+  critical: ["critical", "blocker", "blocking", "must fix", "must-fix", "error"],
+  important: ["important", "major", "should fix", "should-fix", "warning", "concern"],
+  suggestion: [
+    "suggestion",
+    "suggested",
+    "suggest",
+    "minor",
+    "nit",
+    "nitpick",
+    "consider",
+    "optional",
+  ],
+};
+
+export function parseReviewFindings(reply: string | undefined): ReviewFinding[] {
+  if (!reply?.trim()) return [];
+
+  const findings: ReviewFinding[] = [];
+  /** The heading a bare list item belongs under, e.g. "## Critical". */
+  let heading: FindingSeverity | undefined;
+
+  for (const rawLine of reply.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const asHeading = severityHeading(line);
+    if (asHeading) {
+      heading = asHeading;
+      continue;
+    }
+
+    const item = listItem(line);
+    if (item === undefined) continue;
+
+    // An inline marker wins over the heading: a "(minor)" inside a list under
+    // "Critical" is the writer correcting themselves, and taking the heading
+    // would overstate it.
+    const inline = inlineSeverity(item);
+    const severity = inline?.severity ?? heading;
+    if (!severity) continue;
+
+    const text = (inline ? inline.rest : item).trim();
+    if (text) findings.push({ severity, text });
+  }
+
+  return findings;
+}
+
+/** "1 critical, 2 important, 4 suggestions", or undefined when there are none. */
+export function summariseFindings(findings: readonly ReviewFinding[]): string | undefined {
+  if (findings.length === 0) return undefined;
+  return SEVERITY_ORDER.filter((severity) =>
+    findings.some((finding) => finding.severity === severity),
+  )
+    .map((severity) => {
+      const count = findings.filter((finding) => finding.severity === severity).length;
+      return `${count} ${label(severity, count)}`;
+    })
+    .join(", ");
+}
+
+/** Whether anything found is serious enough that the work is not done. */
+export function hasBlockingFindings(findings: readonly ReviewFinding[]): boolean {
+  return findings.some(
+    (finding) => finding.severity === "critical" || finding.severity === "important",
+  );
+}
+
+/** Findings as markdown, worst first, for a report or a send-back note. */
+export function formatFindings(findings: readonly ReviewFinding[]): string {
+  return SEVERITY_ORDER.filter((severity) =>
+    findings.some((finding) => finding.severity === severity),
+  )
+    .map((severity) => {
+      const matching = findings.filter((finding) => finding.severity === severity);
+      return [
+        `**${HEADINGS[severity]}**`,
+        ...matching.map((finding) => `- ${finding.text}`),
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+/** Fixed, so a section heading does not change shape with the count under it. */
+const HEADINGS: Record<FindingSeverity, string> = {
+  critical: "Critical",
+  important: "Important",
+  suggestion: "Suggestions",
+};
+
+function label(severity: FindingSeverity, count: number): string {
+  if (severity === "suggestion") return count === 1 ? "suggestion" : "suggestions";
+  // "critical" and "important" are adjectives, so they do not pluralise.
+  return severity;
+}
+
+/** A heading like "## Critical", "Critical issues:", "**Important**". */
+function severityHeading(line: string): FindingSeverity | undefined {
+  const stripped = line
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/[*_`]/g, "")
+    .replace(/[:.]+\s*$/, "")
+    .trim()
+    .toLowerCase();
+  // Headings are short. Without this, a sentence merely containing "critical"
+  // would reclassify every bare item after it.
+  if (!stripped || stripped.length > 40) return undefined;
+  // Singularised too: a heading is almost always plural ("Suggestions",
+  // "Critical issues") while the marker words are singular.
+  const singular = stripped.replace(/s$/, "");
+  for (const severity of SEVERITY_ORDER) {
+    if (
+      SEVERITY_WORDS[severity].some(
+        (word) =>
+          stripped === word ||
+          singular === word ||
+          stripped.startsWith(`${word} `) ||
+          singular.startsWith(`${word} `),
+      )
+    ) {
+      return severity;
+    }
+  }
+  return undefined;
+}
+
+/** The content of a list item, or undefined when the line is not one. */
+function listItem(line: string): string | undefined {
+  const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
+  if (bullet) return bullet[1];
+  // A marker at the start of its own line is a finding whether or not it was
+  // bulleted — "CRITICAL: the migration drops a column" needs no dash to count.
+  return inlineSeverity(line) ? line : undefined;
+}
+
+/** A leading "CRITICAL:", "[minor]", "(nit)" and what follows it. */
+function inlineSeverity(
+  text: string,
+): { severity: FindingSeverity; rest: string } | undefined {
+  // Two spellings, because both turn up: a marker followed by punctuation
+  // ("CRITICAL: …", "nit - …"), and a bracketed one that needs none ("(minor) …").
+  const match =
+    /^[[(]\s*([a-z][a-z -]*?)\s*[\])]\s*(.*)$/i.exec(text) ??
+    /^[*_`\s]*([a-z][a-z -]*?)[*_`\s]*[:–—-]\s+(.*)$/i.exec(text);
+  if (!match) return undefined;
+  const word = match[1].trim().toLowerCase();
+  for (const severity of SEVERITY_ORDER) {
+    if (SEVERITY_WORDS[severity].includes(word)) {
+      return { severity, rest: match[2] };
+    }
+  }
+  return undefined;
+}

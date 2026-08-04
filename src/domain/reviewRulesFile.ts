@@ -1,5 +1,10 @@
 import { ReviewRule, ReviewStageTemplate } from "./reviewRules";
-import { StageKind } from "./taskRoute";
+import {
+  ALL_STAGE_KINDS,
+  looksLikeKindEntry,
+  sendBackEntryKind,
+  StageKind,
+} from "./taskRoute";
 
 /**
  * Parsing and validation for a project's review-rules file.
@@ -226,6 +231,32 @@ function parseStage(
     return undefined;
   }
 
+  let sendBackTo: string[] | undefined;
+  if (raw.sendBackTo !== undefined) {
+    if (
+      !Array.isArray(raw.sendBackTo) ||
+      raw.sendBackTo.some((entry) => typeof entry !== "string" || !entry.trim())
+    ) {
+      problems.push(
+        `Rule "${ruleId}": stage "sendBackTo" must be an array of stage ids or ` +
+          `"kind:<stage kind>" entries.`,
+      );
+      return undefined;
+    }
+    for (const entry of raw.sendBackTo as string[]) {
+      // Only the kind form can be checked here: a rule has no route, so a bare id
+      // cannot be resolved until the stage is spliced into one.
+      if (looksLikeKindEntry(entry) && !sendBackEntryKind(entry)) {
+        problems.push(
+          `Rule "${ruleId}": stage "sendBackTo" names "${entry}", which is not a ` +
+            `stage kind. Expected one of ${ALL_STAGE_KINDS.map((k) => `kind:${k}`).join(", ")}.`,
+        );
+        return undefined;
+      }
+    }
+    sendBackTo = (raw.sendBackTo as string[]).map((entry) => entry.trim());
+  }
+
   return {
     id,
     label,
@@ -235,6 +266,7 @@ function parseStage(
     model: str(raw.model),
     splittable: typeof raw.splittable === "boolean" ? raw.splittable : undefined,
     gate: gate as "auto" | "approval" | undefined,
+    ...(sendBackTo ? { sendBackTo } : {}),
   };
 }
 

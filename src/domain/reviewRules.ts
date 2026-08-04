@@ -59,6 +59,16 @@ export interface ReviewStageTemplate {
   splittable?: boolean;
   /** Defaults to "auto"; a rule can demand a human gate of its own. */
   gate?: "auto" | "approval";
+  /**
+   * Stages this review may send its findings back to — see
+   * `RouteStageDefinition.sendBackTo`.
+   *
+   * In a rule this is almost always the `kind:` form. A rule is written once and
+   * splices into any route whose diff matches it, so it cannot know what those
+   * routes call their stages; `kind:implementation` means "whatever produced the
+   * code I just reviewed" and resolves correctly wherever the rule lands.
+   */
+  sendBackTo?: readonly string[];
 }
 
 /**
@@ -146,5 +156,8 @@ export function ruleStageDefinition(rule: ReviewRule): RouteStageDefinition {
     model: rule.stage.model,
     splittable: rule.stage.splittable ?? false,
     gate: rule.stage.gate ?? "auto",
+    ...(rule.stage.sendBackTo && rule.stage.sendBackTo.length > 0
+      ? { sendBackTo: rule.stage.sendBackTo }
+      : {}),
   };
 }

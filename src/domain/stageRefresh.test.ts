@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { refreshPendingStages, revertToStage } from "./stageRefresh";
+import {
+  refreshPendingStages,
+  revertToStage,
+  sendBackTargets,
+  sendBackToStage,
+} from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 import { RouteDefinition } from "./taskRoute";
 import { ReviewRule } from "./reviewRules";
@@ -267,5 +272,140 @@ describe("revertToStage", () => {
     revertToStage(original, "deploy");
     expect(original.stages[0].status).toBe("passed");
     expect(original.stages[0].subtasks[0].reply).toBe("did it");
+  });
+});
+
+describe("sendBackTargets", () => {
+  const reviewed = () =>
+    pipeline([
+      stage({ id: "plan", name: "Plan", kind: "implementation" }),
+      stage({ id: "build", name: "Build", kind: "implementation", status: "passed" }),
+      stage({
+        id: "sql-review",
+        name: "SQL review",
+        kind: "domainReview",
+        status: "passed",
+        addedByRule: "SQL objects changed",
+      }),
+      stage({ id: "signoff", name: "Sign-off", kind: "humanVerification" }),
+    ]);
+
+  it("offers nothing when the stage declares nothing", () => {
+    expect(sendBackTargets(reviewed(), "sql-review")).toEqual([]);
+  });
+
+  it("offers only the ids the stage declares", () => {
+    const p = reviewed();
+    p.stages[2].sendBackTo = ["build"];
+    expect(sendBackTargets(p, "sql-review").map((s) => s.id)).toEqual(["build"]);
+  });
+
+  it("resolves a kind entry, which is all a rule stage can name", () => {
+    // A rule applies to any route whose diff matches, so it cannot know the ids.
+    const p = reviewed();
+    p.stages[2].sendBackTo = ["kind:implementation"];
+    // Nearest first: the build, not the plan that preceded it.
+    expect(sendBackTargets(p, "sql-review").map((s) => s.id)).toEqual(["build", "plan"]);
+  });
+
+  it("never offers itself or a later stage, whatever it declares", () => {
+    const p = reviewed();
+    p.stages[2].sendBackTo = ["sql-review", "signoff", "kind:humanVerification"];
+    expect(sendBackTargets(p, "sql-review")).toEqual([]);
+  });
+
+  it("ignores a misspelled kind rather than treating it as an id", () => {
+    const p = reviewed();
+    p.stages[2].sendBackTo = ["kind:implementaton"];
+    expect(sendBackTargets(p, "sql-review")).toEqual([]);
+  });
+
+  it("offers nothing for the first stage, which has nothing behind it", () => {
+    const p = reviewed();
+    p.stages[0].sendBackTo = ["kind:implementation"];
+    expect(sendBackTargets(p, "plan")).toEqual([]);
+  });
+});
+
+describe("sendBackToStage", () => {
+  const reviewed = () => {
+    const p = pipeline([
+      stage({ id: "build", name: "Build", kind: "implementation", status: "passed" }),
+      stage({
+        id: "sql-review",
+        name: "SQL review",
+        kind: "domainReview",
+        status: "passed",
+        sendBackTo: ["kind:implementation"],
+      }),
+      stage({ id: "signoff", name: "Sign-off", kind: "humanVerification" }),
+    ]);
+    p.stages[1].subtasks[0].reply = "## Critical\n- The migration drops a column.";
+    return p;
+  };
+
+  const input = {
+    targetStageId: "build",
+    fromStageId: "sql-review",
+    findings: "**Critical**\n- The migration drops a column.",
+    at: "2026-08-04T12:00:00.000Z",
+  };
+
+  it("re-opens the target and everything after it", () => {
+    const result = sendBackToStage(reviewed(), input)!;
+    expect(result.reopened).toEqual(["build", "sql-review", "signoff"]);
+    expect(result.pipeline.stages.map((s) => s.status)).toEqual([
+      "pending",
+      "pending",
+      "pending",
+    ]);
+  });
+
+  it("carries the findings as guidance, which a revert cannot discard", () => {
+    // The whole point: the reviewing stage's own reply goes with the re-run, so
+    // without this the act of sending work back destroys the reason for it.
+    const result = sendBackToStage(reviewed(), input)!;
+    expect(result.pipeline.stages[1].subtasks[0].reply).toBeUndefined();
+    const note = result.pipeline.guidance![0];
+    expect(note.stageId).toBe("build");
+    expect(note.text).toContain("Sent back from \"SQL review\"");
+    expect(note.text).toContain("The migration drops a column.");
+  });
+
+  it("appends the operator's own note after the findings", () => {
+    const result = sendBackToStage(reviewed(), { ...input, note: "Leave Motability alone." })!;
+    expect(result.pipeline.guidance![0].text).toContain("Leave Motability alone.");
+  });
+
+  it("keeps guidance given earlier", () => {
+    const p = reviewed();
+    p.guidance = [
+      { id: "g1", stageId: "build", stageName: "Build", text: "Only this project.", at: "x" },
+    ];
+    const result = sendBackToStage(p, input)!;
+    expect(result.pipeline.guidance!.map((g) => g.id)).toEqual([
+      "g1",
+      expect.stringContaining("sendback-"),
+    ]);
+  });
+
+  it("refuses a target the stage does not declare", () => {
+    const p = reviewed();
+    p.stages[1].sendBackTo = [];
+    expect(sendBackToStage(p, input)).toBeUndefined();
+  });
+
+  it("refuses to send forward, or to itself", () => {
+    const p = reviewed();
+    p.stages[1].sendBackTo = ["signoff", "sql-review"];
+    expect(sendBackToStage(p, { ...input, targetStageId: "signoff" })).toBeUndefined();
+    expect(sendBackToStage(p, { ...input, targetStageId: "sql-review" })).toBeUndefined();
+  });
+
+  it("does not mutate the pipeline it was given", () => {
+    const p = reviewed();
+    sendBackToStage(p, input);
+    expect(p.stages[0].status).toBe("passed");
+    expect(p.guidance).toBeUndefined();
   });
 });
