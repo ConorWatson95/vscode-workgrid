@@ -38,6 +38,9 @@ import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials"
 import { PendingGate, PermissionGateService } from "./services/permissionGateService";
 import { nextAnnouncements } from "./domain/permissionGatePolicy";
 import { nodeGateFileSystem } from "./services/gateFileSystem";
+import { AskUserService, PendingAsk } from "./services/askUserService";
+import { ASK_TOOL_ALLOW_RULE } from "./agents/askUserProtocol";
+import { recordQuestion } from "./domain/pipelineEngine";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -177,11 +180,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     nodeGateFileSystem,
     logger,
     () => configuration.gateInterpreter(repositoryUri),
-    () => configuration.gatedTools(repositoryUri),
+    // No gated tools when the feature is off, which writes a settings file with no
+    // hook — still needed, because it carries the ask_user allow rule below.
+    () =>
+      configuration.interactivePermissions(repositoryUri)
+        ? configuration.gatedTools(repositoryUri)
+        : [],
     () => Math.round(configuration.permissionWaitMinutes(repositoryUri) * 60),
     () => configuration.holdEveryToolCall(repositoryUri),
+    // The extension's own question tool. Without a rule the CLI refuses it and the
+    // agent reports that it cannot ask, which is the dead end this replaces.
+    () =>
+      configuration.interactiveQuestions(repositoryUri) ? [ASK_TOOL_ALLOW_RULE] : [],
   );
   context.subscriptions.push({ dispose: () => permissionGate.dispose() });
+
+  // Lets a stage ask the user a question without ending its session, so the answer
+  // arrives mid-turn and the subtask does not start again from the beginning.
+  const askUser = new AskUserService(
+    vscode.Uri.joinPath(context.globalStorageUri, "ask-user").fsPath,
+    nodeGateFileSystem,
+    logger,
+    () => configuration.gateInterpreter(repositoryUri),
+  );
+  context.subscriptions.push({ dispose: () => askUser.dispose() });
 
   // --- Tree view --------------------------------------------------------
   const tree = new TaskWorkspaceTreeProvider(
@@ -353,6 +375,54 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   };
 
+  // A live question goes into the same place a NEEDS-INFO one does, so the tree
+  // row, the panel and the answer flow are all reused — the only difference is
+  // `liveCallId`, which tells the submit handler an agent is still waiting.
+  context.subscriptions.push({
+    dispose: askUser.onAsked((asked: PendingAsk) => {
+      void (async () => {
+        const task = await repository.get(asked.taskId);
+        if (!task?.pipeline) {
+          // Nothing to attach it to; let the agent proceed rather than block.
+          askUser.abandon(asked.taskId);
+          return;
+        }
+        const running = task.pipeline.stages.find((stage) =>
+          stage.subtasks.some((subtask) => subtask.status === "active"),
+        );
+        const subtask = running?.subtasks.find((s) => s.status === "active");
+        const recorded = recordQuestion(task.pipeline, {
+          stageId: running?.id ?? task.pipeline.stages[0]?.id ?? "",
+          stageName: running?.name ?? "Stage",
+          subtaskId: subtask?.id ?? asked.request.id,
+          questions: asked.request.questions,
+          at: asked.waitingSince,
+          liveCallId: asked.request.id,
+        });
+        if (!recorded.ok) {
+          logger.error(`Could not record a live question: ${recorded.error.message}`);
+          askUser.abandon(asked.taskId);
+          return;
+        }
+        await repository.save({
+          ...task,
+          pipeline: recorded.value,
+          updatedAt: new Date().toISOString(),
+        });
+        tree.refresh();
+        logger.info(
+          `Harness [${task.name}] is waiting on ${asked.request.questions.length} question(s) — the agent is paused.`,
+        );
+        // Opened rather than announced: the agent is stopped until it is answered,
+        // and a toast for this competes with every other task's toasts.
+        await vscode.commands.executeCommand(
+          "taskWorkspaces.answerQuestions",
+          task.id,
+        );
+      })();
+    }),
+  });
+
   context.subscriptions.push({
     dispose: permissionGate.onChanged(() => {
       tree.refresh();
@@ -446,12 +516,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
+    // Both channels a stage can use to reach the user, installed together because
+    // both are per-subtask CLI arguments. Each is separately switchable and each
+    // fails soft, so a stage runs with either, both, or neither.
     {
-      prepare: (taskId) =>
-        configuration.interactivePermissions(repositoryUri)
-          ? permissionGate.prepare(taskId)
-          : undefined,
-      release: (taskId) => permissionGate.release(taskId),
+      prepare: (taskId) => {
+        const askOn = configuration.interactiveQuestions(repositoryUri);
+        const ask = askOn ? askUser.prepare(taskId) : undefined;
+        // The settings file is needed by either feature: it installs the hook and
+        // carries the ask_user allow rule. Written whenever either is on, and with
+        // no gated tools it contains no hook at all.
+        const gate =
+          configuration.interactivePermissions(repositoryUri) || ask
+            ? permissionGate.prepare(taskId)
+            : undefined;
+        if (!gate && !ask) return undefined;
+        return {
+          settingsPath: gate?.settingsPath,
+          extraMcpConfigPaths: ask ? [ask.mcpConfigPath] : [],
+        };
+      },
+      release: (taskId) => {
+        permissionGate.release(taskId);
+        // Abandons anything still asked, so a finished stage does not leave the
+        // question panel offering to answer a session that has gone.
+        askUser.release(taskId);
+      },
     },
   );
   const permissionRules = new PermissionRulesService(logger);
@@ -549,6 +639,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const commandContext: CommandContext = {
     permissionRules,
     permissionGate,
+    askUser,
     service,
     worktrees: worktreeService,
     status: statusService,

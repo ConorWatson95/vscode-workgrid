@@ -27,6 +27,15 @@ export interface CliArgsInput {
    */
   mcpConfigPath?: string;
   /**
+   * Further MCP configs to load alongside `mcpConfigPath`.
+   *
+   * Used for the extension's own `ask_user` server, which must not be merged into
+   * the project's `.mcp.json` — that file is the user's, and our server is
+   * machinery rewritten per run. `--mcp-config` being variadic is what makes
+   * passing both possible.
+   */
+  extraMcpConfigPaths?: string[];
+  /**
    * Extra settings file layered over the user's own, used to install the
    * permission gate hook.
    *
@@ -150,8 +159,16 @@ export function buildCliArgs(input: CliArgsInput): string[] {
   // a positional prompt after it is read as a second config path and the CLI
   // dies with "MCP config file not found". Safe here only because the prompt is
   // written to stdin, never passed as an argument.
-  if (input.mcpConfigPath && input.mcpConfigPath.trim().length > 0) {
-    args.push("--mcp-config", quoteForShell(input.mcpConfigPath.trim(), input.useShell));
+  const mcpConfigs = [input.mcpConfigPath, ...(input.extraMcpConfigPaths ?? [])]
+    .map((path) => path?.trim())
+    .filter((path): path is string => Boolean(path && path.length > 0));
+  if (mcpConfigs.length > 0) {
+    args.push(
+      "--mcp-config",
+      // One flag, several values — that is what variadic means here, and it is
+      // also why nothing may follow.
+      ...mcpConfigs.map((path) => quoteForShell(path, input.useShell)),
+    );
   }
 
   return args;

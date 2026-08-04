@@ -85,6 +85,8 @@ export class PermissionGateService {
     private readonly timeoutSeconds: () => number,
     /** Hold every gated call, not only capabilities already refused. */
     private readonly holdEverything: () => boolean = () => false,
+    /** Rules the settings file should allow outright; see buildGateSettings. */
+    private readonly allowRules: () => string[] = () => [],
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
@@ -161,6 +163,7 @@ export class PermissionGateService {
             inboxPath,
             timeoutSeconds: this.timeoutSeconds(),
             tools: this.gatedTools(),
+            allow: this.allowRules(),
           }),
           null,
           2,

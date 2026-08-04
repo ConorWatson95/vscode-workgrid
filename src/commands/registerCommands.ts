@@ -472,6 +472,46 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
         return;
       }
 
+      // A live question is one an agent is still blocked on, so the answers go
+      // back to *it* and it carries on mid-turn with everything it had worked
+      // out. Nothing re-runs, and nothing needs advancing — the session never
+      // stopped. This is the whole reason `ask_user` exists.
+      const liveCallId = pending.liveCallId;
+      if (liveCallId && ctx.askUser?.get(liveCallId)) {
+        const answered = ctx.askUser.answer(
+          liveCallId,
+          pending.items.map((item) => item.answer?.trim() ?? ""),
+        );
+        if (answered) {
+          await ctx.repository.save({
+            ...latest,
+            // Kept in the brief as well: a later subtask runs in a fresh session
+            // and would otherwise have to ask the same thing again.
+            description: [
+              latest.description,
+              pending.items
+                .map((item) => `Q: ${item.text}\nA: ${item.answer?.trim() ?? ""}`)
+                .join("\n\n"),
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+            pipeline: clearQuestion(latest.pipeline),
+            updatedAt: new Date().toISOString(),
+          });
+          QuestionPanel.update(taskId, undefined);
+          ctx.tree.refresh();
+          ctx.logger.info(
+            `Harness [${latest.name}] answered ${pending.items.length} question(s) live; the agent is continuing.`,
+          );
+          return;
+        }
+        // Fell through: the stage ended or timed out while the panel was open, so
+        // the answers are worth keeping and the stage has to run again.
+        void vscode.window.showWarningMessage(
+          "That stage stopped waiting, so your answers were added to the brief instead.",
+        );
+      }
+
       // Answers go into the brief, not back into the session that asked: that
       // session has ended, and the next attempt is a fresh one that sees only
       // the brief. Pairing each answer with its question is why they are stored

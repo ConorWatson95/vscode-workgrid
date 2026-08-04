@@ -105,6 +105,47 @@ describe("buildCliArgs", () => {
     });
   });
 
+  describe("several mcp configs", () => {
+    it("passes them all under one variadic flag", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        mcpConfigPath: "C:/repo/.mcp.json",
+        extraMcpConfigPaths: ["C:/gates/t1/ask-mcp.json"],
+      });
+      expect(args.filter((a) => a === "--mcp-config")).toHaveLength(1);
+      expect(args.slice(-2)).toEqual([
+        "C:/repo/.mcp.json",
+        "C:/gates/t1/ask-mcp.json",
+      ]);
+    });
+
+    it("works when only the extension's own config exists", () => {
+      // A project with no .mcp.json must still get the ask_user server.
+      const args = buildCliArgs({
+        ...BASE,
+        extraMcpConfigPaths: ["C:/gates/t1/ask-mcp.json"],
+      });
+      expect(valueOf(args, "--mcp-config")).toBe("C:/gates/t1/ask-mcp.json");
+    });
+
+    it("omits the flag when every path is blank", () => {
+      expect(
+        buildCliArgs({ ...BASE, extraMcpConfigPaths: ["", "  "] }),
+      ).not.toContain("--mcp-config");
+    });
+
+    it("keeps the flag last, since it swallows what follows", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        model: "opus",
+        settingsPath: "C:/gates/t1/settings.json",
+        mcpConfigPath: "C:/repo/.mcp.json",
+        extraMcpConfigPaths: ["C:/gates/t1/ask-mcp.json"],
+      });
+      expect(args.indexOf("--mcp-config")).toBe(args.length - 3);
+    });
+  });
+
   describe("--settings", () => {
     it("passes the gate settings file when one is given", () => {
       const args = buildCliArgs({

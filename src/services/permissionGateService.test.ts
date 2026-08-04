@@ -57,7 +57,7 @@ function payload(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-function make(options: { holdEverything?: boolean } = {}) {
+function make(options: { holdEverything?: boolean; allow?: string[] } = {}) {
   const fs = memoryFs();
   const service = new PermissionGateService(
     "/gates",
@@ -67,6 +67,7 @@ function make(options: { holdEverything?: boolean } = {}) {
     () => ["Bash", "Write"],
     () => 900,
     () => options.holdEverything ?? false,
+    () => options.allow ?? [],
     () => "2026-08-04T10:00:00.000Z",
   );
   return { fs, service };

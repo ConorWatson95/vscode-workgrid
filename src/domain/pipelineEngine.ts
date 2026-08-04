@@ -408,6 +408,12 @@ export function recordQuestion(
     subtaskId: string;
     questions: string[];
     at: string;
+    /**
+     * Set when the agent is blocked on this question, waiting on ask_user.
+     * Answering it hands the answer back to that live session instead of
+     * enriching the brief and re-running the subtask.
+     */
+    liveCallId?: string;
   },
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === asked.stageId);
@@ -433,6 +439,7 @@ export function recordQuestion(
       subtaskId: asked.subtaskId,
       askedAt: asked.at,
       items,
+      liveCallId: asked.liveCallId,
     },
   });
 }

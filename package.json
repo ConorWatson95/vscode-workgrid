@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -714,6 +714,12 @@
           "default": true,
           "scope": "resource",
           "markdownDescription": "Advance the route automatically once you have answered all of a stage's questions.\n\nAnswering is already a deliberate act and its only purpose is to unblock the route, so the confirmation afterwards only created a window in which the task sat idle. The answers are appended to the brief and the stage that asked them re-runs with it.\n\nTurn this off to be asked first. Either way, progress shows in the status bar and **Stop Agent** interrupts it."
+        },
+        "taskWorkspaces.interactiveQuestions": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Let a stage ask you a question without ending its session.\n\nThe extension runs a small MCP server exposing an `ask_user` tool. When a stage lacks information it calls the tool, pauses, and your question panel opens; answering hands the answer straight back and the agent carries on **mid-turn** with everything it had already worked out.\n\nWithout this, a stage that needs information replies `NEEDS-INFO` and ends. Answering then appends to the brief and the subtask **runs again from the beginning** — so the information costs a stage rather than a pause. That path remains the fallback whenever the tool is unavailable.\n\nRequires `node` (see `#taskWorkspaces.gateInterpreter#`). The extension grants itself one permission rule, `mcp__taskworkspaces__ask_user`, in a settings file it owns; without it the CLI refuses the call and the agent reports that it cannot ask."
         }
       }
     }

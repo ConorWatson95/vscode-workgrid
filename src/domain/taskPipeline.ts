@@ -165,6 +165,20 @@ export interface PendingQuestion {
   subtaskId: string;
   askedAt: string;
   items: QuestionItem[];
+  /**
+   * Set when an agent is **blocked on this question right now**, waiting on the
+   * `ask_user` tool.
+   *
+   * The difference it makes: answering a live question hands the answer straight
+   * back to the waiting session, which continues mid-turn with everything it had
+   * worked out. Answering a question without one enriches the brief and the
+   * subtask runs again from the beginning.
+   *
+   * Persisted with the rest, but only meaningful while that CLI process lives —
+   * so a stale one is expected after a reload and callers must treat "no longer
+   * waiting" as normal rather than an error.
+   */
+  liveCallId?: string;
 }
 
 /** One question and, once given, its answer. */
@@ -275,5 +289,6 @@ function normalizeQuestion(stored: unknown): PendingQuestion | undefined {
     subtaskId: q.subtaskId,
     askedAt: q.askedAt ?? "",
     items,
+    liveCallId: typeof q.liveCallId === "string" ? q.liveCallId : undefined,
   };
 }

@@ -58,6 +58,8 @@ export interface StreamSessionOptions {
    * open while the user decides instead of letting it be refused outright.
    */
   settingsPath?: string;
+  /** Further MCP configs, e.g. the extension's own ask_user server. */
+  extraMcpConfigPaths?: string[];
   /** Resume this existing Claude session id instead of starting a new one. */
   resumeSessionId?: string;
   /** Auto-compact once context exceeds this many tokens (0 = never). */
@@ -179,6 +181,7 @@ export class ClaudeStreamSession {
       mcpConfigPath: this.options.mcpConfigPath,
       strictMcpConfig: this.options.strictMcpConfig,
       settingsPath: this.options.settingsPath,
+      extraMcpConfigPaths: this.options.extraMcpConfigPaths,
       useShell,
     });
 

@@ -191,23 +191,45 @@ export function buildGateSettings(options: {
   timeoutSeconds: number;
   /** Tools to gate. A `PreToolUse` matcher is an anchored regex alternation. */
   tools: readonly string[];
+  /**
+   * Rules to allow outright.
+   *
+   * The gate adds no capability of its own and must not — but the extension's own
+   * `ask_user` tool is a different thing: it lets a stage ask its operator a
+   * question, and without an allow rule the CLI refuses it, which leaves the agent
+   * reporting that it cannot ask. That is not a capability an attacker gains
+   * anything from, and it is the only entry that belongs here. Nothing derived
+   * from a task, a branch or a project file may be passed.
+   */
+  allow?: readonly string[];
 }): Record<string, unknown> {
   const command = `${quote(options.interpreter)} ${quote(options.scriptPath)} ${quote(options.inboxPath)}`;
+  const allow = (options.allow ?? []).filter((rule) => rule.trim().length > 0);
+  // No tools means no hook. The file is still worth writing, because it also
+  // carries the allow rule the ask_user tool needs — the two features are
+  // separately switchable, and an empty matcher would gate *everything*.
+  const hooks =
+    options.tools.length > 0
+      ? {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: options.tools.join("|"),
+                hooks: [
+                  {
+                    type: "command",
+                    command,
+                    timeout: options.timeoutSeconds,
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {};
   return {
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: options.tools.join("|"),
-          hooks: [
-            {
-              type: "command",
-              command,
-              timeout: options.timeoutSeconds,
-            },
-          ],
-        },
-      ],
-    },
+    ...(allow.length > 0 ? { permissions: { allow } } : {}),
+    ...hooks,
   };
 }
 

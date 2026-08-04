@@ -164,9 +164,53 @@ describe("buildGateSettings", () => {
     expect(settings().hooks.PreToolUse[0].hooks[0].timeout).toBe(900);
   });
 
-  it("declares no permissions of its own", () => {
-    // This file is layered over the user's settings; it must add machinery only,
-    // never widen what the agent is allowed to do.
+  it("declares no permissions unless asked to", () => {
+    // Layered over the user's settings, so it adds machinery by default and never
+    // widens what the agent may do off its own bat.
     expect(settings().permissions).toBeUndefined();
+  });
+
+  it("carries only the allow rules it was handed", () => {
+    // The one intended use is the extension's own ask_user tool: without a rule
+    // the CLI refuses it and the agent reports it cannot ask its operator
+    // anything. Nothing task-derived may be passed here.
+    const withAllow = buildGateSettings({
+      scriptPath: "/gate.js",
+      interpreter: "node",
+      inboxPath: "/inbox",
+      timeoutSeconds: 900,
+      tools: ["Bash"],
+      allow: ["mcp__taskworkspaces__ask_user"],
+    }) as any;
+    expect(withAllow.permissions).toEqual({
+      allow: ["mcp__taskworkspaces__ask_user"],
+    });
+  });
+
+  it("installs no hook when no tools are gated", () => {
+    // An empty matcher would gate *everything*. The file is still written because
+    // it carries the ask_user allow rule, which is switched on separately.
+    const noTools = buildGateSettings({
+      scriptPath: "/gate.js",
+      interpreter: "node",
+      inboxPath: "/inbox",
+      timeoutSeconds: 900,
+      tools: [],
+      allow: ["mcp__taskworkspaces__ask_user"],
+    }) as any;
+    expect(noTools.hooks).toBeUndefined();
+    expect(noTools.permissions.allow).toEqual(["mcp__taskworkspaces__ask_user"]);
+  });
+
+  it("omits blank allow entries rather than writing an empty rule", () => {
+    const withBlanks = buildGateSettings({
+      scriptPath: "/gate.js",
+      interpreter: "node",
+      inboxPath: "/inbox",
+      timeoutSeconds: 900,
+      tools: ["Bash"],
+      allow: ["   ", ""],
+    }) as any;
+    expect(withBlanks.permissions).toBeUndefined();
   });
 });

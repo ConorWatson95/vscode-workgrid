@@ -37,8 +37,17 @@ export interface StageSessions {
  * no filesystem.
  */
 export interface StageGate {
-  /** Installs the hook and returns the settings file to pass the CLI. */
-  prepare(taskId: string): { settingsPath: string } | undefined;
+  /**
+   * Installs whatever the stage needs to talk back to the user, and returns the
+   * CLI arguments that reach it: a settings file for the permission hook, and
+   * extra MCP configs for the ask_user server.
+   *
+   * Either may be absent — each feature is separately switchable and each fails
+   * soft — so a stage still runs when neither is installed.
+   */
+  prepare(taskId: string):
+    | { settingsPath?: string; extraMcpConfigPaths?: string[] }
+    | undefined;
   /** Stops watching. Also tells any still-blocked hook that nobody is listening. */
   release(taskId: string): void;
 }
@@ -104,6 +113,10 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       {
         ...base,
         settingsPath: gateSession?.settingsPath ?? base.settingsPath,
+        extraMcpConfigPaths: [
+          ...(base.extraMcpConfigPaths ?? []),
+          ...(gateSession?.extraMcpConfigPaths ?? []),
+        ],
         autoCompactThreshold: 0,
         // A stage's own model wins; an absent or blank one leaves the
         // extension-wide setting in place rather than clearing it.

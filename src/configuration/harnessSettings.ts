@@ -182,6 +182,16 @@ export class HarnessSettings {
     return this.textOr("gateInterpreter", "node");
   }
 
+  /**
+   * Whether a stage may ask the user a question without ending its session.
+   *
+   * On by default. Off falls back to the NEEDS-INFO reply, which still works but
+   * re-runs the subtask once answered.
+   */
+  interactiveQuestions(): boolean {
+    return this.flag("interactiveQuestions", true);
+  }
+
   /** Whether a refused tool call is held open for approval instead of failing. */
   interactivePermissions(): boolean {
     return this.flag("interactivePermissions", true);

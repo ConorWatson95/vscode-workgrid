@@ -22,6 +22,10 @@ const HEADLESS_ROOTS = [
   "src/services/reviewPlanService.ts",
   "src/services/taskReconciliationService.ts",
   "src/services/permissionGateService.ts",
+  // A headless run must be able to ask its operator a question too — and to be
+  // told nobody is listening, so it proceeds rather than blocking.
+  "src/services/askUserService.ts",
+  "src/services/gateFileSystem.ts",
   "src/persistence/taskStateStore.ts",
   "src/persistence/fileTaskRepository.ts",
   "src/persistence/nodeStateFileIo.ts",
@@ -34,6 +38,8 @@ const HEADLESS_ROOTS = [
   "src/agents/claudeStreamSession.ts",
   "src/agents/stagePrompts.ts",
   "src/agents/permissionGateScript.ts",
+  "src/agents/askUserServerScript.ts",
+  "src/agents/askUserProtocol.ts",
   "src/git/gitWorktreeService.ts",
   "src/domain/pipelineEngine.ts",
   "src/domain/taskRoute.ts",

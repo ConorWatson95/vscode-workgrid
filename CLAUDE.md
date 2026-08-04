@@ -176,6 +176,40 @@ Two invariants follow from that last point, and both are load-bearing:
   The CLI reads it with the *worktree* as cwd, so a relative path silently never
   fires, which looks exactly like the feature being off.
 
+### Asking the user (`ask_user`)
+
+The gate's twin, for information rather than permission. A stage that lacks
+information used to reply `NEEDS-INFO` and end its session, so answering
+**re-ran the whole subtask**. Instead the extension runs its own stdio MCP server
+(`agents/askUserServerScript.ts`, shipped as a string) exposing one blocking
+`ask_user` tool; `AskUserService` raises the question, and the answer returns as
+the tool's **result**, so the agent continues mid-turn keeping everything it had
+worked out.
+
+- Verified: a `tools/call` held 45s, and both answers of a two-question call
+  reached the agent in the same turn.
+- `NEEDS-INFO` stays as the fallback. A stage that cannot ask must not guess, so
+  the slow path is kept rather than removed, and `preamble()` names both and says
+  which is cheaper.
+- **The tool needs an allow rule.** Probed: under `acceptEdits` the server
+  connects and the tool is advertised, the agent calls it, and the permission
+  layer denies it — the agent then reports it cannot ask, which is the same dead
+  end as having no tool. So `buildGateSettings` takes `allow`, and
+  `ASK_TOOL_ALLOW_RULE` is the *only* thing that may be passed: nothing derived
+  from a task, a branch or a project file.
+- **`--mcp-config` is variadic, which is what makes this possible** — the
+  project's own config and ours are passed under one flag rather than merging our
+  server into a file the user maintains.
+- **The server must never write to stdout except JSON-RPC.** A stray log line is
+  framed as a protocol message and the CLI drops the server, so the tool silently
+  vanishes. Diagnostics go to stderr; a test pins it.
+- **Every `tools/call` gets a result.** Release and stop *abandon* outstanding
+  questions with an instruction to proceed and declare assumptions, because an
+  unanswered call otherwise blocks until the MCP timeout.
+- `PendingQuestion.liveCallId` is the whole integration: a live question uses the
+  same tree row, panel and answer flow as a `NEEDS-INFO` one, and only the submit
+  handler differs — answer the waiting call, or enrich the brief and re-run.
+
 **Status:** wired end to end — route picker → stages in the tree → Advance Route
 drives split/run/checklist → approve gate. Remaining gap: stage outcomes are
 **self-reported**. `finishSubtask(..., "done")` records that the agent session

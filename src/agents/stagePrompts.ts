@@ -52,13 +52,24 @@ function preamble(context: StageContext, stage: TaskStage): string {
     "You are one stage of a defined workflow and have no memory of earlier stages.",
     "",
     `If the brief does not tell you enough to do this properly — it may be only a`,
-    `ticket reference — do NOT guess and do NOT proceed. Reply with exactly`,
-    `"${NEEDS_INFO_MARKER}" followed by your questions as a numbered list, one`,
-    `question per line, and nothing else. Each line is answered separately, so ask`,
-    `one thing per line rather than combining several into a paragraph.`,
-    `The work will pause and a human will answer. First check whether the answer is`,
-    `already available to you: read the code, and use any ticket tooling this`,
-    `repository provides. Only ask for what you genuinely cannot find.`,
+    `ticket reference — do NOT guess and do NOT proceed. First check whether the`,
+    `answer is already available to you: read the code, and use any ticket tooling`,
+    `this repository provides. Only ask for what you genuinely cannot find.`,
+    "",
+    // Two ways to ask, and the difference is what a question costs. The tool keeps
+    // the session alive, so the answer arrives mid-turn and everything worked out
+    // so far survives. The marker ends the session, so answering it re-runs the
+    // whole subtask from scratch. The tool is preferred whenever it is there.
+    `To ask, prefer the "ask_user" tool if you have it: it pauses you until a human`,
+    `answers, then you carry on with everything you have already worked out. Put`,
+    `every question you have into one call, each self-contained.`,
+    "",
+    `If you do not have that tool, reply with exactly "${NEEDS_INFO_MARKER}" followed`,
+    `by your questions as a numbered list, one question per line, and nothing else.`,
+    `Each line is answered separately, so ask one thing per line rather than`,
+    `combining several into a paragraph. The work will pause and a human will answer,`,
+    `but this stage will then start again from the beginning — so use the tool when`,
+    `you can.`,
     "",
     // Each shell call is a process launch, and on a Windows host with on-access
     // scanning that costs of the order of a second — per process, so a four-stage

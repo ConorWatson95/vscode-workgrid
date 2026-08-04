@@ -19,6 +19,7 @@ import { PipelineRunner } from "../services/pipelineRunner";
 import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { PermissionRulesService } from "../services/permissionRulesService";
 import { PermissionGateService } from "../services/permissionGateService";
+import { AskUserService } from "../services/askUserService";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -49,6 +50,11 @@ export interface CommandContext {
    * to the after-the-fact denial flow when the gate could not be installed.
    */
   permissionGate?: PermissionGateService;
+  /**
+   * Lets a blocked stage be answered in place. Optional so the question flow
+   * degrades to enriching the brief and re-running when it is not installed.
+   */
+  askUser?: AskUserService;
   resolveRepositoryRoot: () => string | undefined;
   repositoryUri: () => vscode.Uri | undefined;
 }
