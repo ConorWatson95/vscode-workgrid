@@ -55,6 +55,35 @@ export class GitWorktreeService {
     return ok(main.path);
   }
 
+  /**
+   * Resolves the repository's *common* git directory — the one shared by the
+   * main worktree and every linked worktree. Harness state lives under it, so
+   * every worktree of a repo reads the same store, and the state file never
+   * appears in a working tree (where it would show up in changed paths and
+   * could trigger the very review rules it is bookkeeping for).
+   *
+   * `--git-common-dir` rather than joining `.git`: a repo can have a separated
+   * git dir, and inside a linked worktree `.git` is a file, not a directory.
+   */
+  async getGitCommonDir(
+    repositoryRoot: string,
+    signal?: AbortSignal,
+  ): Promise<Result<string, WorktreeError>> {
+    const result = await this.git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: repositoryRoot,
+      signal,
+    });
+    if (!result.ok) return gitErr(result.error);
+    const dir = result.value.stdout.trim();
+    if (!dir) {
+      return err({
+        kind: "validation",
+        message: `Could not resolve the git directory for ${repositoryRoot}.`,
+      });
+    }
+    return ok(dir);
+  }
+
   async listWorktrees(
     repositoryRoot: string,
     signal?: AbortSignal,

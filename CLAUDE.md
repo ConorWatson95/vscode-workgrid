@@ -75,6 +75,21 @@ to skip the test.
 - **`worktreePath` is the reconciliation key** (`taskReconciliationService.ts`),
   normalised case-insensitively with forward slashes. A stored task whose worktree
   is gone is marked `failed`, never deleted.
+- **Task state lives under the repository's git common dir**
+  (`<git dir>/task-workspaces/state.json`, `taskStateFile.ts`), never in a
+  working tree. Two reasons, both load-bearing: the rules engine keys reviews off
+  git's changed paths, so state inside a worktree could oblige a review by being
+  written; and a linked worktree's common dir is the main repo's, so every
+  worktree shares one store. Resolve it with `--git-common-dir`, never by joining
+  `.git` — that is a file in a linked worktree.
+- **Writes to the state file are read-modify-write, atomically renamed**
+  (`nodeStateFileIo.ts`). The extension and a headless run both write it, so a
+  cached view or an in-place write would lose or truncate tasks.
+- **The Memento is now a backup, not the source of truth.** `TaskStateStore`
+  adopts its tasks into a repo's state file once, lazily, then never writes it
+  again — adoption is per-repo because the Memento is global and other clones may
+  not be mounted. Presence of the state file is the "already adopted" marker, so
+  re-seeding cannot resurrect deleted tasks.
 - **Review rules load from the repository root, never a task worktree**, so a
   branch cannot relax the reviews it is subject to.
 

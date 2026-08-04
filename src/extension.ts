@@ -4,6 +4,8 @@ import { GitClient } from "./git/gitClient";
 import { GitStatusService } from "./git/gitStatusService";
 import { GitWorktreeService } from "./git/gitWorktreeService";
 import { ExtensionStateTaskRepository } from "./persistence/extensionStateTaskRepository";
+import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
+import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
 import { TaskWorkspaceService } from "./services/taskWorkspaceService";
 import { ExtensionConfiguration } from "./configuration/extensionConfiguration";
 import { TerminalManager } from "./processes/terminalManager";
@@ -51,7 +53,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const gitClient = new GitClient(logger);
   const statusService = new GitStatusService(gitClient);
   const worktreeService = new GitWorktreeService(gitClient, statusService);
-  const repository = new ExtensionStateTaskRepository(context.globalState, logger);
+  // Resolved below, but declared here because the task store reads it on every
+  // call: the active repository decides which state file is in play.
+  let repositoryRoot: string | undefined;
+  let repositoryUri: vscode.Uri | undefined;
+
+  // --- Task state -------------------------------------------------------
+  // The source of truth is a file under the repository's own git directory, not
+  // extension state, so a headless run of the harness and this window act on
+  // the same tasks. The Memento is kept as the adoption source for repositories
+  // last written by an older version, and as the store of last resort when no
+  // git repository is active.
+  const legacyRepository = new ExtensionStateTaskRepository(
+    context.globalState,
+    logger,
+  );
+  const stateStore = new TaskStateStore({
+    io: new NodeStateFileIo(),
+    git: worktreeService,
+    legacy: legacyRepository,
+    logger,
+  });
+  // Declared before `repositoryRoot` exists, and read on every call, because the
+  // active repository is resolved after the service graph is built and can
+  // change while the window is open.
+  const repository = new RoutedTaskRepository(async () => {
+    if (!repositoryRoot) return undefined;
+    try {
+      return await stateStore.forRepository(repositoryRoot);
+    } catch (error) {
+      // Falling back keeps the window usable; without this a transient git
+      // failure would empty the task list, which reads as data loss.
+      logger.error(
+        `Falling back to extension state for tasks: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return undefined;
+    }
+  }, legacyRepository);
+
   const service = new TaskWorkspaceService(
     repository,
     worktreeService,
@@ -60,9 +101,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // --- Active repository resolution -------------------------------------
-  let repositoryRoot: string | undefined;
-  let repositoryUri: vscode.Uri | undefined;
-
   const resolveRepository = async (): Promise<void> => {
     repositoryRoot = undefined;
     repositoryUri = undefined;
