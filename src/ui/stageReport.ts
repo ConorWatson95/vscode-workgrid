@@ -1,4 +1,4 @@
-import { Subtask, TaskStage, TaskPipeline } from "../domain/taskPipeline";
+import { Subtask, SubtaskActivity, TaskStage, TaskPipeline } from "../domain/taskPipeline";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -53,6 +53,27 @@ export function formatStageReport(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Overlays the work a subtask has done so far onto the stage, for a report open
+ * while the stage is still running.
+ *
+ * Needed because activity only reaches the persisted subtask when the run ends,
+ * so a report of a running stage would otherwise say it had done nothing — the
+ * exact moment someone is most likely to be watching it.
+ */
+export function withLiveActivity(
+  stage: TaskStage,
+  live: { subtaskId: string; activity: SubtaskActivity } | undefined,
+): TaskStage {
+  if (!live) return stage;
+  const index = stage.subtasks.findIndex((s) => s.id === live.subtaskId);
+  if (index === -1) return stage;
+
+  const subtasks = [...stage.subtasks];
+  subtasks[index] = { ...subtasks[index], activity: live.activity };
+  return { ...stage, subtasks };
 }
 
 function formatSubtask(subtask: Subtask): string[] {

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
-import { formatStageReport, formatTaskReport } from "../ui/stageReport";
+import { changeRows, changeSummary } from "../ui/changeList";
+import { ok } from "../utilities/result";
 import { refreshPendingStages, revertToStage } from "../domain/stageRefresh";
 import {
   CommandContext,
@@ -585,22 +586,23 @@ async function showStageReportCommand(
   }
 
   // A stage row reports that stage; the task row reports everything it has done.
-  const content = stageItem
-    ? formatStageReport(
-        task.name,
-        task.pipeline?.stages.find((s) => s.id === stageItem.stage.id) ??
-          stageItem.stage,
-        task.pipeline,
-      )
-    : formatTaskReport(task.name, task.pipeline);
+  const uri = ctx.reportProvider.uriFor(
+    task,
+    stageItem ? { id: stageItem.stage.id, name: stageItem.stage.name } : undefined,
+  );
 
-  // An untitled document rather than a custom scheme: it is markdown, so preview
-  // works, and the user can keep, edit or paste it without any of it being ours.
-  const document = await vscode.workspace.openTextDocument({
-    content,
-    language: "markdown",
-  });
-  await vscode.window.showTextDocument(document, { preview: true });
+  // Opened as a rendered preview over a read-only virtual document, not as an
+  // untitled editor holding a snapshot. The snapshot was editable, so closing it
+  // asked to save text the user never wrote, and it never moved again — a report
+  // opened on a running stage stayed empty while the stage did its work.
+  const document = await vscode.workspace.openTextDocument(uri);
+  try {
+    await vscode.commands.executeCommand("markdown.showPreview", uri);
+  } catch {
+    // The built-in markdown extension can be disabled. The document is still
+    // read-only, so the fallback loses the rendering and nothing else.
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
 }
 
 /**
@@ -1343,9 +1345,90 @@ async function openCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   });
 }
 
+/**
+ * Whether this VS Code build has the multi-file diff editor.
+ *
+ * Probed rather than assumed: `vscode.changes` is a built-in command, not part of
+ * the extension API, so it carries no version guarantee — and calling a missing
+ * command surfaces as a raw error dialog.
+ */
+let multiDiffSupported: boolean | undefined;
+async function multiDiffAvailable(): Promise<boolean> {
+  if (multiDiffSupported === undefined) {
+    multiDiffSupported = (await vscode.commands.getCommands(true)).includes("vscode.changes");
+  }
+  return multiDiffSupported;
+}
+
+/** Git reports forward-slashed relative paths; the editor needs a real one. */
+function joinWorktreePath(worktreePath: string, relative: string): string {
+  return path.join(worktreePath, ...relative.split("/"));
+}
+
+/**
+ * Shows a task's changes as a file list with each file's own before/after
+ * comparison — the shape a code review actually has.
+ *
+ * Falls back to the unified patch when the multi-file editor is unavailable or
+ * when git cannot resolve the branch point, because a reviewer with a plain
+ * patch is better served than one with an error.
+ */
 async function showDiffCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   const task = await resolveTask(ctx, arg);
   if (!task) return;
+
+  const listed = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Window, title: "Listing changes…" },
+    async () => {
+      const files = await ctx.status.getChangedFiles(task.worktreePath, task.baseBranch);
+      if (!files.ok) return files;
+      const mergeBase = await ctx.status.getMergeBase(task.worktreePath, task.baseBranch);
+      return mergeBase.ok ? ok({ files: files.value, mergeBase: mergeBase.value }) : mergeBase;
+    },
+  );
+
+  if (listed.ok && listed.value.files.length === 0) {
+    void vscode.window.showInformationMessage(
+      `${task.name} has no changes relative to ${task.baseBranch}.`,
+    );
+    return;
+  }
+
+  if (listed.ok && (await multiDiffAvailable())) {
+    const rows = changeRows(listed.value.files, listed.value.mergeBase);
+    const resources = rows.map((row) => {
+      const side = (which: "before" | "after"): vscode.Uri => {
+        const source = row[which];
+        if (source.kind === "empty") return ctx.blobProvider.emptyUriFor(row.path);
+        if (source.kind === "worktree") {
+          return vscode.Uri.file(joinWorktreePath(task.worktreePath, source.path));
+        }
+        return ctx.blobProvider.uriFor(task.worktreePath, source.revision, source.path);
+      };
+      // The first URI is the row's identity, so it is the real file: that is what
+      // gives each row its file icon, its folder subtitle and a working "open".
+      return [
+        vscode.Uri.file(joinWorktreePath(task.worktreePath, row.path)),
+        side("before"),
+        side("after"),
+      ];
+    });
+
+    try {
+      await vscode.commands.executeCommand(
+        "vscode.changes",
+        `${task.name} · ${changeSummary(listed.value.files)}`,
+        resources,
+      );
+      return;
+    } catch (error) {
+      ctx.logger.warn(`Multi-file diff failed, falling back to a patch: ${String(error)}`);
+    }
+  }
+
+  if (!listed.ok) {
+    ctx.logger.warn(`Could not list changed files: ${listed.error.message}`);
+  }
 
   const diff = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: "Computing diff…" },

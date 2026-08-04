@@ -4,7 +4,90 @@ import {
   parseBranchHeader,
   parseShortStat,
   mergeChangedPaths,
+  parseNameStatus,
+  mergeChangedFiles,
 } from "./gitStatusService";
+
+describe("parseNameStatus", () => {
+  it("pairs a status with its path", () => {
+    expect(parseNameStatus("M\0src/a.ts\0A\0src/b.ts\0")).toEqual([
+      { status: "M", path: "src/a.ts" },
+      { status: "A", path: "src/b.ts" },
+    ]);
+  });
+
+  it("consumes the extra field a rename carries", () => {
+    // The third field is what makes this worth parsing: pairing fields off blindly
+    // would read the new path as the next entry's status.
+    expect(parseNameStatus("R100\0src/old.ts\0src/new.ts\0M\0src/c.ts\0")).toEqual([
+      { status: "R", path: "src/new.ts", origin: "src/old.ts" },
+      { status: "M", path: "src/c.ts" },
+    ]);
+  });
+
+  it("normalises separators", () => {
+    expect(parseNameStatus("M\0src\\Mapping\\Profile.cs\0")).toEqual([
+      { status: "M", path: "src/Mapping/Profile.cs" },
+    ]);
+  });
+
+  it("returns nothing for empty output", () => {
+    expect(parseNameStatus("")).toEqual([]);
+    expect(parseNameStatus("\0")).toEqual([]);
+  });
+
+  it("ignores a trailing status with no path", () => {
+    expect(parseNameStatus("M\0src/a.ts\0M\0")).toEqual([{ status: "M", path: "src/a.ts" }]);
+  });
+});
+
+describe("mergeChangedFiles", () => {
+  it("keeps a file added by a commit as added, not modified", () => {
+    // The working-tree diff can show the same path as modified; taking that letter
+    // would send the view looking for a before side that does not exist.
+    expect(
+      mergeChangedFiles([{ status: "A", path: "a.ts" }], [{ status: "M", path: "a.ts" }], ""),
+    ).toEqual([{ path: "a.ts", status: "added" }]);
+  });
+
+  it("treats an untracked file as added", () => {
+    expect(mergeChangedFiles([], [], "new.ts\0")).toEqual([
+      { path: "new.ts", status: "added", untracked: true },
+    ]);
+  });
+
+  it("reports a file deleted in the working tree as deleted", () => {
+    expect(
+      mergeChangedFiles([{ status: "M", path: "a.ts" }], [{ status: "D", path: "a.ts" }], ""),
+    ).toEqual([{ path: "a.ts", status: "deleted" }]);
+  });
+
+  it("omits a file the task created and then removed", () => {
+    // It is in neither the base nor the worktree, so there is nothing to compare.
+    expect(
+      mergeChangedFiles([{ status: "A", path: "a.ts" }], [{ status: "D", path: "a.ts" }], ""),
+    ).toEqual([]);
+  });
+
+  it("carries a rename's origin through", () => {
+    expect(
+      mergeChangedFiles([{ status: "R", path: "new.ts", origin: "old.ts" }], [], ""),
+    ).toEqual([{ path: "new.ts", status: "renamed", origin: "old.ts" }]);
+  });
+
+  it("counts a path in both diffs once, sorted", () => {
+    expect(
+      mergeChangedFiles(
+        [{ status: "M", path: "z.ts" }],
+        [{ status: "M", path: "z.ts" }, { status: "M", path: "a.ts" }],
+        "",
+      ),
+    ).toEqual([
+      { path: "a.ts", status: "modified" },
+      { path: "z.ts", status: "modified" },
+    ]);
+  });
+});
 
 describe("mergeChangedPaths", () => {
   it("merges NUL-separated outputs and drops empties", () => {

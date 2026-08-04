@@ -12,6 +12,8 @@ import { ArchivedHistoryRepository } from "../persistence/archivedHistoryReposit
 import { TaskWorkspaceTreeProvider } from "../ui/taskWorkspaceTreeProvider";
 import { TaskDetailViewProvider } from "../ui/taskDetailViewProvider";
 import { DiffContentProvider } from "../ui/diffContentProvider";
+import { ReportContentProvider } from "../ui/reportContentProvider";
+import { GitBlobContentProvider } from "../ui/gitBlobContentProvider";
 import { Logger } from "../logging/logger";
 import { VisualStudioService } from "../projects/visualStudioService";
 import { ReviewPlanService } from "../services/reviewPlanService";
@@ -35,6 +37,10 @@ export interface CommandContext {
   archive: SessionArchive;
   archivedHistory: ArchivedHistoryRepository;
   diffProvider: DiffContentProvider;
+  /** Serves stage/task reports as read-only documents that re-render as a stage runs. */
+  reportProvider: ReportContentProvider;
+  /** Serves the "before" side of each changed file, for the file-by-file view. */
+  blobProvider: GitBlobContentProvider;
   detailView: TaskDetailViewProvider;
   visualStudio: VisualStudioService;
   reviewPlans: ReviewPlanService;

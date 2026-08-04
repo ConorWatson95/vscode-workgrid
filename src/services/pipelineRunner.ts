@@ -60,6 +60,11 @@ export interface StageSessionRunner {
       model?: string;
       /** Called the instant a tool call is refused, while the stage still runs. */
       onDenial?: (denial: PermissionDenial) => void;
+      /**
+       * Called as the run works, with everything it has done so far. Throttled by
+       * the implementation — this fires per tool call, and a stage makes many.
+       */
+      onActivity?: (activity: SubtaskActivity) => void;
     },
   ): Promise<{
     ok: boolean;
@@ -71,6 +76,13 @@ export interface StageSessionRunner {
     /** What the run actually did, for the stage report. */
     activity?: SubtaskActivity;
   }>;
+}
+
+/** A subtask's work in progress: which one, and what it has done so far. */
+export interface LiveActivity {
+  stageId: string;
+  subtaskId: string;
+  activity: SubtaskActivity;
 }
 
 export type RunOutcome =
@@ -173,6 +185,22 @@ export class PipelineRunner {
 
   /** In-flight routes, so stopping a task's agent can stop its route too. */
   private readonly running = new Map<string, AbortController>();
+
+  /**
+   * What the currently running subtask has done so far, by task id.
+   *
+   * Held in memory rather than persisted: a subtask's activity only reaches the
+   * state file when it finishes, and writing it per tool call would rewrite the
+   * whole file dozens of times a stage. This is what lets a report opened on a
+   * running stage show the commands as they happen instead of staying empty until
+   * the stage ends.
+   */
+  private readonly liveActivities = new Map<string, LiveActivity>();
+
+  /** The in-progress activity for a task, if a subtask of it is running now. */
+  liveActivity(taskId: string): LiveActivity | undefined {
+    return this.liveActivities.get(taskId);
+  }
 
   /** What every stage is told about the task it is working on. */
   private contextFor(task: TaskWorkspace): StageContext {
@@ -482,10 +510,24 @@ export class PipelineRunner {
       task = await this.save(task, pipeline);
     }
 
-    const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
-      model: this.modelFor(task, stage),
-      onDenial: (denial) => this.onDenial(task, denial),
-    });
+    const taskId = task.id;
+    let reply;
+    try {
+      reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
+        model: this.modelFor(task, stage),
+        onDenial: (denial) => this.onDenial(task, denial),
+        onActivity: (activity) =>
+          this.liveActivities.set(taskId, {
+            stageId: stage.id,
+            subtaskId: subtask.id,
+            activity,
+          }),
+      });
+    } finally {
+      // The finished activity is on the subtask from here on, and a live copy that
+      // outlived its run would keep overriding it in the report.
+      this.liveActivities.delete(taskId);
+    }
 
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks

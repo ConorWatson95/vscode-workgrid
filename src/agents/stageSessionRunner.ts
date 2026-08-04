@@ -7,6 +7,9 @@ import { SubtaskActivity } from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 
+/** How often a running stage's progress is reported to whoever is watching. */
+export const ACTIVITY_INTERVAL_MS = 1500;
+
 /** The part of a live session a stage run observes. */
 export interface StageSession {
   readonly items: readonly ChatItem[];
@@ -87,6 +90,8 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       model?: string;
       /** Called the instant a tool call is refused, while the stage still runs. */
       onDenial?: (denial: PermissionDenial) => void;
+      /** Called as the run works, throttled to `ACTIVITY_INTERVAL_MS`. */
+      onActivity?: (activity: SubtaskActivity) => void;
     },
   ): Promise<{
     ok: boolean;
@@ -175,8 +180,19 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       // Fed from the same subscription, so recording what the stage did costs
       // nothing beyond the memory it holds.
       const activityWatcher = new StageActivityWatcher();
+      // Throttled: a stage produces items several a second, and each report costs
+      // a full render of everything it has done. A couple of seconds behind is
+      // indistinguishable from live to a reader, and free.
+      let lastReport = 0;
       const onItem = (item: ChatItem) => {
         activityWatcher.observe(item);
+        if (options?.onActivity && !activityWatcher.isEmpty()) {
+          const now = Date.now();
+          if (now - lastReport >= ACTIVITY_INTERVAL_MS) {
+            lastReport = now;
+            options.onActivity(activityWatcher.result());
+          }
+        }
         const denial = watcher.observe(item);
         if (!denial) return;
         this.logger.warn(

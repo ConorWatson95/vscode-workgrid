@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatStageReport, formatTaskReport } from "./stageReport";
+import { formatStageReport, formatTaskReport, withLiveActivity } from "./stageReport";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 
 function stage(overrides: Partial<TaskStage> = {}): TaskStage {
@@ -36,6 +36,48 @@ function stage(overrides: Partial<TaskStage> = {}): TaskStage {
 
 const pipeline = (stages: TaskStage[], guidance?: TaskPipeline["guidance"]) =>
   ({ routeId: "sql-change", routeLabel: "SQL change", stages, guidance }) as TaskPipeline;
+
+describe("withLiveActivity", () => {
+  const running = {
+    subtaskId: "p-1",
+    activity: {
+      toolCounts: { PowerShell: 1 },
+      commands: ["dotnet build"],
+      pathsWritten: [],
+      pathsRead: [],
+      output: "Build started…",
+    },
+  };
+
+  it("shows a running subtask's work in the report", () => {
+    const target = stage({
+      status: "active",
+      subtasks: [{ id: "p-1", title: "Build", prompt: "Build it.", status: "active" }],
+    });
+    const report = formatStageReport("SC-1", withLiveActivity(target, running), undefined);
+    expect(report).toContain("dotnet build");
+    expect(report).toContain("Build started…");
+    expect(report).not.toContain("No activity was recorded");
+  });
+
+  it("leaves the stage alone when nothing is running", () => {
+    const target = stage();
+    expect(withLiveActivity(target, undefined)).toBe(target);
+  });
+
+  it("leaves the stage alone when the live subtask belongs to another stage", () => {
+    const target = stage();
+    expect(withLiveActivity(target, { ...running, subtaskId: "other" })).toBe(target);
+  });
+
+  it("does not mutate the stage it was given", () => {
+    const target = stage({
+      subtasks: [{ id: "p-1", title: "Build", prompt: "Build it.", status: "active" }],
+    });
+    withLiveActivity(target, running);
+    expect(target.subtasks[0].activity).toBeUndefined();
+  });
+});
 
 describe("formatStageReport", () => {
   it("shows the command that ran and what it printed", () => {

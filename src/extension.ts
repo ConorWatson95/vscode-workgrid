@@ -23,6 +23,8 @@ import { PlanUsageViewProvider } from "./ui/planUsageViewProvider";
 import { VisualStudioService } from "./projects/visualStudioService";
 import { PlanUsageService } from "./agents/planUsageService";
 import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
+import { ReportContentProvider, REPORT_SCHEME } from "./ui/reportContentProvider";
+import { GitBlobContentProvider, BLOB_SCHEME } from "./ui/gitBlobContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
@@ -172,6 +174,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, diffProvider),
   );
 
+  // Reports render from the repository on every read, so one left open follows the
+  // stage it describes. `refresh()` is driven from the tree's own change event
+  // below — without it VS Code has no reason to re-read the document.
+  const reportProvider = new ReportContentProvider((taskId) => repository.get(taskId));
+  const blobProvider = new GitBlobContentProvider((worktreePath, revision, filePath) =>
+    statusService.showFile(worktreePath, revision, filePath),
+  );
+  context.subscriptions.push(
+    reportProvider,
+    blobProvider,
+    vscode.workspace.registerTextDocumentContentProvider(REPORT_SCHEME, reportProvider),
+    vscode.workspace.registerTextDocumentContentProvider(BLOB_SCHEME, blobProvider),
+  );
+
   // Holds a refused tool call open until the user decides, so the agent carries
   // on mid-turn instead of the stage being re-run once a rule is added. Created
   // before the tree because the tree renders what it is holding.
@@ -239,6 +255,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: tree,
   });
   context.subscriptions.push(treeView);
+
+  // Any refresh of the tree means a stage may have moved on, so an open report is
+  // re-read. Subscribed here rather than at each `tree.refresh()` call site —
+  // there are many, and a missed one is an invisibly stale report.
+  context.subscriptions.push(tree.onDidChangeTreeData(() => reportProvider.refresh()));
 
   // --- Docked detail view ----------------------------------------------
   const detailView = new TaskDetailViewProvider(context.extensionUri, {
@@ -643,6 +664,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => currentHarness(),
   );
 
+  // Lets an open report show a stage's commands as they run, rather than nothing
+  // until the subtask ends. Set here because the runner holds the live copy and is
+  // built after the providers.
+  reportProvider.setLiveActivitySource((taskId) => runner.liveActivity(taskId));
+  reportProvider.startAutoRefresh();
+
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {
     permissionRules,
@@ -660,6 +687,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     archive,
     archivedHistory,
     diffProvider,
+    reportProvider,
+    blobProvider,
     detailView,
     visualStudio,
     reviewPlans,
