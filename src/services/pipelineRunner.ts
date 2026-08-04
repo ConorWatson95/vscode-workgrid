@@ -14,10 +14,17 @@ import {
   recordQuestion,
   recordHandoff,
   handoffsBefore,
+  holdStageForFindings,
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
-import { producesChecklist } from "../domain/taskRoute";
+import { producesChecklist, StageKind } from "../domain/taskRoute";
+import {
+  hasBlockingFindings,
+  parseReviewFindings,
+  summariseFindings,
+} from "../domain/reviewFindings";
+
 import {
   StageContext,
   behaviourReviewPrompt,
@@ -35,6 +42,15 @@ import {
   formatDenialReport,
   suggestAllowRules,
 } from "../agents/permissionDenials";
+
+/**
+ * Stage kinds whose reply is a verdict about work someone else did.
+ *
+ * A behaviour review is excluded on purpose: it is a QA *planner*, not a judge —
+ * its output is a checklist for a human, so "findings" there are the deliverable
+ * rather than a reason to stop.
+ */
+const REVIEW_KINDS = new Set<StageKind>(["codeReview", "domainReview"]);
 
 /**
  * Drives a task's pipeline: asks the engine what to do next, does it, records
@@ -642,6 +658,26 @@ export class PipelineRunner {
       activity: reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
+
+    // A review that found something must not pass as though it had not. This is the
+    // one place a stage outcome stops being purely self-reported: the reply is read
+    // for findings, and a critical or important one holds the stage for a human
+    // rather than letting the route deploy over it.
+    if (reply.ok && REVIEW_KINDS.has(stage.kind)) {
+      const findings = parseReviewFindings(reply.text);
+      if (hasBlockingFindings(findings)) {
+        const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+        if (held.ok) {
+          pipeline = held.value;
+          const summary = summariseFindings(findings) ?? "findings";
+          steps.push(`"${stage.name}" found ${summary} — held for you.`);
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} found ${summary}; holding the route. ` +
+              "Approve to accept them, or send the findings back to an earlier stage.",
+          );
+        }
+      }
+    }
 
     // Recorded only on success, and only for stages the route marks `handoff`. A
     // failed stage's conclusion is not a conclusion, and carrying it forward would

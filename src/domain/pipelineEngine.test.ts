@@ -9,6 +9,7 @@ import {
   ruleInsertionIndex,
   recordHandoff,
   handoffsBefore,
+  holdStageForFindings,
   pipelineProgress,
   planStage,
   answerQuestion,
@@ -1041,5 +1042,46 @@ describe("stage handoffs", () => {
     let p = recordHandoff(base, "build", "built it", "t2");
     p = recordHandoff(p, "plan", "planned it", "t1");
     expect(handoffsBefore(p, "review").map((h) => h.stageName)).toEqual(["Plan", "Build"]);
+  });
+});
+
+describe("holdStageForFindings", () => {
+  const settled = (status: TaskStage["status"]): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        { id: "review", name: "SQL review", kind: "domainReview", status, intent: "", splittable: false, requiresApproval: false, subtasks: [], finishedAt: "t0" },
+        { id: "deploy", name: "Deploy", kind: "deployment", status: "pending", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+      ],
+    }) as TaskPipeline;
+
+  it("holds a review that passed, so the route stops instead of deploying", () => {
+    // The reported bug: fourteen critical findings and a clean review were the same
+    // outcome to the engine, because a stage passing meant "the session ended".
+    const held = holdStageForFindings(settled("passed"), "review", "t1");
+    expect(held.ok && held.value.stages[0].status).toBe("awaiting-approval");
+    expect(held.ok && held.value.stages[0].finishedAt).toBeUndefined();
+  });
+
+  it("leaves a failed stage alone, since it has a louder problem", () => {
+    const p = settled("failed");
+    const held = holdStageForFindings(p, "review", "t1");
+    expect(held.ok && held.value).toBe(p);
+  });
+
+  it("leaves a stage already awaiting approval alone", () => {
+    const p = settled("awaiting-approval");
+    const held = holdStageForFindings(p, "review", "t1");
+    expect(held.ok && held.value).toBe(p);
+  });
+
+  it("reports an unknown stage rather than silently doing nothing", () => {
+    const held = holdStageForFindings(settled("passed"), "nope", "t1");
+    expect(held.ok).toBe(false);
+  });
+
+  it("makes the engine ask for approval next", () => {
+    const held = holdStageForFindings(settled("passed"), "review", "t1");
+    expect(held.ok && nextAction(held.value).kind).toBe("awaitApproval");
   });
 });

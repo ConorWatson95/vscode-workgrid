@@ -255,6 +255,43 @@ export function handoffsBefore(
     .map((handoff) => ({ stageName: handoff.stageName, text: handoff.text }));
 }
 
+/**
+ * Holds a review stage that found something, even though it ran successfully.
+ *
+ * The gap this closes is the oldest one in the harness: a stage's outcome was
+ * *self-reported*, meaning "the session ended without error" — so a review that
+ * came back with fourteen critical findings passed exactly like a clean one, and
+ * the route carried on to deploy. The findings were parsed, displayed, and acted
+ * on by nobody.
+ *
+ * Held rather than failed, deliberately. A failure says the stage could not do its
+ * job; this stage did its job well — it found problems. What must not happen is the
+ * route proceeding as though it had not, and a human is the right decider: some
+ * findings are worth fixing before deploying, some are not.
+ */
+export function holdStageForFindings(
+  pipeline: TaskPipeline,
+  stageId: string,
+  at: string,
+): Result<TaskPipeline, PipelineError> {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) {
+    return err({ kind: "unknownStage", message: `No stage ${stageId}` });
+  }
+  const stage = pipeline.stages[index];
+  // Only a stage that just settled clean. One already awaiting approval is where
+  // this wants it, and one that failed has a louder problem.
+  if (stage.status !== "passed") return ok(pipeline);
+
+  const stages = [...pipeline.stages];
+  stages[index] = {
+    ...stage,
+    status: "awaiting-approval",
+    finishedAt: undefined,
+  };
+  return ok({ ...pipeline, stages, currentStage: stageId, updatedAt: at } as TaskPipeline);
+}
+
 /** A subtask as proposed by a planning agent, before the engine assigns ids. */
 export interface SubtaskSpec {
   title: string;
