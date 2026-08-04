@@ -149,6 +149,26 @@ describe("prepare", () => {
     service.dispose();
   });
 
+  it("discards calls left in the inbox by a host that died mid-stage", () => {
+    // The reload case: the CLI holding these is gone with its host, so nothing
+    // will ever read a decision. Left in place, the next sweep raises them for
+    // approval against whichever subtask is running by then.
+    //
+    // Held-everything, because that is the setting under which it actually bites:
+    // a restart empties the refusal memory, so an ordinary stale call would be
+    // passed and cleared. This one would be held, and waited on by nobody.
+    const { fs, service } = make({ holdEverything: true });
+    const first = service.prepare("t1")!;
+    fs.writeFile(`${first.inboxPath}/stale.request.json`, payload());
+
+    const second = service.prepare("t1")!;
+    service.sweep("t1", second.inboxPath);
+
+    expect(fs.readFile(`${second.inboxPath}/stale.request.json`)).toBeUndefined();
+    expect(service.waiting()).toHaveLength(0);
+    service.dispose();
+  });
+
   it("sanitises a task id before putting it in a path", () => {
     const { fs, service } = make();
     const session = service.prepare("../evil/t1")!;

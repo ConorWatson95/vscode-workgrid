@@ -89,6 +89,12 @@ export class AskUserService {
       const serverPath = this.fs.join(directory, "ask-user-server.js");
       const mcpConfigPath = this.fs.join(directory, "ask-mcp.json");
 
+      // Emptied for the same reason as the permission gate's inbox: a host killed
+      // mid-stage leaves the dead CLI's `tools/call` on disk, and the next run
+      // would raise it as a live question against a different subtask. Answering
+      // it would write an answer no process is left to read, so the stage would
+      // sit blocked on a question that was never its own.
+      this.fs.removeDirectory(inboxPath);
       this.fs.mkdirp(inboxPath);
       this.fs.writeFile(serverPath, ASK_USER_SERVER_SCRIPT);
       this.fs.writeFile(

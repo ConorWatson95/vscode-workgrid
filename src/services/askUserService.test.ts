@@ -72,6 +72,23 @@ describe("prepare", () => {
     service.dispose();
   });
 
+  it("discards questions left waiting by a host that died mid-stage", () => {
+    // Nothing is on the other end of these: the server that would read an answer
+    // died with its host. Raised again, they would block a stage on a question
+    // asked by a subtask that is no longer running.
+    const fs = memoryFs();
+    const service = new AskUserService("asks", fs, logger, () => "node");
+    const first = service.prepare("t1")!;
+    fs.writeFile(`${first.inboxPath}/stale.ask.json`, ask(["Which environment?"]));
+
+    const second = service.prepare("t1")!;
+    service.sweep("t1", second.inboxPath);
+
+    expect(fs.readFile(`${second.inboxPath}/stale.ask.json`)).toBeUndefined();
+    expect(service.waiting()).toHaveLength(0);
+    service.dispose();
+  });
+
   it("writes a server that never logs to stdout", () => {
     // Anything on stdout is framed as a JSON-RPC message, and one stray line makes
     // the CLI drop the server — so the tool would silently vanish.

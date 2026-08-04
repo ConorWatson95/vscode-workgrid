@@ -152,6 +152,14 @@ export class PermissionGateService {
       const scriptPath = this.fs.join(directory, "gate.js");
       const settingsPath = this.fs.join(directory, "settings.json");
 
+      // Emptied, not just created. `release` clears the inbox when a run ends, but
+      // an extension host killed mid-stage — a reload, an update, a crash — never
+      // gets there, so the dead CLI's held calls are still on disk. Left behind,
+      // the next run's sweep raises them as calls to approve: the hook that would
+      // read the decision died with its host, so nothing is waiting, and the
+      // prompt is attached to whichever subtask happens to be running now.
+      // Discarding them is safe for exactly that reason.
+      this.fs.removeDirectory(inboxPath);
       this.fs.mkdirp(inboxPath);
       this.fs.writeFile(scriptPath, PERMISSION_GATE_SCRIPT);
       this.fs.writeFile(
