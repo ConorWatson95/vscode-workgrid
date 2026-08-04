@@ -24,7 +24,7 @@ import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
-import { loadReviewRules } from "./services/reviewRulesService";
+import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
@@ -317,6 +317,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
     },
     () => configuration.pauseOnPermissionDenial(repositoryUri),
+    // Read per advance rather than cached: editing a stage's model in
+    // harness.json should take effect on the next stage, not the next task.
+    () => {
+      const repositoryRoot = repositoryUri?.fsPath;
+      if (!repositoryRoot) return undefined;
+      return loadHarness(repositoryRoot, {
+        configuredPath: configuration.harnessConfigPath(repositoryUri),
+      });
+    },
   );
 
   // --- Commands ---------------------------------------------------------

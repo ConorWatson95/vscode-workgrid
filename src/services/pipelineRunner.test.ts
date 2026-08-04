@@ -5,6 +5,7 @@ import { InMemoryTaskRepository } from "../persistence/taskRepository";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { createPipeline } from "../domain/pipelineEngine";
 import { RouteDefinition } from "../domain/taskRoute";
+import { ReviewRule } from "../domain/reviewRules";
 import { Logger } from "../logging/logger";
 import { LoadedReviewRules } from "./reviewRulesService";
 import { ok } from "../utilities/result";
@@ -94,6 +95,8 @@ function makeRunner(
     repo?: InMemoryTaskRepository;
     onDenial?: (task: TaskWorkspace, denial: PermissionDenial) => void;
     pauseOnDenial?: boolean;
+    /** Current project config, for resolving stage models afresh. */
+    harness?: { routes: RouteDefinition[]; rules: ReviewRule[] };
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -113,6 +116,7 @@ function makeRunner(
       () => undefined,
       options.onDenial,
       () => options.pauseOnDenial ?? true,
+      () => options.harness,
     ),
   };
 }
@@ -435,6 +439,34 @@ describe("per-stage model", () => {
     const build = reloaded.pipeline!.stages.find((s) => s.id === "build")!;
     expect(build.model).toBe("sonnet");
     void runner;
+  });
+
+  it("picks up a model added to config after the task was created", async () => {
+    // The reported bug: harness.json was edited to say sonnet, the task had
+    // already snapshotted its stages, and the stage went on running opus with
+    // nothing to say why. Config is read per advance, so the next stage obeys it.
+    const sessions = recordingSessions();
+    const { runner } = makeRunner(sessions, {
+      harness: { routes: [routeWithModels()], rules: [] },
+    });
+    // The stored pipeline predates the edit: no stage carries a model.
+    await runner.advance(task());
+
+    const build = sessions.seen.filter((s) => s.label.includes("build"));
+    expect(build.length).toBeGreaterThan(0);
+    expect(build.every((s) => s.model === "sonnet")).toBe(true);
+  });
+
+  it("lets config remove an override a stored stage still carries", async () => {
+    const sessions = recordingSessions();
+    const { runner } = makeRunner(sessions, {
+      harness: { routes: [ROUTE], rules: [] },
+    });
+    await runner.advance({ ...task(), pipeline: createPipeline(routeWithModels()) });
+
+    const build = sessions.seen.filter((s) => s.label.includes("build"));
+    expect(build.length).toBeGreaterThan(0);
+    expect(build.every((s) => s.model === undefined)).toBe(true);
   });
 });
 

@@ -1,5 +1,9 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { TaskPipeline } from "../domain/taskPipeline";
+import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import {
+  resolveStageModel,
+  StageModelSource,
+} from "../domain/stageModelResolution";
 import {
   NextAction,
   finishSubtask,
@@ -143,7 +147,21 @@ export class PipelineRunner {
      * buries that behind whatever it did instead.
      */
     private readonly pauseOnDenial: () => boolean = () => true,
+    /**
+     * Current project config, read afresh so a stage's model reflects the file
+     * rather than the copy taken when the task was created. See
+     * `resolveStageModel` for why model is the one stage field not snapshotted.
+     */
+    private readonly stageModelSource: () => StageModelSource | undefined = () =>
+      undefined,
   ) {}
+
+  /** The model a stage should run on now, not when the task was created. */
+  private modelFor(task: TaskWorkspace, stage: TaskStage): string | undefined {
+    const source = this.stageModelSource();
+    if (!source) return stage.model;
+    return resolveStageModel(source, task.pipeline?.routeId ?? "", stage);
+  }
 
   /**
    * Permission refusals seen during the current advance, so the caller can show
@@ -386,7 +404,7 @@ export class PipelineRunner {
       task,
       splitPrompt(this.contextFor(task), action.stage),
       `plan:${action.stage.id}`,
-      { model: action.stage.model },
+      { model: this.modelFor(task, action.stage) },
     );
     if (!reply.ok) {
       this.logger.error(
@@ -460,7 +478,7 @@ export class PipelineRunner {
     }
 
     const reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
-      model: stage.model,
+      model: this.modelFor(task, stage),
       onDenial: (denial) => this.onDenial(task, denial),
     });
 
