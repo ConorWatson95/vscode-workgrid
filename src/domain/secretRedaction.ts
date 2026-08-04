@@ -33,6 +33,84 @@ export const REDACTED = "***REDACTED***";
 const ASSIGNED_SECRET =
   /((?:password|passwd|pwd|secret|token|api[-_ ]?key|access[-_ ]?key|auth|credential|connection[-_ ]?string|sas|pat)[a-z_-]*)(\s*[:=]\s*|\s+)(?!\s)("[^"]*"|'[^']*'|[^\s;,&"']+)/gi;
 
+/**
+ * Any `NAME = value`, whatever the name. The name is judged separately.
+ *
+ * Needed because the pattern above only fires when the name *begins* with a
+ * secret word, and the second leak was `$env:QSQL_PW = '…'` — an ordinary
+ * PowerShell idiom that begins with a project prefix. Matching a secret word
+ * anywhere in the name instead would be worse: `PATH` contains "pat" and
+ * `bypass` contains "pass", so a substring rule masks a task's own file paths.
+ */
+const ANY_ASSIGNMENT =
+  /([A-Za-z_$][A-Za-z0-9_.:$-]*)(\s*=\s*)(?!\s*=)("[^"]*"|'[^']*'|[^\s;,&"']+)/g;
+
+/**
+ * Name segments that mean "this holds a secret".
+ *
+ * Compared as whole segments, never as substrings — that is what lets `PW` match
+ * in `QSQL_PW` while `PATH` and `bypass` are left alone.
+ */
+const SECRET_SEGMENTS = new Set([
+  "password",
+  "passwd",
+  "pwd",
+  "pw",
+  "pass",
+  "secret",
+  "token",
+  "credential",
+  "credentials",
+  "cred",
+  "creds",
+  "apikey",
+  "sas",
+  "pat",
+  "auth",
+  "connectionstring",
+]);
+
+/**
+ * Segments that only mean a secret next to a qualifier.
+ *
+ * `key` alone is far too common — `sortKey`, `PRIMARY_KEY`, `keyName` — so it
+ * counts only when something beside it says which kind of key.
+ */
+const QUALIFIED_SECRET_SEGMENTS = new Set(["key"]);
+const KEY_QUALIFIERS = new Set([
+  "api",
+  "access",
+  "private",
+  "secret",
+  "signing",
+  "encryption",
+  "master",
+  "auth",
+]);
+
+/** Splits a variable name into comparable segments, camelCase included. */
+function nameSegments(name: string): string[] {
+  return name
+    .replace(/^\$?env:/i, "")
+    .replace(/^[$\-/]+/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+}
+
+/** Whether a variable or property name says it holds a credential. */
+export function isSecretName(name: string): boolean {
+  const segments = nameSegments(name);
+  return segments.some((segment, index) => {
+    if (SECRET_SEGMENTS.has(segment)) return true;
+    if (!QUALIFIED_SECRET_SEGMENTS.has(segment)) return false;
+    return [segments[index - 1], segments[index + 1]].some(
+      (neighbour) => neighbour !== undefined && KEY_QUALIFIERS.has(neighbour),
+    );
+  });
+}
+
 /** `-Password value`, `--password=value`, `/P:value` — the flag forms. */
 const FLAG_SECRET =
   /((?:^|\s)(?:-{1,2}|\/)(?:password|passwd|pwd|secret|token|api[-_ ]?key|credential|sas|pat)[a-z_-]*(?:\s*[:=]\s*|\s+))(?!\s)("[^"]*"|'[^']*'|[^\s;,&"']+)/gi;
@@ -81,7 +159,7 @@ const CURL_USERPASS = /((?:^|\s)-{1,2}u(?:ser)?(?:\s*[:=]\s*|\s+))(?!-)([^\s;,&"
 
 /** Whether a line names a secret at all, for the cheap early exit. */
 const CHEAP_HINT =
-  /password|passwd|pwd|secret|token|api[-_ ]?key|access[-_ ]?key|credential|connection[-_ ]?string|bearer|:\/\/[^/\s]*:[^/\s]*@|gh[pousr]_|xox[baprs]-|sk-|AKIA|\bey[A-Za-z0-9_-]{10,}\.|\b(?:sqlcmd|osql|bcp|sqlpackage|mysql|mysqldump|mysqladmin|mongosh|mongodump|redis-cli|psql|curl|wget|smbclient)\b/i;
+  /password|passwd|pwd|secret|token|api[-_ ]?key|access[-_ ]?key|credential|connection[-_ ]?string|bearer|:\/\/[^/\s]*:[^/\s]*@|gh[pousr]_|xox[baprs]-|sk-|AKIA|\bey[A-Za-z0-9_-]{10,}\.|\b(?:sqlcmd|osql|bcp|sqlpackage|mysql|mysqldump|mysqladmin|mongosh|mongodump|redis-cli|psql|curl|wget|smbclient)\b|[_A-Za-z](?:pw|pass|cred|creds|sas|pat|key)\b|_(?:PW|PASS|CRED|CREDS|SAS|PAT|KEY)\b/i;
 
 /**
  * Masks single-letter credential flags, line by line.
@@ -125,6 +203,12 @@ export function redactSecrets(text: string): string {
     ASSIGNED_SECRET,
     (_all, name, separator) => `${name}${separator}${REDACTED}`,
   );
+  // Last, and judged by name rather than by pattern, so a project-prefixed
+  // variable like QSQL_PW is caught without masking every PATH in the output.
+  result = result.replace(ANY_ASSIGNMENT, (all, name, separator) =>
+    isSecretName(name) ? `${name}${separator}${REDACTED}` : all,
+  );
+
   return redactShortFlags(result);
 }
 

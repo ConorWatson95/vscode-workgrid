@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { containsSecret, redactSecrets, REDACTED } from "./secretRedaction";
+import {
+  containsSecret,
+  isSecretName,
+  redactSecrets,
+  REDACTED,
+} from "./secretRedaction";
 
 describe("redactSecrets", () => {
   it("masks a SQL connection string password but keeps the rest readable", () => {
@@ -142,5 +147,67 @@ describe("single-letter credential flags", () => {
     expect(out).toContain("mkdir -p out");
     expect(out).toContain("mkdir -p two");
     expect(out).not.toContain("a:b");
+  });
+});
+
+describe("secret-looking variable names", () => {
+  it("masks a project-prefixed password variable", () => {
+    // The second leak, verbatim: an ordinary PowerShell idiom whose name begins
+    // with a project prefix, so a rule anchored on the leading word saw nothing.
+    const out = redactSecrets("$env:QSQL_PW = 'Hunter2'");
+    expect(out).not.toContain("Hunter2");
+    expect(out).toContain("$env:QSQL_PW");
+  });
+
+  it("masks the shapes a script actually uses", () => {
+    for (const line of [
+      "$env:QSQL_PW = 'x'",
+      "$DbPassword = 'x'",
+      "DB_PASS=x",
+      "SQL_CREDS=x",
+      "$env:AZURE_SAS = 'x'",
+      "JIRA_PAT=x",
+      "$env:API_KEY = 'x'",
+      "myConnectionString = 'x'",
+    ]) {
+      expect(redactSecrets(line), line).toContain(REDACTED);
+    }
+  });
+
+  it("leaves names that merely contain those letters alone", () => {
+    // Substring matching would mask a task's own paths: PATH contains "pat",
+    // bypass contains "pass". This is why segments are compared, not substrings.
+    for (const line of [
+      "$env:PATH = 'C:/tools'",
+      "$bypass = 'true'",
+      "PASSES=3",
+      "sortKey=name",
+      "PRIMARY_KEY=Id",
+      "$patient = 'x'",
+      "COMPASS=north",
+    ]) {
+      expect(redactSecrets(line), line).toBe(line);
+    }
+  });
+
+  it("masks a key only when something says which kind", () => {
+    expect(redactSecrets("ACCESS_KEY=x")).toContain(REDACTED);
+    expect(redactSecrets("SIGNING_KEY=x")).toContain(REDACTED);
+    expect(redactSecrets("KEY_NAME=Id")).toBe("KEY_NAME=Id");
+  });
+
+  it("does not mask an equality comparison", () => {
+    const text = "if ($pw -eq $expected) { }";
+    expect(redactSecrets(text)).toBe(text);
+  });
+});
+
+describe("isSecretName", () => {
+  it("compares whole segments", () => {
+    expect(isSecretName("QSQL_PW")).toBe(true);
+    expect(isSecretName("$env:QSQL_PW")).toBe(true);
+    expect(isSecretName("dbPassword")).toBe(true);
+    expect(isSecretName("PATH")).toBe(false);
+    expect(isSecretName("bypass")).toBe(false);
   });
 });
