@@ -8,6 +8,7 @@ import {
   parseStreamLine,
   toChatItems,
   sessionIdOf,
+  mcpServersOf,
   modelOf,
   shortModelName,
   rateLimitOf,
@@ -42,6 +43,15 @@ export interface StreamSessionOptions {
    * the project's `.mcp.json` is unapproved there and none of its servers start.
    */
   mcpConfigPath?: string;
+  /**
+   * Load only `mcpConfigPath` and ignore every other source of MCP servers
+   * (`--strict-mcp-config`).
+   *
+   * Set when the caller has deliberately reduced the server set, because
+   * `--mcp-config` on its own *adds*: the worktree's own approved `.mcp.json`
+   * would otherwise start every server regardless.
+   */
+  strictMcpConfig?: boolean;
   /**
    * Absolute path to an extra settings file (`--settings`), layered over the
    * user's own. Used to install the permission gate hook, which holds a tool call
@@ -124,6 +134,8 @@ export class ClaudeStreamSession {
   private compacting = false;
   /** True between asking for a handoff and consuming the reply. */
   private awaitingHandoff = false;
+  /** When the CLI was spawned, so startup latency can be reported. */
+  private spawnedAtMs?: number;
   /**
    * Session to resume on the next spawn. Cleared by a checkpoint restart, which
    * must begin with an empty context rather than reloading the old transcript.
@@ -165,6 +177,7 @@ export class ClaudeStreamSession {
       model: this.options.model,
       addDirs: this.options.addDirs,
       mcpConfigPath: this.options.mcpConfigPath,
+      strictMcpConfig: this.options.strictMcpConfig,
       settingsPath: this.options.settingsPath,
       useShell,
     });
@@ -176,6 +189,11 @@ export class ClaudeStreamSession {
     if (this.options.settingsPath) {
       this.logger.info(`Permission gate active (${this.options.settingsPath}).`);
     }
+    // Stamped so the init event can say how long startup actually took. The gap
+    // between spawning and the CLI's first output is routinely minutes on a
+    // repository with MCP servers, and with nothing logged in between it reads
+    // as the extension having stalled.
+    this.spawnedAtMs = Date.now();
     this.child = spawn(this.options.command, args, {
       cwd: this.options.worktreePath,
       windowsHide: true,
@@ -266,8 +284,32 @@ export class ClaudeStreamSession {
     const model = modelOf(event);
     if (model) {
       this.activeModel = shortModelName(model);
-      this.logger.info(`Session model: ${model}`);
+      // Reported together, because the interesting question on a slow start is
+      // not which model it picked but what the wait was spent on.
+      const startup =
+        this.spawnedAtMs === undefined
+          ? ""
+          : ` — ready in ${((Date.now() - this.spawnedAtMs) / 1000).toFixed(1)}s`;
+      this.logger.info(`Session model: ${model}${startup}`);
       this.emitter.emit("model", this.activeModel);
+
+      const servers = mcpServersOf(event);
+      if (servers && servers.length > 0) {
+        // Named individually: a server that failed still cost its whole
+        // connection attempt, and it is the one worth removing from the config.
+        this.logger.info(
+          `MCP servers ready (${servers.length}): ` +
+            servers.map((s) => `${s.name}=${s.status}`).join(", "),
+        );
+        const failed = servers.filter((s) => s.status !== "connected");
+        if (failed.length > 0) {
+          this.logger.warn(
+            `${failed.length} MCP server(s) did not connect: ` +
+              `${failed.map((s) => s.name).join(", ")}. ` +
+              "They still cost startup time on every subtask.",
+          );
+        }
+      }
     }
 
     // A compaction boundary: confirm it and drop the context indicator — the

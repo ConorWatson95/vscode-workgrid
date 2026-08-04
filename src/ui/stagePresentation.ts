@@ -129,3 +129,124 @@ export function pipelineSummary(
   if (outstanding > 0) parts.push(`${outstanding} to verify`);
   return parts.join(" · ");
 }
+
+/** Whether a stage row can be opened, and whether it should start open. */
+export interface StageExpansion {
+  /** Number of rows nested under the stage. Zero means it must be a leaf. */
+  childCount: number;
+  /** True when something underneath is waiting on the user. */
+  needsAttention: boolean;
+}
+
+/**
+ * Decides a stage row's expansion from what is nested under it.
+ *
+ * Extracted because getting it wrong has produced the same bug twice: a stage
+ * whose only children were refusals (0.19.3), and then one whose only children
+ * were questions, counted zero children, became a leaf, and left the rows that
+ * resolve them unreachable. Anything that nests under a stage **must** be counted
+ * here, and the rule is only testable away from `vscode`.
+ */
+export function stageExpansion(
+  pipeline: TaskPipeline | undefined,
+  stage: TaskStage,
+): StageExpansion {
+  const checklist = stage.checklist ?? [];
+  const denials =
+    pipeline?.pendingDenials?.stageId === stage.id
+      ? (pipeline.pendingDenials.items ?? [])
+      : [];
+  const questions =
+    pipeline?.pendingQuestion?.stageId === stage.id
+      ? (pipeline.pendingQuestion.items ?? [])
+      : [];
+
+  return {
+    childCount: checklist.length + denials.length + questions.length,
+    needsAttention:
+      checklist.some((item) => !item.checked) ||
+      denials.some((denial) => !denial.granted) ||
+      questions.some((question) => (question.answer ?? "").trim().length === 0),
+  };
+}
+
+/** What a stage cannot proceed without, when it is waiting on a person. */
+export interface StageBlock {
+  kind: "questions" | "refusals";
+  count: number;
+}
+
+/**
+ * Whether a stage is actually waiting on the user rather than working.
+ *
+ * The distinction the tree could not previously draw: an `active` stage sitting
+ * on seven unanswered questions rendered with the same spinner as one busily
+ * running, so "is it stuck or has it moved on?" had no answer on screen.
+ *
+ * Questions outrank refusals: a stage that asked something has stopped dead,
+ * whereas a refusal may only have cost it one tool.
+ */
+export function stageBlock(
+  pipeline: TaskPipeline | undefined,
+  stage: TaskStage,
+): StageBlock | undefined {
+  const questions =
+    pipeline?.pendingQuestion?.stageId === stage.id
+      ? (pipeline.pendingQuestion.items ?? []).filter(
+          (item) => (item.answer ?? "").trim().length === 0,
+        ).length
+      : 0;
+  if (questions > 0) return { kind: "questions", count: questions };
+
+  const refusals =
+    pipeline?.pendingDenials?.stageId === stage.id
+      ? (pipeline.pendingDenials.items ?? []).filter((item) => !item.granted).length
+      : 0;
+  if (refusals > 0) return { kind: "refusals", count: refusals };
+
+  return undefined;
+}
+
+/**
+ * How a blocked stage should look, replacing its in-progress appearance.
+ *
+ * `contextValue` is deliberately left to the caller: it drives menu `when`
+ * clauses, and changing it to signal a block would silently remove the actions
+ * that resolve the block.
+ */
+export function blockedStageVisual(block: StageBlock): Omit<StageVisual, "contextValue"> {
+  const noun =
+    block.count === 1
+      ? block.kind === "questions"
+        ? "question"
+        : "refusal"
+      : block.kind;
+  return {
+    iconId: block.kind === "questions" ? "comment-unresolved" : "shield",
+    colorId: "charts.yellow",
+    label: "Waiting for you",
+    description: `waiting — ${block.count} ${noun}`,
+  };
+}
+
+/**
+ * What the *task* row should say for a harnessed task: the stage actually in
+ * play, and whether it is working or waiting.
+ *
+ * Returns undefined when no stage is in play, so the caller keeps its existing
+ * git-derived phase. That phase is route-blind — it reported "implementing" for a
+ * task whose planning stage had not finished, because it reads dirty files and
+ * commits rather than the pipeline.
+ */
+export function activeStageLabel(pipeline: TaskPipeline | undefined): string | undefined {
+  const stages = pipeline?.stages ?? [];
+  const current =
+    stages.find((stage) => stage.status === "active") ??
+    stages.find((stage) => stage.status === "awaiting-approval");
+  if (!current) return undefined;
+
+  const block = stageBlock(pipeline, current);
+  if (block) return `${current.name} — ${blockedStageVisual(block).description}`;
+  if (current.status === "awaiting-approval") return `${current.name} — awaiting approval`;
+  return `${current.name}…`;
+}

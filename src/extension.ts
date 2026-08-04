@@ -30,11 +30,13 @@ import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
+import { filterMcpConfig } from "./agents/mcpConfigFilter";
 import * as fs from "node:fs";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
 import { PermissionRulesService } from "./services/permissionRulesService";
 import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials";
-import { PermissionGateService } from "./services/permissionGateService";
+import { PendingGate, PermissionGateService } from "./services/permissionGateService";
+import { nextAnnouncements } from "./domain/permissionGatePolicy";
 import { nodeGateFileSystem } from "./services/gateFileSystem";
 import {
   CommandContext,
@@ -314,9 +316,112 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   // A held call is live state the tree cannot derive, so it has to be told.
+  //
+  // It also has to be *said*. A hold is the only moment the agent is genuinely
+  // blocked on a person, and it used to produce nothing but a tree row and a log
+  // line — so a stage waiting on one click looked hung until the CLI's hook
+  // timeout expired, which is minutes of nothing happening. The actions here
+  // answer the waiting hook, so the agent continues mid-turn; dismissing the
+  // notification changes nothing, because the row offers the same decisions.
+  let announcedHolds: ReadonlySet<string> = new Set();
+
+  const announceHeldCall = async (held: PendingGate): Promise<void> => {
+    const task = await repository.get(held.taskId);
+    const allowOnce = "Allow";
+    const allowSession = "Allow for Session";
+    const deny = "Deny";
+    const choice = await vscode.window.showWarningMessage(
+      `"${task?.name ?? held.taskId}": ${held.request.toolName} is waiting for permission — ${held.detail}`,
+      allowOnce,
+      allowSession,
+      deny,
+    );
+    if (choice === undefined) return;
+
+    const answered = permissionGate.decide(
+      held.request.id,
+      choice === deny ? "deny" : "allow",
+      choice === allowSession ? "session" : "once",
+    );
+    if (!answered) {
+      // The hook gave up waiting, or the stage ended while the notification was
+      // on screen. Saying so beats a button that silently did nothing.
+      void vscode.window.showWarningMessage(
+        "That call is no longer waiting — the stage moved on or timed out.",
+      );
+    }
+    tree.refresh();
+  };
+
   context.subscriptions.push({
-    dispose: permissionGate.onChanged(() => tree.refresh()),
+    dispose: permissionGate.onChanged(() => {
+      tree.refresh();
+      const waiting = permissionGate.waiting();
+      const { announce, remember } = nextAnnouncements(
+        announcedHolds,
+        waiting.map((held) => held.request.id),
+      );
+      announcedHolds = remember;
+      for (const id of announce) {
+        const held = waiting.find((entry) => entry.request.id === id);
+        if (held) void announceHeldCall(held);
+      }
+    }),
   });
+
+  /**
+   * The MCP config a *stage* session should load.
+   *
+   * Every subtask is a fresh CLI, and the CLI starts every server in the config
+   * before emitting its first event — nine servers measured at 182 seconds of
+   * connect timeouts, paid per subtask. When `stageMcpServers` names the ones a
+   * route needs, a reduced copy is written to extension storage and passed
+   * instead.
+   *
+   * Written outside the repository on purpose: it must not appear in a worktree,
+   * where it would land in the changed paths the review rules key off. Filtering
+   * only removes servers, so this cannot widen what a branch can reach.
+   */
+  const stageMcpConfigPath = (taskRepositoryRoot: string): string | undefined => {
+    const resolved = resolveMcpConfigPath(
+      taskRepositoryRoot,
+      configuration.mcpConfigPath(repositoryUri),
+      (p) => fs.existsSync(p),
+    );
+    if (!resolved) return undefined;
+
+    const allow = configuration.stageMcpServers(repositoryUri);
+    if (allow.length === 0) return resolved;
+
+    try {
+      const filtered = filterMcpConfig(fs.readFileSync(resolved, "utf8"), allow);
+      // Undefined means there was nothing sensible to do — a typo in the
+      // allow-list, or a config we could not read. Never a reason to strip a
+      // stage's tools, so the original is used unchanged.
+      if (!filtered) {
+        logger.warn(
+          `taskWorkspaces.stageMcpServers matched no server in ${resolved}; ` +
+            "using the project's config unchanged.",
+        );
+        return resolved;
+      }
+
+      const directory = vscode.Uri.joinPath(context.globalStorageUri, "stage-mcp");
+      fs.mkdirSync(directory.fsPath, { recursive: true });
+      const target = vscode.Uri.joinPath(directory, "mcp.json").fsPath;
+      fs.writeFileSync(target, filtered.json, "utf8");
+      logger.info(
+        `Stage MCP config: keeping ${filtered.kept.join(", ")}` +
+          (filtered.dropped.length > 0
+            ? `; skipping ${filtered.dropped.length} (${filtered.dropped.join(", ")})`
+            : ""),
+      );
+      return target;
+    } catch (error) {
+      logger.error("Could not reduce the MCP config for stage sessions", error);
+      return resolved;
+    }
+  };
 
   // Each subtask runs in a fresh session, so route stages never share context.
   const stageRunner = new ClaudeStageSessionRunner(
@@ -328,11 +433,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // A stage session runs in a worktree the CLI has never seen, so the
       // project's MCP servers are unapproved there and silently absent — which
       // is how a planning stage loses the ability to read its own ticket.
-      mcpConfigPath: resolveMcpConfigPath(
-        task.repositoryRoot,
-        configuration.mcpConfigPath(repositoryUri),
-        (p) => fs.existsSync(p),
-      ),
+      mcpConfigPath: stageMcpConfigPath(task.repositoryRoot),
+      // Enforced, not merely offered: without strict mode the worktree's own
+      // approved `.mcp.json` starts every server anyway, and a reduced config
+      // achieves nothing. Only when the set was narrowed on purpose, since strict
+      // mode also drops the user's own user-scope servers.
+      strictMcpConfig: configuration.stageMcpServers(repositoryUri).length > 0,
       autoCompactThreshold: configuration.autoCompactThreshold(repositoryUri),
       contextStrategy: configuration.contextStrategy(repositoryUri),
       model: configuration.model(repositoryUri),
@@ -366,7 +472,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // was going to make anyway — becomes the interactive prompt.
       permissionGate.noteDenial(task.id, denial.tool, denial.command);
 
-      const rule = suggestAllowRules([denial])[0];
+      // With the gate armed, this refusal is the expected first attempt: the
+      // retry is held and the user asked properly, with actions that release the
+      // agent where it stands. Interrupting here as well was actively harmful —
+      // it offered "Add Rule", which cannot free a call the hook is already
+      // holding, and it arrived *before* the prompt that could. The useful
+      // notification went unseen behind the useless one, and the stage looked
+      // hung. The refusal is still logged, and still listed on the stage's rows
+      // if the agent never retries the capability.
+      // Suppressed only when the retry will genuinely be held. Three conditions,
+      // and every one of them has to hold or this notification is the sole report:
+      // the feature is on, the hook is actually installed (`prepare` fails soft),
+      // and the gate covers this tool at all — `gatedTools` is a list, so a
+      // refusal of anything outside it will never raise a prompt. A denial
+      // attributed to the wrong tool used to fall straight through that gap and
+      // be reported nowhere.
+      const gateWillHoldRetry =
+        configuration.interactivePermissions(repositoryUri) &&
+        permissionGate.isArmed(task.id) &&
+        configuration
+          .gatedTools(repositoryUri)
+          .some((tool) => tool.toLowerCase() === denial.tool.toLowerCase());
+      if (gateWillHoldRetry) return;
+
+      const rules = suggestAllowRules([denial], {
+        worktreePath: task.worktreePath,
+        repositoryRoot: task.repositoryRoot,
+      });
+      const rule = rules[0];
       void vscode.window
         .showWarningMessage(
           `"${task.name}": ${denial.tool} was denied — ${denial.command ?? denial.reason}`,
@@ -379,7 +512,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             return;
           }
           if (choice !== "Add Rule" || !rule) return;
-          const written = permissionRules.addAllowRules(task.repositoryRoot, [rule]);
+          // Every suggested form, not just the first: the absolute rule matches now and
+          // the relative one survives the worktree.
+          const written = permissionRules.addAllowRules(task.repositoryRoot, rules);
           if (written.problem) {
             void vscode.window.showErrorMessage(written.problem);
             return;

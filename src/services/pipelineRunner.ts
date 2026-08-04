@@ -518,7 +518,10 @@ export class PipelineRunner {
             command: denial.command,
             reason: denial.reason,
             attempts: denial.attempts,
-            rule: suggestAllowRules([denial])[0],
+            rule: suggestAllowRules([denial], {
+              worktreePath: task.worktreePath,
+              repositoryRoot: task.repositoryRoot,
+            })[0],
           })),
           at: new Date().toISOString(),
         });

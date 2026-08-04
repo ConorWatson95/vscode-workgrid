@@ -10,14 +10,20 @@
 export type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; name: string; detail?: string }
-  | { kind: "tool-result"; text: string; isError: boolean }
+  /** `id` is the block's tool_use id, when the stream carried one. */
+  | { kind: "tool"; name: string; detail?: string; id?: string }
+  /** `callId` is the tool_use this result answers, when the stream carried one. */
+  | { kind: "tool-result"; text: string; isError: boolean; callId?: string }
   | { kind: "result"; text: string; isError: boolean }
   | { kind: "system"; text: string };
 
 /** Minimal shape of an Anthropic-style content block. */
 interface ContentBlock {
   type: string;
+  /** Present on tool_use. */
+  id?: string;
+  /** Present on tool_result: the tool_use it answers. */
+  tool_use_id?: string;
   text?: string;
   name?: string;
   input?: unknown;
@@ -128,6 +134,40 @@ export function modelOf(event: StreamEvent): string | undefined {
     return event.model;
   }
   return undefined;
+}
+
+/** An MCP server the CLI reported at startup, with how it ended up. */
+export interface McpServerStatus {
+  name: string;
+  /** The CLI's own word, e.g. "connected", "failed". */
+  status: string;
+}
+
+/**
+ * MCP servers named in the init event.
+ *
+ * Worth reading because they are the usual explanation for a long gap between
+ * spawning the CLI and its first output: every server in the config has to be
+ * started and connected before the session is ready, and a stage session pays
+ * that per subtask. Without this the wait is unattributable, and the natural
+ * guess — that the model or the permission gate is slow — is wrong.
+ */
+export function mcpServersOf(event: StreamEvent): McpServerStatus[] | undefined {
+  if (event.type !== "system" || event.subtype !== "init") return undefined;
+  const servers = (event as { mcp_servers?: unknown }).mcp_servers;
+  if (!Array.isArray(servers)) return undefined;
+
+  const parsed: McpServerStatus[] = [];
+  for (const entry of servers) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as { name?: unknown; status?: unknown };
+    if (typeof record.name !== "string") continue;
+    parsed.push({
+      name: record.name,
+      status: typeof record.status === "string" ? record.status : "unknown",
+    });
+  }
+  return parsed;
 }
 
 /** Plan usage / rate-limit state, as the UI needs it. */
@@ -271,6 +311,7 @@ function blocksToItems(
         kind: "tool",
         name: block.name ?? "tool",
         detail: summariseToolInput(block.input),
+        id: typeof block.id === "string" ? block.id : undefined,
       });
     }
   }
@@ -294,7 +335,12 @@ function userEventItems(
     if (block.type === "tool_result") {
       const text = stringifyToolContent(block.content);
       if (text.length > 0) {
-        items.push({ kind: "tool-result", text, isError: block.is_error === true });
+        items.push({
+          kind: "tool-result",
+          text,
+          isError: block.is_error === true,
+          callId: typeof block.tool_use_id === "string" ? block.tool_use_id : undefined,
+        });
       }
     } else if (includeUserText && block.type === "text" && block.text) {
       const text = normaliseUserText(block.text);

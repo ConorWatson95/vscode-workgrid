@@ -6,11 +6,20 @@ import {
   AgentActivity,
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
-import { ChecklistItem, DenialItem, TaskStage } from "../domain/taskPipeline";
+import {
+  ChecklistItem,
+  DenialItem,
+  QuestionItem,
+  TaskStage,
+} from "../domain/taskPipeline";
 import {
   checklistPresentation,
   pipelineSummary,
   stagePresentation,
+  stageExpansion,
+  stageBlock,
+  blockedStageVisual,
+  activeStageLabel,
 } from "./stagePresentation";
 
 /** A tree node representing a single task workspace. */
@@ -60,6 +69,13 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       iconId = p.iconId;
       colorId = p.colorId;
       statusLabel = p.label;
+
+      // A harnessed task's route knows better than the git heuristics do. The
+      // phase is derived from dirty files and commits, so a task whose planning
+      // stage was still running reported "implementing" — technically a
+      // reasonable guess about the worktree, and wrong about the work.
+      const stageLabel = activeStageLabel(task.pipeline);
+      if (stageLabel) statusLabel = stageLabel;
     }
 
     this.iconPath = new vscode.ThemeIcon(
@@ -148,35 +164,35 @@ export class StageTreeItem extends vscode.TreeItem {
     readonly task: TaskWorkspace,
     readonly stage: TaskStage,
   ) {
-    const outstanding = (stage.checklist ?? []).filter((i) => !i.checked);
-    // Refusals nest here too, so they have to count towards expansion — a stage
-    // with refusals and no checklist was a leaf, which made the rows that grant
-    // them unreachable.
-    const denials =
-      task.pipeline?.pendingDenials?.stageId === stage.id
-        ? (task.pipeline?.pendingDenials?.items ?? [])
-        : [];
-    const children = (stage.checklist ?? []).length + denials.length;
-    const needsAttention =
-      outstanding.length > 0 || denials.some((d) => !d.granted);
-    // Only expand when there is something underneath worth seeing.
+    // Everything that nests under a stage is counted by `stageExpansion`, which
+    // is where the rule is tested — a stage whose only children were refusals,
+    // and later one whose only children were questions, each counted zero and
+    // became a leaf, putting the rows that resolve them out of reach.
+    const { childCount, needsAttention } = stageExpansion(task.pipeline, stage);
     super(
       stage.name,
-      children > 0
+      childCount > 0
         ? needsAttention
           ? vscode.TreeItemCollapsibleState.Expanded
           : vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
     );
 
-    const visual = stagePresentation(stage);
+    // A stage waiting on the user is shown as waiting, not as working: the
+    // spinner was identical whether it was running or sitting on seven
+    // unanswered questions. `contextValue` is untouched, because it drives the
+    // menu actions that resolve the block.
+    const base = stagePresentation(stage);
+    const block = stageBlock(task.pipeline, stage);
+    const visual = block ? { ...base, ...blockedStageVisual(block) } : base;
+
     this.id = `${task.id}/${stage.id}`;
     this.iconPath = new vscode.ThemeIcon(
       visual.iconId,
       visual.colorId ? new vscode.ThemeColor(visual.colorId) : undefined,
     );
     this.description = visual.description;
-    this.contextValue = visual.contextValue;
+    this.contextValue = base.contextValue;
 
     this.tooltip = new vscode.MarkdownString(
       [
@@ -232,6 +248,56 @@ export class ChecklistTreeItem extends vscode.TreeItem {
  * tasks, and this needs one button, not a window. It sits under the stage that
  * hit it and stays until granted, so it is still there after a reload.
  */
+/**
+ * One question a stage asked, nested under that stage.
+ *
+ * Questions used to be reported only as "7 questions" on the task row, with the
+ * way to answer them behind an inline action VS Code reveals on hover — so the
+ * count was plainly visible and the means to act on it was not. Refusals learned
+ * this lesson in 0.19.1; this is the same shape, for the same reason.
+ *
+ * Clicking the row opens the panel. The row that names a question should be the
+ * thing that answers it.
+ */
+export class QuestionTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly task: TaskWorkspace,
+    readonly question: QuestionItem,
+  ) {
+    super(question.text, vscode.TreeItemCollapsibleState.None);
+    this.id = `${task.id}/question/${question.id}`;
+
+    const answered = (question.answer ?? "").trim().length > 0;
+    this.iconPath = new vscode.ThemeIcon(
+      answered ? "pass" : "comment-discussion",
+      new vscode.ThemeColor(
+        answered ? "testing.iconPassed" : "notificationsWarningIcon.foreground",
+      ),
+    );
+    this.contextValue = answered ? "questionAnswered" : "questionPending";
+    this.description = answered ? "answered" : "awaiting an answer";
+    this.tooltip = new vscode.MarkdownString(
+      [
+        answered ? "**Answered**" : "**Waiting for an answer**",
+        "",
+        question.text,
+        answered ? `\n---\n${question.answer}` : "",
+        "\n_Click to open the answer panel._",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+
+    this.command = {
+      command: "taskWorkspaces.answerQuestions",
+      title: "Answer Questions",
+      // The task id, not the item: the panel shows every question at once, and
+      // `resolveTask` accepts an id.
+      arguments: [task.id],
+    };
+  }
+}
+
 export class DenialTreeItem extends vscode.TreeItem {
   constructor(
     readonly task: TaskWorkspace,

@@ -363,3 +363,23 @@ describe("holding everything", () => {
     service.dispose();
   });
 });
+
+describe("isArmed", () => {
+  it("is false before prepare, so a soft failure is not mistaken for a gate", () => {
+    const { service } = make();
+    expect(service.isArmed("t1")).toBe(false);
+  });
+
+  it("is true once the hook is installed", () => {
+    const { service } = make();
+    service.prepare("t1");
+    expect(service.isArmed("t1")).toBe(true);
+  });
+
+  it("is false again after release, when nothing is watching the inbox", () => {
+    const { service } = make();
+    service.prepare("t1");
+    service.release("t1");
+    expect(service.isArmed("t1")).toBe(false);
+  });
+});

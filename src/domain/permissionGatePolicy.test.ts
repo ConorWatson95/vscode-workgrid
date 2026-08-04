@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   gateVerdict,
+  nextAnnouncements,
   GatePolicyState,
   StandingApproval,
 } from "./permissionGatePolicy";
@@ -92,5 +93,48 @@ describe("gateVerdict", () => {
     );
     expect(verdict).toMatchObject({ kind: "answer" });
     if (verdict.kind === "answer") expect(verdict.reason).toContain("rule");
+  });
+});
+
+describe("nextAnnouncements", () => {
+  it("announces a newly held call", () => {
+    expect(nextAnnouncements(new Set(), ["r1"]).announce).toEqual(["r1"]);
+  });
+
+  it("does not announce the same call twice", () => {
+    const first = nextAnnouncements(new Set(), ["r1"]);
+    expect(nextAnnouncements(first.remember, ["r1"]).announce).toEqual([]);
+  });
+
+  it("announces a second call while the first is still waiting", () => {
+    const first = nextAnnouncements(new Set(), ["r1"]);
+    expect(nextAnnouncements(first.remember, ["r1", "r2"]).announce).toEqual(["r2"]);
+  });
+
+  it("forgets a call once it stops waiting, so the set stays bounded", () => {
+    const first = nextAnnouncements(new Set(), ["r1", "r2"]);
+    expect(nextAnnouncements(first.remember, ["r2"]).remember).toEqual(new Set(["r2"]));
+  });
+
+  it("announces every call when several are held at once", () => {
+    // Parallel tool calls in one turn each get their own hook, so more than one
+    // can be blocked simultaneously.
+    expect(nextAnnouncements(new Set(), ["r1", "r2", "r3"]).announce).toEqual([
+      "r1",
+      "r2",
+      "r3",
+    ]);
+  });
+
+  it("announces nothing when nothing is waiting", () => {
+    const { announce, remember } = nextAnnouncements(new Set(["r1"]), []);
+    expect(announce).toEqual([]);
+    expect(remember.size).toBe(0);
+  });
+
+  it("does not mutate the set it was given", () => {
+    const announced = new Set(["r1"]);
+    nextAnnouncements(announced, ["r2"]);
+    expect(announced).toEqual(new Set(["r1"]));
   });
 });

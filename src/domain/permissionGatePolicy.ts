@@ -95,6 +95,35 @@ export function gateVerdict(
   return { kind: "pass" };
 }
 
+/**
+ * Which held calls still need putting in front of the user, and what to remember
+ * afterwards.
+ *
+ * A held call has to be raised exactly once. Never raising it is the failure this
+ * exists to stop: a hold is the only moment the agent is genuinely blocked on a
+ * person, and when it produced nothing but a tree row the stage looked hung until
+ * the CLI's hook timeout expired. Raising it repeatedly is the opposite failure —
+ * nagging about a decision already made.
+ *
+ * Ids that have stopped waiting are forgotten so the set cannot grow for the life
+ * of the window. That is safe because a settled request is never re-raised.
+ */
+export function nextAnnouncements(
+  announced: ReadonlySet<string>,
+  waiting: readonly string[],
+): { announce: string[]; remember: Set<string> } {
+  const live = new Set(waiting);
+  const remember = new Set<string>();
+  for (const id of announced) {
+    if (live.has(id)) remember.add(id);
+  }
+
+  const announce = waiting.filter((id) => !announced.has(id));
+  for (const id of announce) remember.add(id);
+
+  return { announce, remember };
+}
+
 function approvalReason(scope: StandingApproval["scope"]): string {
   switch (scope) {
     case "session":

@@ -2,6 +2,137 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.24.0
+
+- **A stage now shows when it is waiting rather than working.** Any `active`
+  stage rendered with the same spinner, so one sitting on seven unanswered
+  questions was indistinguishable from one busily running — "has it moved on or is
+  it stuck?" had no answer on screen. A stage blocked on questions or ungranted
+  refusals now shows a waiting icon and says what it is waiting for.
+- **The task row names the stage in play.** It previously reported "implementing"
+  while the *planning* stage was still running, because the label came from git
+  heuristics — dirty files and commits ahead — which know nothing about the route.
+  A harnessed task now reads e.g. `Plan…`, or `Plan — waiting — 2 questions`.
+- **Granted rules survive the task.** A file refusal suggested a rule naming the
+  worktree it happened in, which is dead as soon as that task is finished. Both
+  forms are now written: the absolute rule, which is the one known to match, and a
+  worktree-relative twin that outlives it.
+
+  Command rules are deliberately left absolute. They are matched against the
+  literal command text, and the agent writes absolute paths because its working
+  directory is the worktree — which is why a hand-written
+  `PowerShell(tools\jira\x.ps1:*)` never fires and needs its absolute twin.
+
+## 0.23.1
+
+- **Fixed: `stageMcpServers` reduced the config but every server still started.**
+  `--mcp-config` *adds* servers rather than replacing them, and a task worktree
+  contains the project's own tracked `.mcp.json` — approved there by the copied
+  `.claude/settings.local.json`. So the reduced copy was loaded *alongside* the
+  full set and a stage asked for one server still started nine, at the same three
+  minutes. `--strict-mcp-config` is now passed whenever the set has been narrowed
+  on purpose, and only then, since it also discards user-scope servers.
+- **Fixed: a refusal could be attributed to the wrong tool.** Observed as
+  "Read denied — This Bash command contains multiple operations", which cannot
+  happen: results were paired with the most recent tool call, and the agent had
+  issued its calls in parallel. Worse than a wrong label — the refusal taught the
+  permission gate about the wrong capability, so it held retries of a tool that
+  was never refused and let the real one be denied again, with no prompt. Results
+  are now matched to their call by `tool_use` id, falling back to the previous
+  rule only when a stream carries no ids.
+- **Fixed: a refusal outside `gatedTools` was reported nowhere.** 0.22.0 stopped
+  notifying on a first refusal because the gate would hold the retry — true only
+  for tools the gate is installed for. Combined with the misattribution above, a
+  refusal could vanish entirely. The notification is now suppressed only when the
+  feature is on, the hook really installed, **and** the gate covers that tool.
+
+## 0.23.0
+
+- **Added `taskWorkspaces.stageMcpServers`**, so a stage session loads only the
+  MCP servers a route actually needs. The startup logging added in 0.22.2 turned
+  up the reason stages felt hung: nine servers in a project's config, eight of
+  them local `stdio` processes that failed, and **182 seconds of sequential
+  connect timeouts — paid again on every subtask of every stage**. A build stage
+  does not need seven database servers to compile something. Empty (the default)
+  means all of them, so nothing changes until it is set. A name matching no
+  server is treated as a mistake and the project's config is used unchanged,
+  because a typo must not silently strip every tool. The reduced copy is written
+  to extension storage, never into a worktree where it would land in the changed
+  paths the review rules key off — and since filtering only ever *removes*
+  servers, it cannot widen what a task branch can reach.
+
+  Worth knowing if your servers bind fixed ports: subtask-per-session means every
+  subtask starts its own copy, so two stage sessions can never hold the same port,
+  and sequential ones can still collide while the previous set shuts down.
+
+## 0.22.3
+
+- **Fixed: "7 questions" with no way to answer them.** The count appeared on the
+  task row, but the only route back to the panel was an inline action VS Code
+  reveals *on hover* — so the problem was plainly visible and the remedy was not,
+  and the panel that opened when the questions were first asked was gone once
+  closed. Questions now appear as **rows nested under the stage that asked them**,
+  the way refusals already did, and clicking one opens the panel. Answered
+  questions show their answer in the tooltip.
+- **Fixed: a stage whose only children were questions was a leaf.** Exactly the
+  bug 0.19.3 fixed for refusals, one release later for questions: the row could
+  not be expanded, so nesting the questions under it would not have helped. The
+  rule that decides a stage's expansion moved into the pure presentation module
+  where it is unit-tested against all three kinds of child — it had been sitting
+  in a file no test can reach, which is why the same mistake shipped twice.
+
+## 0.22.2
+
+- **Startup latency is now attributable.** Three minutes could pass between
+  "Permission gate active" and "Session model", with nothing logged in between,
+  which reads as the extension having stalled — and invites blaming the gate or
+  the model, neither of which is responsible. The model line now reports how long
+  the CLI took to become ready, and the MCP servers it started are listed with
+  their statuses. Servers that failed to connect are called out, because they
+  cost their full connection attempt on **every subtask** and are the first thing
+  worth removing from a project's MCP config.
+
+## 0.22.1
+
+- **Fixed: git probes reported their answers as errors.**
+  `show-ref --verify --quiet` exits 1 to say a branch does not exist, and
+  `rev-parse --is-inside-work-tree` fails to say a folder is not a repository.
+  Both were logged at error level, so creating a task printed
+  `git show-ref … failed` for a check that had worked perfectly, and every
+  non-git workspace folder printed one too. Nothing was broken by it — the
+  callers read the exit code correctly — but a red line in the log for a
+  question correctly answered sends people hunting a fault that never happened.
+  Such runs are now logged at debug; the result they return is unchanged.
+
+## 0.22.0
+
+- **Fixed: a held tool call was announced to nobody, so a stage looked hung.**
+  Holding a call is the only moment the agent is genuinely blocked on a person,
+  and it produced a tree row and a log line — nothing else. Meanwhile the *first*
+  refusal did raise a notification, offering "Add Rule", which cannot release a
+  call the hook is already holding. So the useless prompt arrived first and the
+  useful one was invisible: the stage sat there until the CLI's hook timeout
+  expired, or until the run was stopped by hand. A hold now raises the
+  notification, with **Allow**, **Allow for Session** and **Deny** wired to the
+  waiting hook, so the agent continues mid-turn. Dismissing it loses nothing —
+  the row offers the same decisions. The first-refusal notification is suppressed
+  only when the gate is actually installed, so a gate that failed to arm still
+  reports.
+- **Task state moved out of extension storage into the repository**, at
+  `<git dir>/task-workspaces/state.json`. Extension state made this extension the
+  only thing that could read a task list. Under the git directory rather than the
+  working tree for two reasons: review rules key off git's changed paths, so state
+  in a worktree could oblige a review by being written, and every linked worktree
+  shares the main repo's git dir, so one store serves them all. The old global
+  copy is adopted once per repository and then kept as a backup, so nothing is
+  lost and a misfire is recoverable.
+- **Settings and logging no longer require an editor.** Defaults and
+  normalisation moved into a `vscode`-free module, and the `Logger` interface was
+  split from its output-channel implementation — sharing a file meant all 26
+  modules that log were coupled to VS Code by importing the interface. A guard
+  test now walks the import graph from every module a headless run must construct
+  and fails with the offending chain if one reaches `vscode`.
+
 ## 0.19.3
 
 - **Fixed: a stage with refusals but no checklist could not be expanded**, so the

@@ -52,9 +52,41 @@ describe("buildCliArgs", () => {
       expect(buildCliArgs({ ...BASE, mcpConfigPath: "  " })).not.toContain("--mcp-config");
     });
 
-    it("never adds --strict-mcp-config, which would drop user-scope servers", () => {
+    it("does not add --strict-mcp-config by default, which would drop user-scope servers", () => {
       const args = buildCliArgs({ ...BASE, mcpConfigPath: "C:/repo/.mcp.json" });
       expect(args).not.toContain("--strict-mcp-config");
+    });
+
+    it("adds --strict-mcp-config when the caller narrowed the server set", () => {
+      // Without it `--mcp-config` only *adds*: the worktree's own approved
+      // `.mcp.json` starts every server, so a reduced config changes nothing.
+      // Observed exactly that — a stage asked for one server and started nine.
+      const args = buildCliArgs({
+        ...BASE,
+        mcpConfigPath: "C:/gates/stage-mcp/mcp.json",
+        strictMcpConfig: true,
+      });
+      expect(args).toContain("--strict-mcp-config");
+    });
+
+    it("keeps --strict-mcp-config ahead of the variadic --mcp-config", () => {
+      const args = buildCliArgs({
+        ...BASE,
+        mcpConfigPath: "C:/gates/stage-mcp/mcp.json",
+        strictMcpConfig: true,
+      });
+      expect(args.indexOf("--strict-mcp-config")).toBeLessThan(
+        args.indexOf("--mcp-config"),
+      );
+      expect(args[args.length - 2]).toBe("--mcp-config");
+    });
+
+    it("ignores strict mode when there is no config to be strict about", () => {
+      // Strict with no config would leave the session with no servers at all.
+      const args = buildCliArgs({ ...BASE, strictMcpConfig: true });
+      expect(args).not.toContain("--strict-mcp-config");
+      const blank = buildCliArgs({ ...BASE, mcpConfigPath: "   ", strictMcpConfig: true });
+      expect(blank).not.toContain("--strict-mcp-config");
     });
 
     it("stays last, because the flag is variadic and swallows what follows", () => {

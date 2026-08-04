@@ -112,6 +112,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).mcpConfigPath();
   }
 
+  stageMcpServers(scope?: vscode.Uri): string[] {
+    return this.settings(scope).stageMcpServers();
+  }
+
   stageTimeoutMinutes(scope?: vscode.Uri): number {
     return this.settings(scope).stageTimeoutMinutes();
   }

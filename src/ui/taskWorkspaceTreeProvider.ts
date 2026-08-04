@@ -7,6 +7,7 @@ import {
   StageTreeItem,
   ChecklistTreeItem,
   DenialTreeItem,
+  QuestionTreeItem,
   HeldCallTreeItem,
 } from "./taskWorkspaceTreeItem";
 import { Logger } from "../logging/logger";
@@ -20,6 +21,7 @@ type TreeNode =
   | StageTreeItem
   | ChecklistTreeItem
   | DenialTreeItem
+  | QuestionTreeItem
   | HeldCallTreeItem;
 
 /**
@@ -98,7 +100,14 @@ export class TaskWorkspaceTreeProvider
         denials?.stageId === element.stage.id
           ? denials.items.map((item) => new DenialTreeItem(element.task, item))
           : [];
-      return [...refused, ...checklist];
+      // Questions lead: a route waiting on an answer is doing nothing at all,
+      // whereas a refusal may only have cost the stage one tool.
+      const pending = element.task.pipeline?.pendingQuestion;
+      const asked =
+        pending?.stageId === element.stage.id
+          ? pending.items.map((item) => new QuestionTreeItem(element.task, item))
+          : [];
+      return [...asked, ...refused, ...checklist];
     }
     if (element) return [];
 

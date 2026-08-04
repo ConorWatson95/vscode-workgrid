@@ -3,8 +3,11 @@ import {
   checklistPresentation,
   pipelineSummary,
   stagePresentation,
+  stageExpansion,
+  stageBlock,
+  activeStageLabel,
 } from "./stagePresentation";
-import { ChecklistItem, TaskStage } from "../domain/taskPipeline";
+import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { createPipeline, planStage, recordChecklist } from "../domain/pipelineEngine";
 import { findRoute } from "../domain/taskRoute";
 
@@ -138,5 +141,208 @@ describe("pipelineSummary", () => {
       stages: [stage({ status: "skipped", checklist: [item("c1", false)] })],
     });
     expect(summary).toBe("r · 1/1");
+  });
+});
+
+describe("stageExpansion", () => {
+  const stage = (overrides: Partial<TaskStage> = {}): TaskStage =>
+    ({
+      id: "s1",
+      name: "Build",
+      kind: "implement",
+      intent: "do the work",
+      status: "running",
+      subtasks: [],
+      ...overrides,
+    }) as TaskStage;
+
+  const pipeline = (overrides: Partial<TaskPipeline> = {}): TaskPipeline =>
+    ({ stages: [], ...overrides }) as TaskPipeline;
+
+  it("is a leaf when nothing is nested", () => {
+    expect(stageExpansion(pipeline(), stage()).childCount).toBe(0);
+  });
+
+  it("counts a checklist", () => {
+    const s = stage({ checklist: [{ id: "c1", text: "check", checked: false }] });
+    expect(stageExpansion(pipeline(), s)).toEqual({
+      childCount: 1,
+      needsAttention: true,
+    });
+  });
+
+  it("counts refusals, so a stage with only refusals is not a leaf", () => {
+    // Regression: this shape shipped as a leaf, making the rows that grant a
+    // refusal unreachable.
+    const p = pipeline({
+      pendingDenials: {
+        stageId: "s1",
+        stageName: "Build",
+        subtaskId: "st1",
+        refusedAt: "2026-08-04T00:00:00.000Z",
+        items: [
+          { id: "d1", tool: "Bash", reason: "no", attempts: 1, granted: false },
+        ],
+      },
+    } as Partial<TaskPipeline>);
+    expect(stageExpansion(p, stage())).toEqual({
+      childCount: 1,
+      needsAttention: true,
+    });
+  });
+
+  it("counts questions, so a stage with only questions is not a leaf", () => {
+    // The same regression, one release later, for questions.
+    const p = pipeline({
+      pendingQuestion: {
+        stageId: "s1",
+        stageName: "Build",
+        subtaskId: "st1",
+        askedAt: "2026-08-04T00:00:00.000Z",
+        items: [{ id: "q1", text: "Which environment?" }],
+      },
+    } as Partial<TaskPipeline>);
+    expect(stageExpansion(p, stage())).toEqual({
+      childCount: 1,
+      needsAttention: true,
+    });
+  });
+
+  it("ignores questions and refusals belonging to another stage", () => {
+    const p = pipeline({
+      pendingQuestion: {
+        stageId: "other",
+        stageName: "Other",
+        subtaskId: "st1",
+        askedAt: "2026-08-04T00:00:00.000Z",
+        items: [{ id: "q1", text: "?" }],
+      },
+    } as Partial<TaskPipeline>);
+    expect(stageExpansion(p, stage()).childCount).toBe(0);
+  });
+
+  it("stops needing attention once everything is resolved", () => {
+    const s = stage({ checklist: [{ id: "c1", text: "check", checked: true }] });
+    const p = pipeline({
+      pendingQuestion: {
+        stageId: "s1",
+        stageName: "Build",
+        subtaskId: "st1",
+        askedAt: "2026-08-04T00:00:00.000Z",
+        items: [{ id: "q1", text: "?", answer: "yes" }],
+      },
+    } as Partial<TaskPipeline>);
+    expect(stageExpansion(p, s)).toEqual({ childCount: 2, needsAttention: false });
+  });
+
+  it("treats a blank answer as unanswered", () => {
+    const p = pipeline({
+      pendingQuestion: {
+        stageId: "s1",
+        stageName: "Build",
+        subtaskId: "st1",
+        askedAt: "2026-08-04T00:00:00.000Z",
+        items: [{ id: "q1", text: "?", answer: "   " }],
+      },
+    } as Partial<TaskPipeline>);
+    expect(stageExpansion(p, stage()).needsAttention).toBe(true);
+  });
+});
+
+describe("stageBlock and activeStageLabel", () => {
+  const s = (overrides: Partial<TaskStage> = {}): TaskStage =>
+    ({
+      id: "s1",
+      name: "Plan",
+      kind: "plan",
+      intent: "plan it",
+      status: "active",
+      subtasks: [],
+      ...overrides,
+    }) as TaskStage;
+
+  const withQuestions = (items: unknown[], stageId = "s1") =>
+    ({
+      stages: [s()],
+      pendingQuestion: {
+        stageId,
+        stageName: "Plan",
+        subtaskId: "st1",
+        askedAt: "2026-08-04T00:00:00.000Z",
+        items,
+      },
+    }) as unknown as TaskPipeline;
+
+  const withRefusals = (items: unknown[], stageId = "s1") =>
+    ({
+      stages: [s()],
+      pendingDenials: {
+        stageId,
+        stageName: "Plan",
+        subtaskId: "st1",
+        refusedAt: "2026-08-04T00:00:00.000Z",
+        items,
+      },
+    }) as unknown as TaskPipeline;
+
+  it("reports nothing when the stage is genuinely working", () => {
+    expect(stageBlock({ stages: [s()] } as TaskPipeline, s())).toBeUndefined();
+  });
+
+  it("reports unanswered questions", () => {
+    const p = withQuestions([{ id: "q1", text: "?" }, { id: "q2", text: "?", answer: "yes" }]);
+    expect(stageBlock(p, s())).toEqual({ kind: "questions", count: 1 });
+  });
+
+  it("reports ungranted refusals", () => {
+    const p = withRefusals([
+      { id: "d1", tool: "Bash", reason: "no", attempts: 1, granted: false },
+      { id: "d2", tool: "Bash", reason: "no", attempts: 1, granted: true },
+    ]);
+    expect(stageBlock(p, s())).toEqual({ kind: "refusals", count: 1 });
+  });
+
+  it("ignores blocks belonging to another stage", () => {
+    expect(stageBlock(withQuestions([{ id: "q1", text: "?" }], "other"), s())).toBeUndefined();
+  });
+
+  it("clears once everything is resolved", () => {
+    const p = withQuestions([{ id: "q1", text: "?", answer: "done" }]);
+    expect(stageBlock(p, s())).toBeUndefined();
+  });
+
+  it("names the running stage rather than guessing from git", () => {
+    // The bug: a task whose planning stage was still running said "implementing",
+    // because the phase came from dirty files and commits.
+    expect(activeStageLabel({ stages: [s()] } as TaskPipeline)).toBe("Plan…");
+  });
+
+  it("says what a blocked stage is waiting for", () => {
+    const p = withQuestions([{ id: "q1", text: "?" }, { id: "q2", text: "?" }]);
+    expect(activeStageLabel(p)).toBe("Plan — waiting — 2 questions");
+  });
+
+  it("uses the singular for one outstanding item", () => {
+    const p = withQuestions([{ id: "q1", text: "?" }]);
+    expect(activeStageLabel(p)).toBe("Plan — waiting — 1 question");
+  });
+
+  it("reports a stage awaiting approval as such", () => {
+    const p = { stages: [s({ status: "awaiting-approval" })] } as TaskPipeline;
+    expect(activeStageLabel(p)).toBe("Plan — awaiting approval");
+  });
+
+  it("prefers an active stage over one awaiting approval", () => {
+    const p = {
+      stages: [s({ id: "a", name: "Gate", status: "awaiting-approval" }), s({ id: "b", name: "Build" })],
+    } as TaskPipeline;
+    expect(activeStageLabel(p)).toBe("Build…");
+  });
+
+  it("leaves the git-derived phase alone when no stage is in play", () => {
+    expect(activeStageLabel(undefined)).toBeUndefined();
+    expect(
+      activeStageLabel({ stages: [s({ status: "passed" })] } as TaskPipeline),
+    ).toBeUndefined();
   });
 });

@@ -12,6 +12,7 @@ import {
   encodeUserMessage,
   contextTokensOf,
   compactInfoOf,
+  mcpServersOf,
 } from "./streamJson";
 
 describe("compactInfoOf", () => {
@@ -305,5 +306,55 @@ describe("encodeUserMessage", () => {
       type: "user",
       message: { role: "user", content: [{ type: "text", text: "hello" }] },
     });
+  });
+});
+
+describe("mcpServersOf", () => {
+  it("reads the servers and their statuses from an init event", () => {
+    const event = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [
+        { name: "jira", status: "connected" },
+        { name: "sftp", status: "failed" },
+      ],
+    };
+    expect(mcpServersOf(event)).toEqual([
+      { name: "jira", status: "connected" },
+      { name: "sftp", status: "failed" },
+    ]);
+  });
+
+  it("ignores events that are not init", () => {
+    expect(mcpServersOf({ type: "assistant" })).toBeUndefined();
+    expect(
+      mcpServersOf({ type: "system", subtype: "compact_boundary" }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when the CLI reported no server list", () => {
+    expect(mcpServersOf({ type: "system", subtype: "init" })).toBeUndefined();
+  });
+
+  it("returns an empty list when the config had no servers", () => {
+    expect(
+      mcpServersOf({ type: "system", subtype: "init", mcp_servers: [] }),
+    ).toEqual([]);
+  });
+
+  it("names a server whose status the CLI omitted rather than dropping it", () => {
+    // A server with no status still cost startup time, so it must be reported.
+    expect(
+      mcpServersOf({ type: "system", subtype: "init", mcp_servers: [{ name: "x" }] }),
+    ).toEqual([{ name: "x", status: "unknown" }]);
+  });
+
+  it("skips entries with no usable name", () => {
+    const event = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ status: "connected" }, null, "nope", { name: "ok" }],
+    };
+    expect(mcpServersOf(event)).toEqual([{ name: "ok", status: "unknown" }]);
   });
 });

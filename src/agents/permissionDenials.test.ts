@@ -5,6 +5,8 @@ import {
   formatDenialReport,
   isPermissionDenial,
   suggestAllowRules,
+  durableAllowRule,
+  suggestAllowRule,
 } from "./permissionDenials";
 import { ChatItem } from "./streamJson";
 
@@ -354,5 +356,160 @@ describe("rules that must never be suggested", () => {
     expect(suggestAllowRules([denial("Bash", "sqlcmd -Q 'select 1'")])).toEqual([
       "Bash(sqlcmd:*)",
     ]);
+  });
+});
+
+describe("DenialWatcher with parallel tool calls", () => {
+  const denialText = "Claude requested permissions to use Bash, but you haven't granted it yet.";
+
+  it("pairs a refusal with the call it answers, not the most recent one", () => {
+    // The real failure: "Read denied — This Bash command contains multiple
+    // operations". Bash was refused, but a later Read entry owned the pairing, so
+    // the refusal was recorded against a capability that was never refused.
+    const watcher = new DenialWatcher();
+    watcher.observe({ kind: "tool", name: "Bash", detail: "cd x && cat y", id: "call_1" });
+    watcher.observe({ kind: "tool", name: "Read", detail: "README.md", id: "call_2" });
+
+    const denial = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+      callId: "call_1",
+    });
+
+    expect(denial?.tool).toBe("Bash");
+    expect(denial?.command).toBe("cd x && cat y");
+  });
+
+  it("still attributes correctly when results arrive out of order", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe({ kind: "tool", name: "Bash", detail: "one", id: "a" });
+    watcher.observe({ kind: "tool", name: "PowerShell", detail: "two", id: "b" });
+
+    const second = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+      callId: "b",
+    });
+    const first = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+      callId: "a",
+    });
+
+    expect(second?.tool).toBe("PowerShell");
+    expect(first?.tool).toBe("Bash");
+    expect(watcher.all()).toHaveLength(2);
+  });
+
+  it("falls back to the most recent call when the stream carries no ids", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe({ kind: "tool", name: "Bash", detail: "cd x && cat y" });
+    const denial = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+    });
+    expect(denial?.tool).toBe("Bash");
+  });
+
+  it("falls back when a result names a call it never saw", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe({ kind: "tool", name: "Bash", detail: "cd x", id: "a" });
+    const denial = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+      callId: "missing",
+    });
+    expect(denial?.tool).toBe("Bash");
+  });
+
+  it("counts a genuine retry of the same call once", () => {
+    const watcher = new DenialWatcher();
+    watcher.observe({ kind: "tool", name: "Bash", detail: "cd x", id: "a" });
+    watcher.observe({ kind: "tool-result", text: denialText, isError: true, callId: "a" });
+    watcher.observe({ kind: "tool", name: "Bash", detail: "cd x", id: "b" });
+    const repeat = watcher.observe({
+      kind: "tool-result",
+      text: denialText,
+      isError: true,
+      callId: "b",
+    });
+
+    expect(repeat).toBeUndefined();
+    expect(watcher.all()).toHaveLength(1);
+    expect(watcher.all()[0].attempts).toBe(2);
+  });
+});
+
+describe("durableAllowRule", () => {
+  const ctx = {
+    worktreePath: "C:/Dev/worktrees/qubeautoapp-scorecard-ev-share-national",
+    repositoryRoot: "C:/Dev/qubeautoapp",
+  };
+
+  const fileDenial = {
+    tool: "Read",
+    command:
+      "C:/Dev/worktrees/qubeautoapp-scorecard-ev-share-national/tools/sql/manufacturers/nissangb/data/StoredProcedures/usp_Thing.sql",
+    reason: "Claude requires approval to read this file.",
+    attempts: 1,
+  };
+
+  it("offers a worktree-relative twin for a file rule", () => {
+    expect(durableAllowRule(fileDenial, ctx)).toBe(
+      "Read(tools/sql/manufacturers/nissangb/data/StoredProcedures/**)",
+    );
+  });
+
+  it("keeps the absolute rule as the primary, since that one is known to match", () => {
+    expect(suggestAllowRule(fileDenial)).toBe(
+      "Read(C:/Dev/worktrees/qubeautoapp-scorecard-ev-share-national/tools/sql/manufacturers/nissangb/data/StoredProcedures/**)",
+    );
+  });
+
+  it("returns both from suggestAllowRules, so the grant outlives the task", () => {
+    const rules = suggestAllowRules([fileDenial], ctx);
+    expect(rules).toHaveLength(2);
+    expect(rules.some((r) => r.includes("C:/Dev/worktrees"))).toBe(true);
+    expect(rules).toContain(
+      "Read(tools/sql/manufacturers/nissangb/data/StoredProcedures/**)",
+    );
+  });
+
+  it("offers no relative twin for a command rule", () => {
+    // A command rule is matched against the literal command text, and the agent
+    // writes absolute paths because its cwd is the worktree — which is why a
+    // hand-written PowerShell(tools\jira\x.ps1:*) never fired.
+    const command = {
+      tool: "PowerShell",
+      command:
+        "C:/Dev/worktrees/qubeautoapp-scorecard-ev-share-national/tools/jira/Get-JiraAttachment.ps1 -Id 9",
+      reason: "requires approval",
+      attempts: 1,
+    };
+    expect(durableAllowRule(command, ctx)).toBeUndefined();
+  });
+
+  it("offers nothing when the path is outside the worktree and repository", () => {
+    const outside = { ...fileDenial, command: "D:/elsewhere/thing/file.sql" };
+    expect(durableAllowRule(outside, ctx)).toBeUndefined();
+  });
+
+  it("matches the worktree case-insensitively, as Windows paths vary", () => {
+    const mixed = {
+      ...fileDenial,
+      command:
+        "c:/dev/WORKTREES/qubeautoapp-scorecard-ev-share-national/tools/sql/x/file.sql",
+    };
+    expect(durableAllowRule(mixed, ctx)).toBe("Read(tools/sql/x/**)");
+  });
+
+  it("needs no context to keep working", () => {
+    expect(durableAllowRule(fileDenial)).toBeUndefined();
+    expect(suggestAllowRules([fileDenial])).toHaveLength(1);
   });
 });

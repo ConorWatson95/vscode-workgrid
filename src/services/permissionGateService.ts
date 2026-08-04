@@ -114,6 +114,18 @@ export class PermissionGateService {
     for (const listener of this.listeners) listener();
   }
 
+  /**
+   * True when the hook is installed for this task, so a refusal will be held for
+   * the user rather than simply refused.
+   *
+   * Callers that suppress their own reporting because "the gate will handle it"
+   * must ask this rather than the setting: `prepare` deliberately fails soft, and
+   * a refusal that is neither held nor reported is invisible.
+   */
+  isArmed(taskId: string): boolean {
+    return this.inboxes.has(taskId);
+  }
+
   /** Everything currently waiting, oldest first, optionally for one task. */
   waiting(taskId?: string): PendingGate[] {
     const all = [...this.pending.values()].sort((a, b) =>

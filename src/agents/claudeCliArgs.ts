@@ -36,6 +36,19 @@ export interface CliArgsInput {
    */
   settingsPath?: string;
   /**
+   * Load **only** `mcpConfigPath`, ignoring every other source of MCP servers.
+   *
+   * Needed because `--mcp-config` on its own *adds* servers: the worktree
+   * contains the project's own tracked `.mcp.json`, and the copied
+   * `.claude/settings.local.json` is what approves it — so passing a reduced
+   * config alongside those simply loaded both, and a stage asked to run one
+   * server still started nine.
+   *
+   * Off unless a caller has deliberately narrowed the set, because it also
+   * discards the user's own user-scope servers, which nobody asked for.
+   */
+  strictMcpConfig?: boolean;
+  /**
    * True when the process is spawned through a shell (Windows), in which case
    * arguments carrying paths have to be quoted or a space ends the argument.
    */
@@ -121,8 +134,16 @@ export function buildCliArgs(input: CliArgsInput): string[] {
     args.push("--settings", quoteForShell(input.settingsPath.trim(), input.useShell));
   }
 
-  // Deliberately not --strict-mcp-config: this adds the project's servers, it
-  // does not replace whatever the user has configured at user scope.
+  // Only when the caller has narrowed the server set on purpose. Without it
+  // `--mcp-config` merely *adds*, so a reduced config sits alongside the
+  // worktree's own approved `.mcp.json` and every server starts anyway. A flag,
+  // so it can precede the variadic --mcp-config safely.
+  if (input.strictMcpConfig && input.mcpConfigPath?.trim()) {
+    args.push("--strict-mcp-config");
+  }
+
+  // Not --strict-mcp-config by default: plain `--mcp-config` adds the project's
+  // servers rather than replacing whatever the user has at user scope.
   //
   // MUST stay last. `--mcp-config` is variadic (it accepts several
   // space-separated configs), so it swallows any following non-flag argument —

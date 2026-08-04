@@ -224,6 +224,30 @@ export class HarnessSettings {
   }
 
   /**
+   * Servers from the project's MCP config that **stage** sessions load. Empty
+   * means all of them.
+   *
+   * Every subtask is a fresh CLI, and the CLI starts every server in the config
+   * before its first event. A stage pays that twice over — the startup wait, and
+   * the tool definitions each server injects into the context of a session that
+   * will never call them. A build stage does not need a set of database servers
+   * to compile something.
+   *
+   * Worse when a server cannot connect, since the CLI waits out a timeout each:
+   * one project measured nine servers, eight unreachable, at 182 seconds before
+   * any work began. But the cost is real even when every server is healthy.
+   *
+   * Only ever removes servers, so it cannot be used to widen what a branch can
+   * reach — which is why it is safe alongside reading the config from the
+   * repository root.
+   */
+  stageMcpServers(): string[] {
+    // No default set: an empty list means "no opinion", and must not be confused
+    // with "no servers", which would strip every stage's tools.
+    return this.list("stageMcpServers", []);
+  }
+
+  /**
    * Hard stop for one subtask, so a hung CLI cannot stall a route forever.
    *
    * Generous by default: a planning stage on a large repository legitimately

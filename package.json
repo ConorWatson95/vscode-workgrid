@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.21.0",
+  "version": "0.24.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -700,6 +700,14 @@
           "default": "node",
           "scope": "resource",
           "markdownDescription": "Program used to run the permission gate hook script. Must be able to run a CommonJS file passed as its first argument.\n\nSet an absolute path if `node` is not on the PATH the CLI inherits. If it cannot run, the gate quietly does nothing and refusals behave as they did before — check the Task Workspaces log for `Permission gate`."
+        },
+        "taskWorkspaces.stageMcpServers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Servers from the project MCP config that **route stage** sessions load. Empty means all of them. Ad-hoc chat sessions are unaffected.\n\nEvery subtask runs a fresh CLI, and the CLI starts every server in the config before doing any work. A stage pays that cost per subtask, twice over: the startup wait, and the tool definitions each server injects into the context of a session that will never use them. A build stage does not need a set of database servers to compile something.\n\nThe cost is worth naming even when everything is healthy — but it is severe when a server *cannot* connect, because the CLI waits out a timeout per server. One project measured nine servers, eight of them unreachable, at over three minutes before the first token of work.\n\nNames are matched case-insensitively. A name matching no server is treated as a mistake and the project config is used unchanged, so a typo cannot silently strip every tool.\n\nOnly ever *removes* servers, so it cannot widen what a task branch can reach — which is why it is safe alongside reading the config from the repository root."
         }
       }
     }
