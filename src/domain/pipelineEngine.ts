@@ -164,13 +164,34 @@ export function applyRules(
 
   if (added.length === 0) return { pipeline, added, matches };
 
-  const gateIndex = pipeline.stages.findIndex(
-    (s) => s.kind === "humanVerification",
-  );
   const stages = [...pipeline.stages];
-  stages.splice(gateIndex === -1 ? stages.length : gateIndex, 0, ...added);
+  stages.splice(ruleInsertionIndex(pipeline.stages), 0, ...added);
 
   return { pipeline: { ...pipeline, stages }, added, matches };
+}
+
+/**
+ * Where a rule's reviews belong: before anything irreversible happens.
+ *
+ * This was the first `humanVerification` stage, which in a route that deploys to a
+ * dev environment before a human signs off put the reviews *after the deployment*.
+ * A review that checks whether an object is in the right layer and safe to run is
+ * worthless once it has already run somewhere — and it is precisely the kind of
+ * route the harness is for, so this was wrong for the main case.
+ *
+ * The barrier is therefore the first stage that ships work or hands it to a
+ * person. Only **unresolved** stages count: a deployment that has already happened
+ * cannot be got in front of, and inserting a pending review before a stage that
+ * has passed would place it in the past, where the order no longer describes
+ * anything that happened.
+ */
+export function ruleInsertionIndex(stages: readonly TaskStage[]): number {
+  const barrier = stages.findIndex(
+    (stage) =>
+      (stage.status === "pending" || stage.status === "awaiting-approval") &&
+      (stage.kind === "deployment" || stage.kind === "humanVerification"),
+  );
+  return barrier === -1 ? stages.length : barrier;
 }
 
 /** A subtask as proposed by a planning agent, before the engine assigns ids. */

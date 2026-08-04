@@ -6,6 +6,7 @@ import {
   finishSubtask,
   nextAction,
   outstandingChecklist,
+  ruleInsertionIndex,
   pipelineProgress,
   planStage,
   answerQuestion,
@@ -923,5 +924,60 @@ describe("tool calls the permission layer refused", () => {
         pendingDenials: { stageId: "s", subtaskId: "s-1", items: [] },
       })?.pendingDenials,
     ).toBeUndefined();
+  });
+});
+
+describe("ruleInsertionIndex", () => {
+  const s = (
+    id: string,
+    kind: TaskStage["kind"],
+    status: TaskStage["status"] = "pending",
+  ): TaskStage =>
+    ({ id, name: id, kind, status, intent: "", splittable: false, requiresApproval: false, subtasks: [] }) as TaskStage;
+
+  it("puts reviews before a deployment, not after it", () => {
+    // The reported bug: a route that deploys to DEV before a human signs off had
+    // its reviews spliced before the sign-off — so after the deployment. A review
+    // of whether SQL is safe to run is worthless once it has run.
+    const stages = [
+      s("write", "implementation"),
+      s("deploy-dev", "deployment"),
+      s("verify", "test"),
+      s("signoff", "humanVerification"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(1);
+  });
+
+  it("falls back to the human gate when the route deploys nothing", () => {
+    const stages = [
+      s("write", "implementation"),
+      s("review", "codeReview"),
+      s("signoff", "humanVerification"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(2);
+  });
+
+  it("does not insert before a deployment that already happened", () => {
+    // Nothing can be got in front of it now, and a pending stage placed before a
+    // passed one would describe an order that never occurred.
+    const stages = [
+      s("write", "implementation", "passed"),
+      s("deploy-dev", "deployment", "passed"),
+      s("verify", "test", "passed"),
+      s("signoff", "humanVerification"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(3);
+  });
+
+  it("gets in front of a gate that is waiting right now", () => {
+    const stages = [
+      s("write", "implementation", "passed"),
+      s("signoff", "humanVerification", "awaiting-approval"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(1);
+  });
+
+  it("appends when there is no barrier at all", () => {
+    expect(ruleInsertionIndex([s("write", "implementation")])).toBe(1);
   });
 });

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { TaskGroupId } from "./taskGrouping";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import {
   taskStatusPresentation,
@@ -453,3 +454,58 @@ export class MessageTreeItem extends vscode.TreeItem {
     this.contextValue = "message";
   }
 }
+
+/**
+ * A heading grouping tasks by what they need.
+ *
+ * Holds its children rather than being re-derived on expansion: the grouping is
+ * computed once from the reconciled task list, and re-running it per group would
+ * mean listing worktrees again for every heading.
+ */
+export class TaskGroupTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly groupId: TaskGroupId,
+    label: string,
+    readonly children: TaskWorkspaceTreeItem[],
+    expanded: boolean,
+  ) {
+    super(
+      label,
+      expanded
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed,
+    );
+    this.description = `${children.length}`;
+    this.contextValue = `task-group task-group-${groupId}`;
+    this.iconPath = new vscode.ThemeIcon(GROUP_ICONS[groupId], GROUP_COLOURS[groupId]);
+    this.tooltip = new vscode.MarkdownString(GROUP_TOOLTIPS[groupId]);
+  }
+}
+
+const GROUP_ICONS: Record<TaskGroupId, string> = {
+  "needs-you": "person",
+  working: "loading~spin",
+  parked: "circle-outline",
+  done: "pass-filled",
+  "no-route": "comment-discussion",
+  archived: "archive",
+};
+
+const GROUP_COLOURS: Record<TaskGroupId, vscode.ThemeColor | undefined> = {
+  "needs-you": new vscode.ThemeColor("charts.yellow"),
+  working: new vscode.ThemeColor("charts.blue"),
+  parked: undefined,
+  done: new vscode.ThemeColor("charts.green"),
+  "no-route": undefined,
+  archived: undefined,
+};
+
+const GROUP_TOOLTIPS: Record<TaskGroupId, string> = {
+  "needs-you":
+    "Stopped until you act: a gate awaiting approval, an unanswered question, a held tool call, a failed stage, or verification items outstanding at a sign-off.",
+  working: "An agent is running a stage right now.",
+  parked: "Has a route, but nothing is running and nothing is waiting on you. Advance it when you are ready.",
+  done: "Every stage resolved.",
+  "no-route": "A worktree and a chat, with no stages or gates.",
+  archived: "Archived. The worktree may still exist.",
+};

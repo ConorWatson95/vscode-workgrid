@@ -53,6 +53,20 @@ const READ_TOOLS = new Set(["Read", "NotebookRead"]);
 export const MAX_OUTPUT_CHARS = 20000;
 
 /**
+ * Characters kept from the *end* of an over-long block.
+ *
+ * The tail is often the only part that answers the question: the row count, the
+ * error, the "0 objects would change". Keeping only the head left a report that
+ * stopped mid-listing and said nothing about how it ended.
+ */
+const TAIL_CHARS = 3000;
+
+/** Says what is missing and how much, rather than trailing off. */
+function omissionMarker(chars: number): string {
+  return `…${chars.toLocaleString("en-GB")} characters omitted here; the end of the output follows…`;
+}
+
+/**
  * Accumulates activity from a live stream.
  *
  * Fed the same items as `DenialWatcher`, from the same subscription — the stage
@@ -71,9 +85,11 @@ export class StageActivityWatcher {
 
   observe(item: ChatItem): void {
     if (item.kind === "tool") {
-      this.pending = { name: item.name, detail: item.detail };
+      // The full value, not the 120-character chat summary: a truncated path is
+      // useless for the one thing a report is read for.
+      this.pending = { name: item.name, detail: item.detailFull ?? item.detail };
       this.toolCounts[item.name] = (this.toolCounts[item.name] ?? 0) + 1;
-      this.record(item.name, item.detail);
+      this.record(item.name, item.detailFull ?? item.detail);
       return;
     }
     if (item.kind !== "tool-result") return;
@@ -82,7 +98,7 @@ export class StageActivityWatcher {
     // and would swamp the useful part; an edit's result is a confirmation.
     const owner = this.pending?.name;
     if (!owner || !COMMAND_TOOLS.has(owner)) return;
-    this.append(this.pending?.detail, item.text, item.isError);
+    this.append(this.pending?.detail, item.textFull ?? item.text, item.isError);
   }
 
   private record(tool: string, detail: string | undefined): void {
@@ -121,7 +137,17 @@ export class StageActivityWatcher {
     if (this.outputChars + block.length > MAX_OUTPUT_CHARS) {
       const room = Math.max(0, MAX_OUTPUT_CHARS - this.outputChars);
       if (room > header.length + 40) {
-        this.chunks.push(`${block.slice(0, room)}\n…output truncated here.`);
+        // Head *and* tail, because the end of a long output is usually the part
+        // worth having — the row count, the error, the "0 objects changed". Keeping
+        // only the head threw that away and left a report that stopped mid-listing.
+        const head = block.slice(0, Math.max(0, room - TAIL_CHARS));
+        const tail = block.length > head.length + TAIL_CHARS ? block.slice(-TAIL_CHARS) : "";
+        const omitted = block.length - head.length - tail.length;
+        this.chunks.push(
+          tail
+            ? `${head}\n${omissionMarker(omitted)}\n${tail}`
+            : `${head}\n${omissionMarker(block.length - head.length)}`,
+        );
       } else {
         this.chunks.push("…further output omitted.");
       }

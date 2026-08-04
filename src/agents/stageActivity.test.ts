@@ -159,3 +159,47 @@ describe("credentials", () => {
     expect(result.commands[0]).toContain("Deploy.ps1");
   });
 });
+
+describe("full-fidelity capture", () => {
+  it("records the whole path, not the chat row's truncated summary", () => {
+    // The reported symptom: a report showing paths that end in an ellipsis. They
+    // arrived that way — `detail` is capped at 120 characters for a chat row.
+    const long =
+      "tools/sql/manufacturers/RenaultGB/Scorecard/StoredProcedures/p_Bespoke_Scorecard_EvShare_National_ByDealerAndPeriod_WithComparisons.sql";
+    const watcher = new StageActivityWatcher();
+    watcher.observe({
+      kind: "tool",
+      name: "Write",
+      detail: `${long.slice(0, 120)}…`,
+      detailFull: long,
+    } as never);
+    expect(watcher.result().pathsWritten).toEqual([long]);
+  });
+
+  it("keeps a command's output on more than one line", () => {
+    const watcher = new StageActivityWatcher();
+    watcher.observe({ kind: "tool", name: "PowerShell", detailFull: "./x.ps1" } as never);
+    watcher.observe({
+      kind: "tool-result",
+      text: "line one line two line three",
+      textFull: "line one\nline two\nline three",
+      isError: false,
+    } as never);
+    expect(watcher.result().output).toContain("line one\nline two\nline three");
+  });
+
+  it("keeps the end of an over-long output, not only the start", () => {
+    const watcher = new StageActivityWatcher();
+    watcher.observe({ kind: "tool", name: "PowerShell", detailFull: "./deploy.ps1" } as never);
+    watcher.observe({
+      kind: "tool-result",
+      text: "x",
+      textFull: `START${"filler ".repeat(6000)}THE ROW COUNT WAS 12`,
+      isError: false,
+    } as never);
+    const output = watcher.result().output;
+    expect(output).toContain("START");
+    expect(output).toContain("THE ROW COUNT WAS 12");
+    expect(output).toContain("characters omitted here");
+  });
+});

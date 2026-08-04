@@ -11,9 +11,32 @@ export type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
   /** `id` is the block's tool_use id, when the stream carried one. */
-  | { kind: "tool"; name: string; detail?: string; id?: string }
+  | {
+      kind: "tool";
+      name: string;
+      /** One-line summary, capped for a chat row. */
+      detail?: string;
+      /**
+       * The same value uncapped and with its line breaks intact.
+       *
+       * `detail` is truncated to 120 characters for display, which is fine in a
+       * chat row and wrong everywhere else: the stage report recorded it verbatim,
+       * so a long file path arrived already ending in an ellipsis and a path is
+       * exactly the thing that has to be complete to be any use.
+       */
+      detailFull?: string;
+      id?: string;
+    }
   /** `callId` is the tool_use this result answers, when the stream carried one. */
-  | { kind: "tool-result"; text: string; isError: boolean; callId?: string }
+  | {
+      kind: "tool-result";
+      /** Capped at 500 characters and flattened to one line, for a chat row. */
+      text: string;
+      /** Uncapped and unflattened, so recorded output keeps its shape. */
+      textFull?: string;
+      isError: boolean;
+      callId?: string;
+    }
   | { kind: "result"; text: string; isError: boolean }
   | { kind: "system"; text: string };
 
@@ -311,6 +334,7 @@ function blocksToItems(
         kind: "tool",
         name: block.name ?? "tool",
         detail: summariseToolInput(block.input),
+        detailFull: fullToolInput(block.input),
         id: typeof block.id === "string" ? block.id : undefined,
       });
     }
@@ -338,6 +362,7 @@ function userEventItems(
         items.push({
           kind: "tool-result",
           text,
+          textFull: fullToolContent(block.content),
           isError: block.is_error === true,
           callId: typeof block.tool_use_id === "string" ? block.tool_use_id : undefined,
         });
@@ -397,6 +422,53 @@ function stringifyToolContent(content: unknown): string {
     return truncate(texts.join("\n"), 500);
   }
   return "";
+}
+
+/**
+ * Ceiling on the full-fidelity copies, so a pathological tool argument cannot
+ * grow a session's memory without bound. Well above any real path or listing,
+ * and the recorder caps what it *persists* separately.
+ */
+const FULL_MAX = 40000;
+
+/**
+ * The tool's argument, uncapped for display purposes and with newlines intact.
+ *
+ * Separate from `summariseToolInput` rather than replacing it: the chat row wants
+ * one short line, and the stage report wants the whole path. Sharing one value
+ * meant whichever consumer came second got the wrong thing — and it was the report,
+ * which recorded paths already ending in an ellipsis.
+ */
+function fullToolInput(input: unknown): string | undefined {
+  if (typeof input === "string") return clamp(input);
+  if (input && typeof input === "object") {
+    const obj = input as Record<string, unknown>;
+    const candidate =
+      obj.command ?? obj.file_path ?? obj.path ?? obj.pattern ?? obj.description;
+    if (typeof candidate === "string") return clamp(candidate);
+    try {
+      return clamp(JSON.stringify(obj));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** A tool result's text, unflattened, so a listing keeps its lines. */
+function fullToolContent(content: unknown): string | undefined {
+  if (typeof content === "string") return clamp(content);
+  if (Array.isArray(content)) {
+    const texts = content
+      .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
+      .filter(Boolean);
+    return clamp(texts.join("\n"));
+  }
+  return undefined;
+}
+
+function clamp(value: string): string {
+  return value.length > FULL_MAX ? value.slice(0, FULL_MAX) : value;
 }
 
 function truncate(value: string, max: number): string {

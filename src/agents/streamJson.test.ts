@@ -214,7 +214,14 @@ describe("toChatItems", () => {
     const items = toChatItems(event);
     expect(items).toEqual([
       { kind: "assistant", text: "Working on it." },
-      { kind: "tool", name: "Edit", detail: "src/a.ts" },
+      {
+        kind: "tool",
+        name: "Edit",
+        detail: "src/a.ts",
+        // The uncapped copy the stage report reads; `detail` is for a chat row.
+        detailFull: "src/a.ts",
+        id: undefined,
+      },
     ]);
   });
 
@@ -271,7 +278,14 @@ describe("toChatItems", () => {
       },
     };
     expect(toChatItems(event)).toEqual([
-      { kind: "tool-result", text: "ok", isError: false },
+      {
+        kind: "tool-result",
+        text: "ok",
+        // Unflattened copy, so a multi-line listing keeps its lines in a report.
+        textFull: "ok",
+        isError: false,
+        callId: undefined,
+      },
     ]);
   });
 

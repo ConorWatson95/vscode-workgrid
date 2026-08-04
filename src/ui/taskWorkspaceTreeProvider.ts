@@ -9,12 +9,15 @@ import {
   DenialTreeItem,
   QuestionTreeItem,
   HeldCallTreeItem,
+  TaskGroupTreeItem,
 } from "./taskWorkspaceTreeItem";
+import { groupForTask, groupStartsExpanded, groupTasks } from "./taskGrouping";
 import { Logger } from "../logging/logger";
 import { AgentActivity } from "./statusPresentation";
 import { PendingGate } from "../services/permissionGateService";
 
 type TreeNode =
+  | TaskGroupTreeItem
   | TaskWorkspaceTreeItem
   | OrphanWorktreeTreeItem
   | MessageTreeItem
@@ -74,6 +77,9 @@ export class TaskWorkspaceTreeProvider
   }
 
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
+    // A group holds its children already; nothing is re-derived on expansion.
+    if (element instanceof TaskGroupTreeItem) return element.children;
+
     // A harnessed task expands into its route's stages; a stage expands into the
     // verification items it raised. Everything else is a leaf.
     if (element instanceof TaskWorkspaceTreeItem) {
@@ -135,10 +141,10 @@ export class TaskWorkspaceTreeProvider
       return [new MessageTreeItem(msg, "add")];
     }
 
-    const nodes: TreeNode[] = [];
+    const taskItems: TaskWorkspaceTreeItem[] = [];
     for (const { task } of reconciled) {
       const live = await this.service.getLiveState(task);
-      nodes.push(
+      taskItems.push(
         new TaskWorkspaceTreeItem(
           task,
           live,
@@ -147,6 +153,31 @@ export class TaskWorkspaceTreeProvider
         ),
       );
     }
+
+    // Grouped by what each task needs, because a task can sit at a verification
+    // gate for days: a flat list makes finding the one that moved a matter of
+    // reading every row. Collapses back to a plain list when everything lands in
+    // one group, so a small repository is not made to look like a filing system.
+    const groups = groupTasks(taskItems, (item) =>
+      groupForTask({
+        status: item.task.status,
+        pipeline: item.task.pipeline,
+        heldCalls: this.getHeldCalls(item.task.id).length,
+      }),
+    );
+
+    const nodes: TreeNode[] =
+      groups.length <= 1
+        ? taskItems
+        : groups.map(
+            (group) =>
+              new TaskGroupTreeItem(
+                group.id,
+                group.label,
+                group.items,
+                groupStartsExpanded(group.id),
+              ),
+          );
 
     for (const orphan of result.value.orphans) {
       nodes.push(
