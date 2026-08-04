@@ -409,3 +409,23 @@ describe("sendBackToStage", () => {
     expect(p.guidance).toBeUndefined();
   });
 });
+
+describe("sendBackTargets and deployment stages", () => {
+  it("does not offer a deployment stage for kind:implementation", () => {
+    // The regression that motivated a separate `deployment` kind. A route that
+    // deploys before it reviews had its deployment as the nearest earlier
+    // "implementation" stage, so the obvious way back from a failed review was to
+    // run the deployment again rather than fix what failed.
+    const p = pipeline([
+      stage({ id: "write", name: "Write migration", kind: "implementation" }),
+      stage({ id: "deploy", name: "Deploy to DEV", kind: "deployment" }),
+      stage({
+        id: "review",
+        name: "SQL review",
+        kind: "domainReview",
+        sendBackTo: ["kind:implementation"],
+      }),
+    ]);
+    expect(sendBackTargets(p, "review").map((s) => s.id)).toEqual(["write"]);
+  });
+});

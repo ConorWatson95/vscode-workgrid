@@ -18,6 +18,17 @@
 export type StageKind =
   /** Produces or changes code. */
   | "implementation"
+  /**
+   * Ships work that already exists to an environment — deploy, promote, publish.
+   *
+   * Distinct from `implementation` because otherwise the two are indistinguishable
+   * to anything reasoning about which stage *authored* the work. That is not
+   * academic: `sendBackTo: ["kind:implementation"]` on a review resolved to the
+   * nearest earlier implementation stage, which in a route that deploys before it
+   * reviews is the deployment — so the obvious way back from a failed review was
+   * to run the deployment again rather than fix what failed.
+   */
+  | "deployment"
   /** Writes or runs automated tests. */
   | "test"
   /** Reads the diff for correctness and scope. */
@@ -35,6 +46,7 @@ export type StageKind =
 /** Every stage kind, for validating config that names one. */
 export const ALL_STAGE_KINDS: readonly StageKind[] = [
   "implementation",
+  "deployment",
   "test",
   "codeReview",
   "domainReview",
