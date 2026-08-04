@@ -65,26 +65,41 @@ export async function createTaskWorkspaceCommand(
     ctx.logger.warn(`Harness config: ${problem}`);
   }
 
-  const routeChoice = await vscode.window.showQuickPick(
-    [
-      ...harness.routes.map((route) => ({
-        label: route.label,
-        detail:
-          `${route.description} (${route.stages.length} stages)` +
-          (harness.usingBuiltInRoutes ? " · built-in" : ""),
-        route: route as RouteDefinition | undefined,
-      })),
-      {
-        label: "No route",
-        detail: "Just a worktree — no stages, no gates. You can decide later.",
-        route: undefined,
-      },
-    ],
+  // Two kinds of task, said as two kinds rather than as a route and the absence of
+  // one. "No route" read as "use the default route" — an understandable reading,
+  // and it is not what it does: it gives a worktree and a chat, which is a
+  // deliberate way to work, not a fallback. Named for what it produces instead.
+  type RouteItem = vscode.QuickPickItem & { route?: RouteDefinition };
+  const items: RouteItem[] = [
     {
-      title: "Create Task Workspace",
-      placeHolder: "Route — the stages this kind of work must travel through",
+      label: harness.usingBuiltInRoutes ? "Built-in routes" : "Routes from this project",
+      kind: vscode.QuickPickItemKind.Separator,
     },
-  );
+    ...harness.routes.map((route) => ({
+      label: route.label,
+      detail:
+        `${route.description} (${route.stages.length} stages)` +
+        (harness.usingBuiltInRoutes ? " · built-in" : ""),
+      route: route as RouteDefinition | undefined,
+    })),
+    { label: "Or work by hand", kind: vscode.QuickPickItemKind.Separator },
+    {
+      label: "Chat task",
+      description: "no route",
+      // Does not claim a route can be added later: nothing attaches one to an
+      // existing task, and the previous "You can decide later" promised exactly
+      // that. Better to say what the choice costs than to be found out by it.
+      detail:
+        "A worktree and a chat session, and nothing else: no stages, no gates, " +
+        "no brief handed to prompts. A route can only be chosen now.",
+      route: undefined,
+    },
+  ];
+
+  const routeChoice = await vscode.window.showQuickPick(items, {
+    title: "Create Task Workspace",
+    placeHolder: "How should this work be run?",
+  });
   if (!routeChoice) return;
 
   // With a route, this text is handed to every stage prompt. A thin brief — a bare
@@ -94,7 +109,7 @@ export async function createTaskWorkspaceCommand(
     title: "Create Task Workspace",
     prompt: routeChoice.route
       ? "Brief — given to every stage of the route"
-      : "Description (optional)",
+      : "Description (optional) — for the task's details, not sent to the chat",
     placeHolder: routeChoice.route
       ? "A ticket reference is fine; stages will ask if they need more."
       : "What is this task about?",
@@ -120,7 +135,7 @@ export async function createTaskWorkspaceCommand(
       detail:
         `Branch: ${proposal.value.branchName}\nBase: ${baseBranch.trim()}\n` +
         `Worktree: ${proposal.value.worktreePath}\n` +
-        `Route: ${routeChoice.route?.label ?? "none"}`,
+        `Route: ${routeChoice.route?.label ?? "chat task — no stages or gates"}`,
     },
     "Create",
   );
