@@ -6,6 +6,7 @@ import { StageActivityWatcher } from "./stageActivity";
 import { SubtaskActivity } from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
+import { redactSecrets } from "../domain/secretRedaction";
 
 /** How often a running stage's progress is reported to whoever is watching. */
 export const ACTIVITY_INTERVAL_MS = 1500;
@@ -208,7 +209,10 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         const reply = [...session.items]
           .reverse()
           .find((item) => item.kind === "assistant");
-        return reply && "text" in reply ? reply.text : "";
+        // Redacted because this is persisted as the subtask's reply and rendered in
+        // its report. An agent that ran a deployment routinely quotes the command
+        // it ran back at you, connection string and all.
+        return reply && "text" in reply ? redactSecrets(reply.text) : "";
       };
 
       const onStatus = (status: string) => {

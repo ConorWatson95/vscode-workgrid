@@ -1,4 +1,5 @@
 import { ChatItem } from "./streamJson";
+import { redactSecrets } from "../domain/secretRedaction";
 
 /**
  * Collects what a stage actually did, so it can be seen afterwards.
@@ -85,7 +86,10 @@ export class StageActivityWatcher {
   }
 
   private record(tool: string, detail: string | undefined): void {
-    const value = detail?.trim();
+    // Masked here, at the point of capture, not only where it is displayed: this
+    // object is persisted in the task state file, and a route that builds a
+    // connection string from a profile put a live password on disk in plaintext.
+    const value = redactSecrets(detail?.trim() ?? "");
     if (!value) return;
     if (COMMAND_TOOLS.has(tool)) {
       if (!this.commands.includes(value)) this.commands.push(value);
@@ -106,9 +110,11 @@ export class StageActivityWatcher {
     isError: boolean | undefined,
   ): void {
     if (this.truncated) return;
-    const body = text.trim();
+    // Output as well as the command: a script that echoes its own connection
+    // string, or an error quoting the failed one, leaks exactly the same value.
+    const body = redactSecrets(text.trim());
     if (!body) return;
-    const header = `$ ${command ?? "(command)"}${isError ? "   [failed]" : ""}`;
+    const header = `$ ${redactSecrets(command ?? "(command)")}${isError ? "   [failed]" : ""}`;
     const block = `${header}\n${body}`;
     // Truncation is announced rather than silent: output that stops mid-stream
     // with no explanation reads as the command having stopped there.

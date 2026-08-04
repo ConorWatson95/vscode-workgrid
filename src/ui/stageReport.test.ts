@@ -194,3 +194,51 @@ describe("formatTaskReport", () => {
     expect(formatTaskReport("t", undefined)).toContain("no route");
   });
 });
+
+describe("credentials", () => {
+  const CONNECTION =
+    "Server=tcp:qube.database.windows.net;Database=Core;User ID=deploy;Password=S3cr3t!Value";
+
+  it("masks a credential in a command, its output and the reply", () => {
+    // All three carry it in practice: the command builds the connection string, the
+    // script echoes it back, and the agent quotes what it ran.
+    const report = formatStageReport(
+      "SC-123",
+      stage({
+        subtasks: [
+          {
+            id: "p-1",
+            title: "Deploy",
+            prompt: "Deploy it.",
+            status: "done",
+            reply: `I ran it with ${CONNECTION}`,
+            activity: {
+              toolCounts: { PowerShell: 1 },
+              commands: [`./Invoke-SqlDeployment.ps1 -ConnectionString "${CONNECTION}"`],
+              pathsWritten: [],
+              pathsRead: [],
+              output: `connecting with ${CONNECTION}`,
+            },
+          },
+        ],
+      }),
+      undefined,
+    );
+
+    expect(report).not.toContain("S3cr3t!Value");
+    // Still useful: the script and the database are what make the report readable.
+    expect(report).toContain("Invoke-SqlDeployment.ps1");
+    expect(report).toContain("Database=Core");
+  });
+
+  it("masks one that reached the state file before redaction existed", () => {
+    // Capture-time masking cannot help a task an older build recorded, so the
+    // render pass has to catch it too.
+    const report = formatStageReport(
+      "SC-123",
+      stage({ subtasks: [{ id: "p-1", title: "x", prompt: "x", status: "done", reply: CONNECTION }] }),
+      undefined,
+    );
+    expect(report).not.toContain("S3cr3t!Value");
+  });
+});

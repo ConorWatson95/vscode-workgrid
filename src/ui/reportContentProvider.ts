@@ -37,6 +37,7 @@ export class ReportContentProvider
 
   private liveActivity?: LiveActivitySource;
   private timer?: ReturnType<typeof setInterval>;
+  private readonly disposables: vscode.Disposable[] = [];
 
   constructor(private readonly loadTask: (taskId: string) => Promise<TaskWorkspace | undefined>) {}
 
@@ -49,14 +50,27 @@ export class ReportContentProvider
    * preview does not so much as flicker.
    */
   startAutoRefresh(intervalMs = 2000): void {
-    this.timer ??= setInterval(() => {
-      // Only while something is actually open. The URIs stay in `issued` after
-      // their editors close, and refreshing those would re-render for nobody.
-      const open = vscode.workspace.textDocuments.some(
-        (document) => document.uri.scheme === REPORT_SCHEME,
-      );
-      if (open) this.refresh();
-    }, intervalMs);
+    if (this.timer) return;
+
+    // Unconditional. This used to skip a tick unless `workspace.textDocuments`
+    // still held a report — which stopped updates dead once a tab was switched
+    // away from: a virtual document with no *visible editor* can be closed by VS
+    // Code while the markdown preview built from it stays open, so the guard went
+    // false while the thing it was protecting was still on screen. Firing for a
+    // URI nobody holds is cheap; not firing for one somebody does is the bug.
+    this.timer = setInterval(() => this.refresh(), intervalMs);
+
+    // Refreshed on the way back too, rather than waiting out a tick. A preview
+    // that was hidden while the content changed can render its stale copy on
+    // becoming visible again, and one stale frame is what "it stopped updating"
+    // looks like.
+    this.disposables.push(
+      vscode.window.tabGroups.onDidChangeTabs(() => this.refresh()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.refresh()),
+      vscode.window.onDidChangeWindowState((state) => {
+        if (state.focused) this.refresh();
+      }),
+    );
   }
 
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
@@ -118,6 +132,7 @@ export class ReportContentProvider
 
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
+    for (const disposable of this.disposables) disposable.dispose();
     this.emitter.dispose();
   }
 }

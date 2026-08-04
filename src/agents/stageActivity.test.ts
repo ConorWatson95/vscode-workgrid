@@ -139,3 +139,23 @@ describe("StageActivityWatcher", () => {
     expect(activity.output).not.toContain("file body");
   });
 });
+
+describe("credentials", () => {
+  it("never records a credential, so none reaches the state file", () => {
+    const watcher = new StageActivityWatcher();
+    watcher.observe({
+      kind: "tool",
+      name: "PowerShell",
+      detail: './Deploy.ps1 -ConnectionString "Server=x;Password=S3cr3t!Value"',
+    } as never);
+    watcher.observe({
+      kind: "tool-result",
+      text: "connecting with Password=S3cr3t!Value",
+      isError: false,
+    } as never);
+
+    const result = watcher.result();
+    expect(JSON.stringify(result)).not.toContain("S3cr3t!Value");
+    expect(result.commands[0]).toContain("Deploy.ps1");
+  });
+});

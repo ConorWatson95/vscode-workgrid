@@ -4,6 +4,7 @@ import {
   parseReviewFindings,
   summariseFindings,
 } from "../domain/reviewFindings";
+import { redactSecrets } from "../domain/secretRedaction";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -22,6 +23,9 @@ export function formatStageReport(
   stage: TaskStage,
   pipeline: TaskPipeline | undefined,
 ): string {
+  // Redacted again at the end of this function, not only at capture. Capture-time
+  // masking cannot help a task recorded by an earlier build, and this document is
+  // the thing actually put in front of someone.
   const lines: string[] = [
     `# ${stage.name}`,
     "",
@@ -42,7 +46,7 @@ export function formatStageReport(
 
   if (stage.subtasks.length === 0) {
     lines.push("", "_This stage has no subtasks yet._");
-    return lines.join("\n");
+    return redactSecrets(lines.join("\n"));
   }
 
   for (const subtask of stage.subtasks) {
@@ -74,7 +78,7 @@ export function formatStageReport(
     }
   }
 
-  return lines.join("\n");
+  return redactSecrets(lines.join("\n"));
 }
 
 /**
