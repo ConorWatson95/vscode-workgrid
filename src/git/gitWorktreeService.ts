@@ -26,9 +26,12 @@ export class GitWorktreeService {
     signal?: AbortSignal,
   ): Promise<Result<string, WorktreeError>> {
     // Confirm we are inside a working tree first.
+    // Run against every workspace folder while resolving the active repository,
+    // so "not a repository" is an ordinary answer, not a fault.
     const check = await this.git.run(["rev-parse", "--is-inside-work-tree"], {
       cwd: fsPath,
       signal,
+      failureIsAnswer: true,
     });
     if (!check.ok) return gitErr(check.error);
 
@@ -203,7 +206,9 @@ export class GitWorktreeService {
   ): Promise<Result<boolean, WorktreeError>> {
     const result = await this.git.run(
       ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`],
-      { cwd: repositoryRoot, signal },
+      // Exit 1 is this probe's way of saying "no such branch", so it must not be
+      // logged as a failure.
+      { cwd: repositoryRoot, signal, failureIsAnswer: true },
     );
     // Exit 0 => exists; exit 1 => does not exist (not an error for us).
     if (result.ok) return ok(true);
