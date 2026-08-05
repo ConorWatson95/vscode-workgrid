@@ -15,6 +15,7 @@ import {
   recordHandoff,
   handoffsBefore,
   holdStageForFindings,
+  recordStageVerdict,
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
@@ -34,6 +35,7 @@ import {
   splitPrompt,
   subtaskPrompt,
   parseVerdict,
+  stripVerdict,
 } from "../agents/stagePrompts";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
@@ -549,6 +551,12 @@ export class PipelineRunner {
       this.liveActivities.delete(taskId);
     }
 
+    // Read before the marker is removed, and removed before anything keeps the
+    // reply: it is a protocol line between the harness and the agent, and it was
+    // reaching the report, the handoff and every later stage's prompt verbatim.
+    const verdict = parseVerdict(reply.text);
+    reply = { ...reply, text: stripVerdict(reply.text) };
+
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks
     // a question that reads like a briefing problem, and nothing anywhere says a
@@ -666,13 +674,21 @@ export class PipelineRunner {
     // rather than letting the route deploy over it.
     if (reply.ok && REVIEW_KINDS.has(stage.kind)) {
       const findings = parseReviewFindings(reply.text);
+      // Recorded whichever way it went, so the report can say the review passed it
+      // rather than leaving the reader to infer that from an absence.
+      if (verdict) {
+        const noted = recordStageVerdict(pipeline, stage.id, verdict);
+        if (noted.ok) pipeline = noted.value;
+      }
       // The reviewer's own verdict wins where it gave one. Reading severities out of
       // prose is a fallback for a review that did not state one, not the primary
       // signal: the same inference read a report with one blocker and a long
       // "everything else is fine" section as fourteen blockers, and a route that
       // stops for nothing teaches you to click past the stop.
-      const stated = parseVerdict(reply.text);
-      const blocking = stated ? stated === "block" : hasBlockingFindings(findings);
+      // The verdict captured above, not re-read here: the marker has been stripped
+      // out of the reply by this point, so re-parsing would find nothing and fall
+      // back to the prose inference this exists to override.
+      const blocking = verdict ? verdict === "block" : hasBlockingFindings(findings);
       if (blocking) {
         const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
         if (held.ok) {

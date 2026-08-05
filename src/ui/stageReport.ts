@@ -5,6 +5,7 @@ import {
   summariseFindings,
 } from "../domain/reviewFindings";
 import { redactSecrets } from "../domain/secretRedaction";
+import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -67,6 +68,20 @@ export function formatStageReport(
   ];
   if (stage.model) lines.push(`**Model:** ${stage.model}  `);
   if (stage.addedByRule) lines.push(`**Added by rule:** ${stage.addedByRule}  `);
+  // The verdict is stripped out of the reply before it is stored, so this is the
+  // only place it appears. A held stage whose verdict said nothing on screen was
+  // indistinguishable from a clean one.
+  if (stage.verdict) {
+    lines.push(
+      `**The review's verdict:** ${stage.verdict === "block" ? "block" : "pass"}  `,
+    );
+  }
+
+  // What is being asked of the reader, and what to do about it, above everything
+  // else — a gate that presents only evidence makes the reader derive the question.
+  if (stage.status === "awaiting-approval" && pipeline) {
+    lines.push("", formatApprovalAdvice(approvalAdvice(pipeline, stage)));
+  }
 
   // Above the intent, because someone opening the report of a failed stage is
   // asking one question. The reason was recorded per subtask and rendered halfway

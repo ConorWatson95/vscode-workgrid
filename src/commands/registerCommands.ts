@@ -11,6 +11,7 @@ import {
   repositionRuleStages,
   syncHandoffs,
 } from "../domain/stageRefresh";
+import { approvalAdvice } from "../domain/approvalAdvice";
 import {
   formatFindings,
   parseReviewFindings,
@@ -1090,11 +1091,41 @@ async function advanceRouteCommand(
       await openQuestionsCommand(ctx, task.id);
       return;
     case "awaitingApproval": {
+      // The gate used to say only that a stage was waiting, so a review that blocked
+      // and one that passed cleanly arrived looking identical and deciding meant
+      // reading the whole reply to find out which. It now states what was found and
+      // offers the action it recommends first.
+      const latest = await ctx.repository.get(task.id);
+      const held = latest?.pipeline?.stages.find((s) => s.id === outcome.stageId);
+      if (!latest?.pipeline || !held) {
+        void vscode.window.showInformationMessage(
+          `"${task.name}" is waiting for you at "${outcome.stageName}".`,
+        );
+        return;
+      }
+      const advice = approvalAdvice(latest.pipeline, held);
+      // The tree item is what the stage commands take, so the buttons reach exactly
+      // the same code paths as the rows — including their guards.
+      const row = new StageTreeItem(latest, held);
+
+      // "Send Findings Back…" keeps its ellipsis: the command deliberately asks which
+      // stage even when only one matches, because reaching further back discards
+      // everything after it and that cost is not visible in a stage's name.
+      const buttons =
+        advice.action === "sendBack"
+          ? ["Send Findings Back…", "Approve", "Show What It Did"]
+          : advice.action === "verify"
+            ? ["Show What It Did"]
+            : ["Approve", "Show What It Did"];
+
       const choice = await vscode.window.showInformationMessage(
-        `"${task.name}" is waiting for you at "${outcome.stageName}".`,
-        "Show Details",
+        `"${task.name}" is waiting at "${outcome.stageName}" — ` +
+          `${advice.headline} ${advice.suggestion}`,
+        ...buttons,
       );
-      if (choice === "Show Details") ctx.logger.show?.();
+      if (choice === "Show What It Did") await showStageReportCommand(ctx, row);
+      else if (choice === "Approve") await approveStageCommand(ctx, row);
+      else if (choice === "Send Findings Back…") await sendBackToStageCommand(ctx, row);
       return;
     }
     case "blocked": {

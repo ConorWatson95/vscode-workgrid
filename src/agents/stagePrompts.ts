@@ -79,6 +79,23 @@ export function parseVerdict(reply: string): ReviewVerdict | undefined {
 }
 
 /**
+ * The reply with the verdict line removed.
+ *
+ * The marker is a protocol between the harness and the agent, and it was reaching
+ * the reader untouched: a report ending in a bare "VERDICT: block" reads as
+ * machinery leaking into a document about stored procedures. Stripped once parsed,
+ * so what is persisted, reported and handed to later stages is only the review.
+ */
+export function stripVerdict(reply: string): string {
+  return reply
+    .replace(/^[ \t]*VERDICT:[ \t]*(?:pass|block)\b.*$/gim, "")
+    // A removed line in the middle would otherwise leave a gap wide enough to read
+    // as a section break.
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+/**
  * Shared preamble: who you are, what you are working on, and how to ask.
  *
  * The escape hatch matters more than it looks. A brief is often thin — a bare

@@ -2,6 +2,32 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.42.0
+
+- **An approval gate says what it found and what to do about it.** It previously said
+  only that a stage was waiting, so a review that blocked on a wrong stored procedure
+  and one that passed cleanly arrived looking identical — deciding meant reading the
+  whole reply to work out which. The notification now leads with the finding summary
+  and the recommended action, and offers that action as the first button: **Send
+  Findings Back…** when the stage has somewhere to send them, **Approve** when
+  nothing is blocking. A verification gate with unticked items offers neither, since
+  approving over outstanding evidence is what the gate exists to prevent. The same
+  block appears at the top of Show What This Did.
+
+  Where a stage has no `sendBackTo` configured, it says so and names the key, rather
+  than recommending a button that is not there.
+
+- **The verdict marker no longer leaks into what you read.** `VERDICT: block` is a
+  protocol line between the harness and the agent, and nothing stripped it — so it
+  reached the report, the handoff and every later stage's prompt verbatim. It is now
+  removed once parsed and recorded on the stage instead, which also fixes the case
+  behind it: a review that stated `block` but whose findings did not parse left a
+  stage held for approval with nothing on screen explaining why.
+
+  An inferred conclusion is labelled as inferred. A stated verdict and one read out
+  of prose warrant different confidence — the inference has now been wrong in both
+  directions.
+
 ## 0.41.1
 
 - **A finding stated in its own heading is no longer lost.** The most natural way to

@@ -269,6 +269,28 @@ export function handoffsBefore(
  * route proceeding as though it had not, and a human is the right decider: some
  * findings are worth fixing before deploying, some are not.
  */
+/**
+ * Records what a review concluded, separately from what the route did about it.
+ *
+ * Kept because the verdict line is stripped out of the reply before anyone reads
+ * it, and without this a review that stated `block` but whose findings did not
+ * parse would leave a stage held for approval with nothing on screen explaining
+ * why — which is exactly how a blocking review came to look like a clean one.
+ */
+export function recordStageVerdict(
+  pipeline: TaskPipeline,
+  stageId: string,
+  verdict: "pass" | "block",
+): Result<TaskPipeline, PipelineError> {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) {
+    return err({ kind: "unknownStage", message: `No stage ${stageId}` });
+  }
+  const stages = [...pipeline.stages];
+  stages[index] = { ...stages[index], verdict };
+  return ok({ ...pipeline, stages } as TaskPipeline);
+}
+
 export function holdStageForFindings(
   pipeline: TaskPipeline,
   stageId: string,

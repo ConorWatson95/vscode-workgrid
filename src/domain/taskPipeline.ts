@@ -70,6 +70,7 @@ export interface SubtaskActivity {
   pathsRead?: string[];
   /** Command output, capped. */
   output?: string;
+
   /**
    * Error output belonging to no tool call — the CLI's own complaints.
    *
@@ -173,6 +174,16 @@ export interface TaskStage {
   sendBackTo?: string[];
   /** Carry this stage's conclusion to later stages; see the route definition. */
   handoff?: boolean;
+  /**
+   * What a review stage concluded, in its own words: `block` means it said the work
+   * may not proceed.
+   *
+   * Stored because the verdict line is stripped out of the reply before anyone
+   * reads it — a report ending in a bare marker is machinery leaking into a
+   * document about stored procedures. Absent means the review stated nothing, which
+   * is not the same as `pass`: the route falls back to reading the findings.
+   */
+  verdict?: "pass" | "block";
   /**
    * Empty on a splittable stage means "not yet planned". Non-splittable stages
    * are created with exactly one synthesized subtask, so every runnable stage

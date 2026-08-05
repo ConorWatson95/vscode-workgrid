@@ -8,6 +8,7 @@ import {
   splitPrompt,
   subtaskPrompt,
   parseVerdict,
+  stripVerdict,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
 
@@ -452,5 +453,34 @@ describe("parseVerdict", () => {
     // "Did not say" is not "said pass" — the caller falls back to the findings.
     expect(parseVerdict("Review complete. Everything is fine.")).toBeUndefined();
     expect(parseVerdict("VERDICT: maybe")).toBeUndefined();
+  });
+});
+
+describe("stripVerdict", () => {
+  it("removes the marker line, which is protocol and not prose", () => {
+    // It was reaching the report, the handoff and every later stage's prompt
+    // verbatim: a document about stored procedures ending in a bare "VERDICT: block".
+    const reply = "The change targets the wrong proc.\n\nVERDICT: block";
+    expect(stripVerdict(reply)).toBe("The change targets the wrong proc.");
+  });
+
+  it("leaves a reply that has no verdict untouched", () => {
+    expect(stripVerdict("Nothing to report.")).toBe("Nothing to report.");
+  });
+
+  it("closes the gap when the marker was not the last line", () => {
+    const reply = ["Findings above.", "", "VERDICT: pass", "", "Notes below."].join("\n");
+    expect(stripVerdict(reply)).toBe("Findings above.\n\nNotes below.");
+  });
+
+  it("does not touch a sentence that merely mentions the marker", () => {
+    const reply = "I was asked to end with VERDICT: pass or block as a final line.";
+    expect(stripVerdict(reply)).toBe(reply);
+  });
+
+  it("still parses the verdict from the text it strips", () => {
+    const reply = "Wrong proc.\n\nVERDICT: block";
+    expect(parseVerdict(reply)).toBe("block");
+    expect(parseVerdict(stripVerdict(reply))).toBeUndefined();
   });
 });
