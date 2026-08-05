@@ -9,6 +9,7 @@ import {
   sendBackTargets,
   sendBackToStage,
   repositionRuleStages,
+  syncHandoffs,
 } from "../domain/stageRefresh";
 import {
   formatFindings,
@@ -988,6 +989,34 @@ async function advanceRouteCommand(
       await ctx.repository.save(advancing);
       ctx.logger.info(
         `Harness [${task.name}] reloaded ${refreshed.changed.join(", ")} from harness.json.`,
+      );
+    }
+  }
+
+  // Brings handoff flags in line with config and backfills the conclusions of
+  // stages that already ran. Without this the answer to "will my task benefit"
+  // would be "recreate it", which throws away everything already approved.
+  if (ctx.stageDefinitions && advancing.pipeline) {
+    const synced = syncHandoffs(
+      advancing.pipeline,
+      ctx.stageDefinitions(),
+      new Date().toISOString(),
+    );
+    if (synced.enabled.length > 0 || synced.backfilled.length > 0) {
+      advancing = {
+        ...advancing,
+        pipeline: synced.pipeline,
+        updatedAt: new Date().toISOString(),
+      };
+      await ctx.repository.save(advancing);
+      ctx.logger.info(
+        `Harness [${advancing.name}] handoffs: ` +
+          (synced.enabled.length > 0 ? `enabled on ${synced.enabled.join(", ")}` : "") +
+          (synced.enabled.length > 0 && synced.backfilled.length > 0 ? "; " : "") +
+          (synced.backfilled.length > 0
+            ? `carried forward what ${synced.backfilled.join(", ")} already concluded`
+            : "") +
+          ".",
       );
     }
   }

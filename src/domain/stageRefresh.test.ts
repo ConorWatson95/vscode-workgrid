@@ -5,6 +5,7 @@ import {
   sendBackTargets,
   sendBackToStage,
   repositionRuleStages,
+  syncHandoffs,
 } from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 import { RouteDefinition } from "./taskRoute";
@@ -517,5 +518,76 @@ describe("repositionRuleStages", () => {
     const p = spoiled();
     repositionRuleStages(p, barrier);
     expect(p.stages.map((s) => s.id)[1]).toBe("deploy");
+  });
+});
+
+describe("syncHandoffs", () => {
+  const existing = (): TaskPipeline =>
+    pipeline([
+      stage({
+        id: "plan",
+        name: "Plan",
+        kind: "planning",
+        status: "passed",
+        subtasks: [
+          { id: "plan-1", title: "Plan", prompt: "p", status: "done", reply: "Put it in apps/." },
+        ],
+      }),
+      stage({ id: "build", name: "Build", kind: "implementation", status: "pending" }),
+    ]);
+
+  const source = (handoff: boolean) => ({
+    routes: [
+      {
+        id: "sql-change",
+        label: "SQL",
+        description: "",
+        stages: [
+          { id: "plan", label: "Plan", kind: "planning" as const, intent: "p", splittable: false, gate: "auto" as const, handoff },
+          { id: "build", label: "Build", kind: "implementation" as const, intent: "b", splittable: false, gate: "auto" as const },
+        ],
+      },
+    ],
+    rules: [],
+  });
+
+  it("enables the flag on a task created before the field existed", () => {
+    const result = syncHandoffs(existing(), source(true), "t1");
+    expect(result.enabled).toEqual(["plan"]);
+    expect(result.pipeline.stages[0].handoff).toBe(true);
+  });
+
+  it("backfills what an already-passed stage concluded", () => {
+    // Otherwise the answer would be "recreate your task", discarding everything
+    // already approved — and the reply is right there in the state file.
+    const result = syncHandoffs(existing(), source(true), "t1");
+    expect(result.backfilled).toEqual(["plan"]);
+    expect(result.pipeline.handoffs).toEqual([
+      { stageId: "plan", stageName: "Plan", text: "Put it in apps/.", at: "t1" },
+    ]);
+  });
+
+  it("does not backfill twice", () => {
+    const once = syncHandoffs(existing(), source(true), "t1");
+    const twice = syncHandoffs(once.pipeline, source(true), "t2");
+    expect(twice.backfilled).toEqual([]);
+    expect(twice.pipeline.handoffs).toHaveLength(1);
+  });
+
+  it("turns the flag off again when config says so", () => {
+    const on = syncHandoffs(existing(), source(true), "t1");
+    const off = syncHandoffs(on.pipeline, source(false), "t2");
+    expect(off.pipeline.stages[0].handoff).toBeUndefined();
+  });
+
+  it("does not backfill a stage that has not passed", () => {
+    const p = existing();
+    p.stages[0].status = "pending";
+    expect(syncHandoffs(p, source(true), "t1").backfilled).toEqual([]);
+  });
+
+  it("returns the same pipeline when nothing differs", () => {
+    const p = existing();
+    expect(syncHandoffs(p, source(false), "t1").pipeline).toBe(p);
   });
 });

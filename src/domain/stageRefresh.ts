@@ -1,6 +1,6 @@
 import { ReviewRule } from "./reviewRules";
 import { RouteDefinition, sendBackEntryKind, StageKind } from "./taskRoute";
-import { TaskPipeline, TaskStage } from "./taskPipeline";
+import { TaskPipeline, TaskStage, truncateHandoff } from "./taskPipeline";
 
 /**
  * Reloads stage definitions from current project config, and re-opens a stage
@@ -309,7 +309,7 @@ function findDefinition(
   source: StageDefinitionSource,
   routeId: string,
   stage: Pick<TaskStage, "id" | "addedByRule">,
-): { intent?: string; model?: string } | undefined {
+): { intent?: string; model?: string; handoff?: boolean } | undefined {
   if (stage.addedByRule) {
     return source.rules.find((rule) => rule.stage.id === stage.id)?.stage;
   }
@@ -322,4 +322,79 @@ function normalize(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Brings a pipeline's handoff flags in line with config, and backfills the
+ * conclusions of stages that have already run.
+ *
+ * Needed because `handoff` is snapshotted onto a stage at creation, like every
+ * other stage field — so a task created before the field existed would never
+ * carry anything forward, and the answer would be "recreate your task", which
+ * throws away everything already approved.
+ *
+ * Two halves, and the second is the one that matters. Setting the flag is safe on
+ * a stage of any status: unlike `intent`, it is not a record of what the stage ran
+ * with, it is a switch deciding whether its conclusion travels. And a stage that
+ * has already passed still has its reply persisted, so its conclusion can be
+ * recorded now rather than lost for want of a flag that did not exist when it ran.
+ *
+ * `splittable` is still excluded from all of this, for the reason it always was:
+ * it decides how many subtasks a stage has, so changing it reshapes a pipeline
+ * mid-flight.
+ */
+export function syncHandoffs(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+  at: string,
+): { pipeline: TaskPipeline; enabled: string[]; backfilled: string[] } {
+  const enabled: string[] = [];
+  const backfilled: string[] = [];
+  // Tracked separately from `enabled`, because turning a flag *off* is also a
+  // change: keying the early return on `enabled` alone silently discarded it and
+  // the pipeline came back with the flag still set.
+  const disabled: string[] = [];
+
+  const stages = pipeline.stages.map((stage) => {
+    const definition = findDefinition(source, pipeline.routeId, stage);
+    if (!definition) return stage;
+    const desired = definition.handoff === true;
+    if (desired === (stage.handoff === true)) return stage;
+    if (desired) {
+      enabled.push(stage.id);
+      return { ...stage, handoff: true };
+    }
+    disabled.push(stage.id);
+    return { ...stage, handoff: undefined };
+  });
+
+  const handoffs = [...(pipeline.handoffs ?? [])];
+  for (const stage of stages) {
+    if (!stage.handoff || stage.status !== "passed") continue;
+    if (handoffs.some((handoff) => handoff.stageId === stage.id)) continue;
+    // The last subtask's reply is the stage's conclusion: a split stage's earlier
+    // subtasks are steps towards it, and the final one is where it lands.
+    const reply = [...stage.subtasks].reverse().find((subtask) => subtask.reply?.trim())?.reply;
+    if (!reply) continue;
+    handoffs.push({
+      stageId: stage.id,
+      stageName: stage.name,
+      text: truncateHandoff(reply),
+      at,
+    });
+    backfilled.push(stage.id);
+  }
+
+  if (enabled.length === 0 && backfilled.length === 0 && disabled.length === 0) {
+    return { pipeline, enabled, backfilled };
+  }
+  return {
+    pipeline: {
+      ...pipeline,
+      stages,
+      ...(handoffs.length > 0 ? { handoffs } : {}),
+    },
+    enabled,
+    backfilled,
+  };
 }
