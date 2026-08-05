@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ChangedPathsSource,
   ReviewPlanService,
+  RuleAdditionRequest,
   formatReviewPlan,
 } from "./reviewPlanService";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
@@ -64,11 +65,15 @@ function task(overrides: Partial<TaskWorkspace> = {}): TaskWorkspace {
   };
 }
 
-function service(source: ChangedPathsSource, rules = projectRules()) {
+function service(
+  source: ChangedPathsSource,
+  rules = projectRules(),
+  confirm?: (request: RuleAdditionRequest) => Promise<boolean>,
+) {
   const repo = new InMemoryTaskRepository();
   return {
     repo,
-    plans: new ReviewPlanService(source, repo, logger, () => rules),
+    plans: new ReviewPlanService(source, repo, logger, () => rules, confirm),
   };
 }
 
@@ -292,5 +297,92 @@ describe("formatReviewPlan", () => {
     const result = await plans.plan(task());
     if (!result.ok) return;
     expect(formatReviewPlan(task(), result.value)).toContain("No rules matched");
+  });
+});
+
+describe("confirming several rule-added reviews", () => {
+  /** Enough matching paths to trigger three or more of the .NET template's rules. */
+  const MANY = {
+    getChangedPaths: async () =>
+      ok([
+        "src/Api/Mapping/DealerProfile.cs",
+        "src/Api/Controllers/ExportController.cs",
+        "db/migrations/003-add-column.sql",
+        "src/Api/Resources/Text.resx",
+        "tools/ci/build.ps1",
+      ]),
+  } as ChangedPathsSource;
+
+  it("asks before adding more than a couple, with the evidence", async () => {
+    let request: RuleAdditionRequest | undefined;
+    const { plans, repo } = service(MANY, projectRules(), async (r) => {
+      request = r;
+      return true;
+    });
+    const subject = harnessed();
+    await repo.save(subject);
+
+    const result = await plans.apply(subject);
+    expect(result.ok).toBe(true);
+    expect(request).toBeDefined();
+    // The number that explains a surprising set of reviews.
+    expect(request?.changedPathCount).toBe(5);
+    expect(request!.added.length).toBeGreaterThan(2);
+  });
+
+  it("adds nothing when declined, leaving the pipeline as it was", async () => {
+    const { plans, repo } = service(MANY, projectRules(), async () => false);
+    const subject = harnessed();
+    await repo.save(subject);
+    const before = subject.pipeline!.stages.length;
+
+    const result = await plans.apply(subject);
+    expect(result.ok && result.value.added).toEqual([]);
+    expect(result.ok && result.value.declined?.length).toBeGreaterThan(0);
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages).toHaveLength(before);
+  });
+
+  it("asks once per set, not once per advance", async () => {
+    // The driver loops; without this it would ask on every iteration.
+    let asked = 0;
+    const { plans, repo } = service(MANY, projectRules(), async () => {
+      asked += 1;
+      return false;
+    });
+    const subject = harnessed();
+    await repo.save(subject);
+
+    await plans.apply(subject);
+    await plans.apply(subject);
+    await plans.apply(subject);
+    expect(asked).toBe(1);
+  });
+
+  it("applies them without asking when there is nobody to ask", async () => {
+    // Headless: no confirmation hook, so behaviour is exactly as before.
+    const { plans, repo } = service(MANY);
+    const subject = harnessed();
+    await repo.save(subject);
+
+    const result = await plans.apply(subject);
+    expect(result.ok && result.value.added.length).toBeGreaterThan(2);
+  });
+
+  it("does not ask for one or two, which is the design working", async () => {
+    let asked = 0;
+    const oneFile = {
+      getChangedPaths: async () => ok(["src/Api/Mapping/DealerProfile.cs"]),
+    } as ChangedPathsSource;
+    const { plans, repo } = service(oneFile, projectRules(), async () => {
+      asked += 1;
+      return true;
+    });
+    const subject = harnessed();
+    await repo.save(subject);
+
+    const result = await plans.apply(subject);
+    expect(asked).toBe(0);
+    expect(result.ok && result.value.added.length).toBeGreaterThan(0);
   });
 });

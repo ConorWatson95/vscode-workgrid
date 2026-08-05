@@ -5,6 +5,7 @@ import {
   ImplausibleChangeSet,
   implausibleChangeSet,
 } from "../domain/changedPathSanity";
+import { needsRuleConfirmation } from "../domain/ruleConfirmation";
 import { RuleMatch, ruleStageDefinition } from "../domain/reviewRules";
 import { LoadedReviewRules, loadReviewRules } from "./reviewRulesService";
 import { TaskRepository } from "../persistence/taskRepository";
@@ -30,6 +31,20 @@ export interface ChangedPathsSource {
     baseBranch: string,
     signal?: AbortSignal,
   ): Promise<Result<string[], GitError>>;
+}
+
+/** What the user is being asked to approve, with the evidence for it. */
+export interface RuleAdditionRequest {
+  task: TaskWorkspace;
+  added: TaskStage[];
+  matches: RuleMatch[];
+  /** Named because it is the number that explains a surprising set of reviews. */
+  changedPathCount: number;
+}
+
+/** Stable across iterations of the driver's loop, distinct across different sets. */
+function additionKey(taskId: string, added: readonly TaskStage[]): string {
+  return `${taskId}:${added.map((s) => s.id).sort().join(",")}`;
 }
 
 /** Injected so tests can supply rules without touching the filesystem. */
@@ -68,7 +83,22 @@ export class ReviewPlanService {
     private readonly logger: Logger,
     private readonly loadRules: ReviewRulesLoader = (root) =>
       loadReviewRules(root),
+    /**
+     * Asks whether to append several rule-added reviews. Injected, so this service
+     * stays free of UI — and absent headlessly, where there is nobody to ask and the
+     * reviews are applied as before.
+     */
+    private readonly confirm?: (request: RuleAdditionRequest) => Promise<boolean>,
   ) {}
+
+  /**
+   * Sets already declined this session, keyed by task and stage ids.
+   *
+   * In memory rather than persisted, deliberately. A permanently suppressed review is
+   * exactly what the harness exists to prevent, and the answer is about a particular
+   * diff — so it lapses when the window does, and is asked again.
+   */
+  private readonly declined = new Set<string>();
 
   /**
    * Computes the reviews a task owes. Reports rather than mutates, so it is safe
@@ -128,6 +158,8 @@ export class ReviewPlanService {
         plan: ReviewPlan;
         /** Set when the path set was too large to act on; nothing was added. */
         implausible?: ImplausibleChangeSet;
+        /** Reviews the user declined this session; nothing was added. */
+        declined?: TaskStage[];
       },
       GitError
     >
@@ -163,6 +195,32 @@ export class ReviewPlanService {
     const result = applyRules(pipeline, paths, loaded.rules);
     if (result.added.length === 0) {
       return ok({ added: [], plan: planned.value });
+    }
+
+    // Asked before saving, so declining leaves the pipeline exactly as it was rather
+    // than adding stages and then removing them.
+    if (this.confirm && needsRuleConfirmation(result.added)) {
+      const key = additionKey(task.id, result.added);
+      // Asked once per distinct set per session. The driver loops, so without this it
+      // would ask on every iteration; and the answer is about a specific set of
+      // reviews, so a different set is a different question.
+      if (!this.declined.has(key)) {
+        const accepted = await this.confirm({
+          task,
+          added: result.added,
+          matches: result.matches,
+          changedPathCount: paths.length,
+        });
+        if (!accepted) this.declined.add(key);
+      }
+      if (this.declined.has(key)) {
+        this.logger.warn(
+          `Task "${task.name}": declined ${result.added.length} rule-added review(s): ` +
+            `${result.added.map((s) => s.name).join(", ")}. They will be offered again ` +
+            `next session — a declined review is suppressed for now, never permanently.`,
+        );
+        return ok({ added: [], plan: planned.value, declined: result.added });
+      }
     }
 
     // Which paths, not just which rules. A review appended for a reason nobody can

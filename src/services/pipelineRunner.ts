@@ -387,6 +387,12 @@ export class PipelineRunner {
             `is a branch-lineage diff, not this task's work.`,
         );
       }
+      if (applied?.ok && applied.value.declined) {
+        steps.push(
+          `Declined ${applied.value.declined.length} rule-added review(s): ` +
+            `${applied.value.declined.map((s) => s.name).join(", ")}.`,
+        );
+      }
       if (applied?.ok && applied.value.added.length > 0) {
         steps.push(
           `Rules added ${applied.value.added.map((s) => s.name).join(", ")}.`,

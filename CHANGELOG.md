@@ -2,6 +2,23 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.45.0
+
+- **Rules ask before appending more than a couple of reviews.** Rule-added stages are
+  the only ones nobody chose: you pick a route, and the engine then appends agent
+  sessions to it off a derived path set. Above two in one go it now asks, listing each
+  review with the rule's reason, how many paths matched and an example — and the
+  changed-path count, since that is the number that explains a surprising set. Four
+  unrelated reviews ran on a one-line change with nobody having agreed to any of them.
+
+  One or two does not ask: a SQL change obliging a SQL review is the design working,
+  and interrupting for it would train the reflex of clicking through, which is what
+  makes the fifth one dangerous. Escape counts as declining, because the expensive
+  reading of a dismissed dialog must not be "go ahead". A declined set is suppressed
+  for the session and offered again next time — never persisted, since a permanently
+  suppressed review is what the harness exists to prevent. Headless runs, having
+  nobody to ask, behave exactly as before.
+
 ## 0.44.0
 
 - **The rules engine states its inputs, not just its verdict.** It reported "added 5

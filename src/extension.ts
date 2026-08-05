@@ -29,6 +29,7 @@ import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
+import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
@@ -356,6 +357,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       loadReviewRules(root, {
         configuredPath: configuration.harnessConfigPath(repositoryUri),
       }),
+    // Rule-added stages are the only ones the user never chose: they pick a route,
+    // and the engine then appends agent sessions to it off a derived path set. Fine
+    // for one obvious review, and how four unrelated ones came to run on a one-line
+    // change. Modal, because the alternative is the route starting them while the
+    // notification is still on screen.
+    async (request) => {
+      const detail =
+        `${describeRuleAdditions(request.added, request.matches)}\n\n` +
+        `Matched against ${request.changedPathCount} changed path(s). If that number ` +
+        `looks wrong for this task, so are these reviews.`;
+      const choice = await vscode.window.showWarningMessage(
+        `"${request.task.name}": review rules want to add ${request.added.length} ` +
+          `stages, each a separate agent session.`,
+        { modal: true, detail },
+        "Add Them",
+        "Not Now",
+      );
+      // Dismissing is not consent. A modal returns undefined on Escape, and the
+      // expensive reading of that is "go ahead".
+      return choice === "Add Them";
+    },
   );
 
   // A held call is live state the tree cannot derive, so it has to be told.
