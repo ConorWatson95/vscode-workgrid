@@ -2,6 +2,138 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.40.1
+
+- **An existing task picks up stage handoffs without being recreated.** `handoff`
+  is snapshotted onto a stage at creation, so a task created before the field
+  existed would never carry anything forward. The next advance now brings the flags
+  in line with config and backfills the conclusion of any stage that has already
+  passed, from the reply already in the state file.
+
+## 0.40.0
+
+- **A review states its verdict rather than having one inferred.** Review stages end
+  with `VERDICT: pass` or `VERDICT: block`, and that is what holds the route.
+  Parsed severities remain what the row and report display, and are the fallback for
+  a review that stated nothing. A route-stopping decision should not rest on a prose
+  heuristic: the previous inference read a report containing one blocker and a long
+  "everything else is fine" section as fourteen blockers, because only a *severity*
+  heading cleared the section context. Any heading now clears it.
+
+## 0.39.0
+
+- **A review that finds something stops the route.** A stage outcome was purely
+  self-reported — "the session ended without error" — so a review reporting critical
+  findings passed exactly like a clean one and the route carried on to deploy. A
+  code or domain review with a blocking finding is now held for approval. Held
+  rather than failed: the stage did its job, it found problems.
+
+## 0.38.0
+
+- **Stages carry their conclusions forward.** A stage marked `handoff` in the route
+  hands what it concluded to every later stage, presented as established and not to
+  be re-derived. Capped, and opt-in per stage, because a fresh session per subtask is
+  what makes a review independent — re-deriving what the last stage established is
+  not part of that bargain.
+- **The prompt prefix is cacheable.** The preamble led with the task name, so every
+  stage prompt differed from the first character and nothing was reusable across the
+  dozen sessions a route spawns. Invariant text now leads.
+- **Each session logs fresh versus cached input tokens and cost**, so a route's cost
+  is attributable rather than a single total.
+
+## 0.37.1
+
+- **Credential masking judges a variable name by its segments.** `$env:QSQL_PW` was
+  missed because the rule required the name to *begin* with a secret word. Segments
+  are compared whole, so `PW` matches in `QSQL_PW` while `PATH` and `COMPASS` do not.
+
+## 0.37.0
+
+- **A stage is told its earlier output may already exist.** A stage is the unit of
+  re-run, so a cold session reading "write the migration and a paired rollback"
+  rewrote four correct files when the actual defect was a missing folder.
+
+## 0.36.0
+
+- **The stage order repairs itself on an existing task.** Reviews spliced after a
+  deployment by an earlier build are moved back in front of it on the next advance.
+  Only stages that have not run move.
+
+## 0.35.0
+
+- **Reviews run before anything is deployed.** Rule stages were spliced before the
+  first human gate, which in a route that deploys to dev before signing off put a
+  SQL review *after* the deploy. The barrier is now the first stage that ships work
+  or hands it to a person.
+- **Tasks are grouped by what they need** — Needs you, Working, Parked, Done, No
+  route — because a task can sit at a verification gate for days.
+- **Recorded paths and output are no longer truncated for display.** Tool details
+  were capped at 120 characters and output at 500, both flattened to one line, so a
+  report inherited a chat row's truncation. Full-fidelity copies are kept, and an
+  over-long block keeps its tail as well as its head.
+
+## 0.34.0
+
+- **Credentials are masked in everything the harness records.** Commands are kept
+  verbatim and both they and their output are written to the task state file, so a
+  route building a connection string put a live password on disk and in a report.
+  Masked at capture and again at render, including single-letter flags like
+  `sqlcmd -P` on lines naming a tool known to take one.
+
+## 0.33.0
+
+- **`planning` is a stage kind.** A planning stage matched `kind:implementation`, so
+  "back to whoever wrote this" silently included "plan the whole thing again".
+
+## 0.32.0
+
+- **`deployment` is a stage kind.** A deployment declared as implementation was the
+  nearest match for a review sending work back, so the obvious way back from a
+  failed review was to run the deployment again.
+
+## 0.31.0
+
+- **A review can send its findings back to an earlier stage.** Previously the only
+  route back discarded the reviewing stage's reply — the act of sending work back
+  destroyed the reason for it. Findings travel as guidance, which survives. Opt-in
+  per stage via `sendBackTo`, naming stage ids or `kind:<StageKind>`; only earlier
+  stages resolve, so no entry can create a loop.
+- **Review findings are surfaced in their own right**, with severities read out of
+  the reply: a stage row now reads `passed · 1 critical, 2 important`.
+
+## 0.30.1
+
+- **The routeless task is named for what it gives you** — "Chat task" rather than
+  "No route", under its own heading, with the routes above it labelled as the
+  project's or the built-ins.
+
+## 0.30.0
+
+- **`stageMcpServers` applies to task chat sessions too.** A chat resolved the
+  project config whole and passed no strict flag, so it started every server plus
+  the worktree's own and every user-scope one.
+
+## 0.29.1
+
+- **A dead extension host's held calls and unanswered questions are discarded.**
+  Both inboxes are cleared when a run ends, but a host killed mid-stage never gets
+  there — so the next run swept up a dead CLI's question and attached it to whichever
+  subtask was running by then.
+
+## 0.29.0
+
+- **"Show what it did" is read-only, rendered, and live.** It was an editable
+  untitled document holding a snapshot, so closing it asked to save text nobody
+  wrote and it never updated. A running stage's work now appears as it happens.
+- **The diff is a file list with per-file comparison.** The before side reads at the
+  branch point, and a rename reads at its old path.
+
+## 0.28.0
+
+- **A checklist is no longer invisible from both ends.** The stage holding the items
+  was a green row saying nothing about them, and the gate they block raised none of
+  its own so showed no count. Clicking an item now ticks it.
+
 ## 0.24.0
 
 - **A stage now shows when it is waiting rather than working.** Any `active`
