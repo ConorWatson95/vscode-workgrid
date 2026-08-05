@@ -248,7 +248,12 @@ export class ChecklistTreeItem extends vscode.TreeItem {
           : "**Not yet verified.** Exercise this in the running application, then " +
             "click the row to tick it. The sign-off stage cannot pass while any " +
             "item is outstanding.",
-        item.note ? `\nNote: ${item.note}` : "",
+        item.note
+          ? `\nNote: ${item.note}`
+          : // Named because the tick no longer asks: an observation is worth
+            // recording on the odd item that behaved strangely, and a button that
+            // only appears on hover is otherwise never found.
+            "\nUse the comment button to record what you saw.",
       ]
         .filter(Boolean)
         .join("\n"),

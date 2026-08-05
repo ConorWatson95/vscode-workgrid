@@ -145,6 +145,12 @@
         "icon": "$(check)"
       },
       {
+        "command": "taskWorkspaces.noteChecklistItem",
+        "title": "Add Verification Note",
+        "category": "Task Workspaces",
+        "icon": "$(comment)"
+      },
+      {
         "command": "taskWorkspaces.copyPath",
         "title": "Copy Path",
         "category": "Task Workspaces"
@@ -412,9 +418,14 @@
           "group": "inline"
         },
         {
+          "command": "taskWorkspaces.noteChecklistItem",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /^checklist-/",
+          "group": "inline@1"
+        },
+        {
           "command": "taskWorkspaces.toggleChecklistItem",
           "when": "view == taskWorkspaces.tree && viewItem =~ /^checklist-/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "taskWorkspaces.copyPath",

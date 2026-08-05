@@ -130,6 +130,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
     ),
+    register("taskWorkspaces.noteChecklistItem", (arg) =>
+      noteChecklistItemCommand(ctx, arg),
+    ),
   ];
 }
 
@@ -823,6 +826,19 @@ async function sendBackToStageCommand(
       `(${summary}); re-opened ${preview.reopened.join(", ")}.\n${preview.note}`,
   );
 
+  // Carries straight on, on the same setting as approving. Sending findings back
+  // is if anything more deliberate than an approval — a quick-pick, an optional
+  // note and a modal confirmation — and its only purpose is to get the earlier
+  // stage re-run. Stopping afterwards to ask "shall I continue?" left the task
+  // idle behind one more button press, having just been told exactly what to do.
+  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+    ctx.logger.info(
+      `Harness [${task.name}] advancing automatically after sending findings back.`,
+    );
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+    return;
+  }
+
   const next = await vscode.window.showInformationMessage(
     `Sent back to "${target.name}" with ${summary}.`,
     "Advance Route",
@@ -904,7 +920,15 @@ async function approveStageCommand(
   }
 }
 
-/** Ticks or un-ticks one verification item, optionally recording what was seen. */
+/**
+ * Ticks or un-ticks one verification item.
+ *
+ * Just the tick. It used to ask what was observed on every check, which put an
+ * input box between the tester and the next item on a list that is routinely a
+ * dozen long — and the answer was almost always Enter, so the prompt cost more
+ * than the notes it collected were worth. Recording an observation is now its own
+ * button, for the items where there is actually something to say.
+ */
 async function toggleChecklistItemCommand(
   ctx: CommandContext,
   arg: unknown,
@@ -914,20 +938,8 @@ async function toggleChecklistItemCommand(
   if (!task?.pipeline) return;
 
   const checking = !arg.item.checked;
-  let note: string | undefined;
-  if (checking) {
-    // Optional, but the observation is the evidence — worth capturing while the
-    // tester still remembers it.
-    note = await vscode.window.showInputBox({
-      title: arg.item.text,
-      prompt: "What did you observe? (optional)",
-      placeHolder: "e.g. Verified on staging — dealer id retained",
-    });
-  }
-
   const result = setChecklistItem(task.pipeline, arg.item.id, {
     checked: checking,
-    note,
     at: new Date().toISOString(),
   });
   if (!result.ok) {
@@ -948,6 +960,58 @@ async function toggleChecklistItemCommand(
       "All verification items are checked — the human gate can now be approved.",
     );
   }
+}
+
+/**
+ * Records what was observed while verifying one item, without changing whether it
+ * is ticked.
+ *
+ * Separate from the tick because the two happen at different rates: everything
+ * gets ticked, and only the occasional item has something worth writing down —
+ * usually the one that behaved oddly but not wrongly. Asking on every tick made
+ * the common case slower to buy the rare one, so it is a button now.
+ *
+ * Leaving the box empty clears an existing note, which is the only way to correct
+ * one that turned out to be wrong.
+ */
+async function noteChecklistItemCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof ChecklistTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  const note = await vscode.window.showInputBox({
+    title: arg.item.text,
+    prompt: "What did you observe? This is kept with the item as evidence.",
+    placeHolder: "e.g. Verified on staging — dealer id retained",
+    // Pre-filled so editing an existing note does not mean retyping it, and so it
+    // is obvious the box is not asking for a second, additional note.
+    value: arg.item.note ?? "",
+    ignoreFocusOut: true,
+  });
+  // Escape means "leave it as it was"; an empty box means "no note".
+  if (note === undefined) return;
+
+  const result = setChecklistItem(task.pipeline, arg.item.id, {
+    // Unchanged: this is not a way to tick something, and quietly ticking an item
+    // because its note was edited would put evidence against work nobody verified.
+    checked: arg.item.checked,
+    note,
+    at: arg.item.checkedAt ?? new Date().toISOString(),
+  });
+  if (!result.ok) {
+    void vscode.window.showErrorMessage(result.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: result.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
 }
 
 /**
