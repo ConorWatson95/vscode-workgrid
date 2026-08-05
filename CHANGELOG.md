@@ -2,6 +2,18 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.43.1
+
+- **Review rules are not evaluated while the worktree is on another branch.** The
+  changed-file set is computed against the task's base branch, so once a promotion
+  stage moved the worktree the diff was between two whole lineages rather than the
+  task's work: 9,569 changed paths instead of a handful, on a real task that had
+  touched one stored procedure. Every rule in the project's file matched, and an ETL
+  review, a resource-string culture review, a tenant-config review and a tooling
+  Pester run were all queued onto a small SQL change. The rules engine now sits out
+  while the branch is wrong and says so, rather than acting on a diff that describes
+  something else.
+
 ## 0.43.0
 
 - **A task's branch is now tracked, so moving the worktree breaks rather than

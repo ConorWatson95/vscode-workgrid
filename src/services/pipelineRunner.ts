@@ -212,12 +212,11 @@ export class PipelineRunner {
    * Undefined when no branch source is injected, so the runner's tests need no git
    * and a headless run without one behaves exactly as before.
    */
-  private async checkBranch(
+  private async branchState(
     task: TaskWorkspace,
-    stage: TaskStage,
   ): Promise<BranchMismatch | undefined> {
     const source = this.currentBranch;
-    if (!source || stage.mayChangeBranch) return undefined;
+    if (!source) return undefined;
     const actual = await source(task.worktreePath);
     // A git failure is not a mismatch: refusing to run because a call returned
     // nothing would strand the task for a reason the message could not explain.
@@ -239,6 +238,12 @@ export class PipelineRunner {
 
   /** In-flight routes, so stopping a task's agent can stop its route too. */
   private readonly running = new Map<string, AbortController>();
+
+  /**
+   * Tasks already told their worktree has moved, so the driver's loop says it once
+   * rather than on each of its iterations.
+   */
+  private readonly warnedBranch = new Set<string>();
 
   /**
    * What the currently running subtask has done so far, by task id.
@@ -344,11 +349,36 @@ export class PipelineRunner {
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal?.aborted) return { outcome: { kind: "cancelled" }, steps };
 
+      // One git call per iteration, shared by the two things that depend on it.
+      const moved = await this.branchState(current);
+
       // Re-evaluate review rules each time round: the diff grows as stages run,
       // and applyRules is idempotent, so a newly-touched .sql file adds its
       // review before the human gate even if the route began without one.
-      const applied = await this.reviewPlans.apply(current, signal);
-      if (applied.ok && applied.value.added.length > 0) {
+      //
+      // Skipped entirely while the worktree is on another branch, because the
+      // changed-path set is then a diff of two lineages rather than of this task's
+      // work. Measured on a real task: 9,569 changed paths instead of a handful,
+      // which matched every rule in the project's file — a tooling review, a
+      // resource-culture review and an ETL review all queued onto a task that had
+      // touched one stored procedure.
+      if (moved) {
+        if (!this.warnedBranch.has(current.id)) {
+          this.warnedBranch.add(current.id);
+          this.logger.warn(
+            `Harness [${current.name}] not evaluating review rules: the worktree is on ` +
+              `"${moved.actual}", so the changed-file set is a diff against a different ` +
+              `branch entirely and would match rules this task's work never touched.`,
+          );
+          steps.push(
+            `Skipped review rules: the worktree is on "${moved.actual}", not "${moved.intended}".`,
+          );
+        }
+      }
+      const applied = moved
+        ? undefined
+        : await this.reviewPlans.apply(current, signal);
+      if (applied?.ok && applied.value.added.length > 0) {
         steps.push(
           `Rules added ${applied.value.added.map((s) => s.name).join(", ")}.`,
         );
@@ -365,8 +395,8 @@ export class PipelineRunner {
       // tree produces a plan for work that is not there. Keyed on the stage about to
       // act, because a promotion stage may legitimately have moved the worktree —
       // a UAT promotion goes through a PR.
-      if (action.kind === "split" || action.kind === "run") {
-        const mismatch = await this.checkBranch(current, action.stage);
+      if ((action.kind === "split" || action.kind === "run") && !action.stage.mayChangeBranch) {
+        const mismatch = moved;
         if (mismatch) {
           this.logger.error(
             `Harness [${current.name}] "${action.stage.name}" not run. ${mismatch.message}`,

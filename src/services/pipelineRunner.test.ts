@@ -825,6 +825,39 @@ describe("the branch guard", () => {
     expect(sessions.calls.length).toBeGreaterThan(0);
   });
 
+
+  it("does not evaluate review rules while the worktree is on another branch", async () => {
+    // Measured on a real task: from a promotion branch the changed-path set was a
+    // diff of two lineages -- 9,569 files instead of a handful -- so every rule in
+    // the project matched and a tooling review and an ETL review were queued onto a
+    // task that had touched one stored procedure.
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner, repo } = makeRunner(sessions, {
+      currentBranch: "promote/x",
+      paths: ["tools/sql/x.sql"],
+      rules: {
+        rules: [
+          {
+            id: "etl",
+            reason: "ETL touched",
+            when: { anyPathMatches: ["**/*.sql"] },
+            stage: { id: "r-etl", label: "ETL review", kind: "domainReview", intent: "i" },
+          },
+        ] as never,
+        problems: [],
+        noRulesConfigured: false,
+      },
+    });
+    const subject = { ...task(), intendedBranch: "bug/dealer-mapping" };
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages.some((s) => s.id === "r-etl")).toBe(false);
+    expect(report.steps.join(" ")).toContain("Skipped review rules");
+  });
+
   it("does nothing when no branch source is wired in", async () => {
     // A headless run without one must behave exactly as before.
     const sessions = fakeSessions({ "": { text: "done" } });
