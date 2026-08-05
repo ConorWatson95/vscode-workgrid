@@ -378,6 +378,15 @@ export class PipelineRunner {
       const applied = moved
         ? undefined
         : await this.reviewPlans.apply(current, signal);
+      // In the step list as well as the log: this is the difference between "no
+      // reviews were required" and "we could not tell what was required", and the
+      // two read identically when only the outcome is reported.
+      if (applied?.ok && applied.value.implausible) {
+        steps.push(
+          `Review rules not applied: ${applied.value.implausible.count} changed paths ` +
+            `is a branch-lineage diff, not this task's work.`,
+        );
+      }
       if (applied?.ok && applied.value.added.length > 0) {
         steps.push(
           `Rules added ${applied.value.added.map((s) => s.name).join(", ")}.`,

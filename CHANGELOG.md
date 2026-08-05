@@ -2,6 +2,26 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.44.0
+
+- **The rules engine states its inputs, not just its verdict.** It reported "added 5
+  required reviews", which reads as the rules doing their job; that it had been handed
+  9,569 changed paths — the thing that made every rule match — appeared nowhere. Each
+  evaluation now logs the rule count, the path count, the branch diffed from and the
+  base, and every match names the paths that triggered it. A review appended for a
+  reason nobody can see is one nobody can judge.
+- **An implausible changed-path set is not acted on.** The set is derived from three
+  git commands against a base branch, so it can be wrong in ways that look like a very
+  large change rather than an error — a stale base, a rebase, a squashed merge, a
+  `baseBranch` that was never right. Above 750 paths the engine declines to apply
+  rules and says which base branch to check, in the log and in the run report. The
+  branch guard in 0.43.1 catches the cause we found; this catches the shape whatever
+  the cause, because the next one will not be the one already fixed.
+
+  Deliberately dumb, and erring high: a missed review is worse than a slow one, so it
+  only fires on the obviously absurd. A few hundred files is a big refactor; several
+  thousand is not a change at all.
+
 ## 0.43.1
 
 - **Review rules are not evaluated while the worktree is on another branch.** The

@@ -1,6 +1,10 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { TaskStage } from "../domain/taskPipeline";
 import { applyRules } from "../domain/pipelineEngine";
+import {
+  ImplausibleChangeSet,
+  implausibleChangeSet,
+} from "../domain/changedPathSanity";
 import { RuleMatch, ruleStageDefinition } from "../domain/reviewRules";
 import { LoadedReviewRules, loadReviewRules } from "./reviewRulesService";
 import { TaskRepository } from "../persistence/taskRepository";
@@ -117,7 +121,17 @@ export class ReviewPlanService {
   async apply(
     task: TaskWorkspace,
     signal?: AbortSignal,
-  ): Promise<Result<{ added: TaskStage[]; plan: ReviewPlan }, GitError>> {
+  ): Promise<
+    Result<
+      {
+        added: TaskStage[];
+        plan: ReviewPlan;
+        /** Set when the path set was too large to act on; nothing was added. */
+        implausible?: ImplausibleChangeSet;
+      },
+      GitError
+    >
+  > {
     const planned = await this.plan(task, signal);
     if (!planned.ok) return planned;
 
@@ -127,9 +141,42 @@ export class ReviewPlanService {
     }
 
     const loaded = this.loadRules(task.repositoryRoot);
-    const result = applyRules(pipeline, planned.value.changedPaths, loaded.rules);
+    const paths = planned.value.changedPaths;
+
+    // The inputs, before the outcome. The engine used to report only that it had
+    // added five reviews, which reads as the rules doing their job; the fact that it
+    // had been handed 9,569 changed paths — the thing that made every rule match —
+    // appeared nowhere. A decision derived from data should say what data.
+    this.logger.info(
+      `Task "${task.name}": evaluating ${loaded.rules.length} review rule(s) against ` +
+        `${paths.length} changed path(s), diffed from "${task.branchName}" against ` +
+        `"${task.baseBranch}".`,
+    );
+
+    // Checked after logging, so the count that triggered it is on the line above.
+    const implausible = implausibleChangeSet(paths, task.baseBranch);
+    if (implausible) {
+      this.logger.warn(`Task "${task.name}": ${implausible.message}`);
+      return ok({ added: [], plan: planned.value, implausible });
+    }
+
+    const result = applyRules(pipeline, paths, loaded.rules);
     if (result.added.length === 0) {
       return ok({ added: [], plan: planned.value });
+    }
+
+    // Which paths, not just which rules. A review appended for a reason nobody can
+    // see is one nobody can judge — and today's five were all matched off paths that
+    // belonged to another branch entirely.
+    for (const match of result.matches) {
+      this.logger.info(
+        `Task "${task.name}": rule "${match.rule.id}" matched ` +
+          `${match.matchedPaths.length} path(s): ` +
+          `${match.matchedPaths.slice(0, 5).join(", ")}` +
+          (match.matchedPaths.length > 5
+            ? ` (+${match.matchedPaths.length - 5} more)`
+            : ""),
+      );
     }
 
     await this.repository.save({

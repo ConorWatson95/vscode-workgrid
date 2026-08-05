@@ -786,6 +786,62 @@ describe("refusals persisted for the sidebar", () => {
   });
 });
 
+describe("an implausible changed-path set", () => {
+  it("does not apply rules when the changed-path set is a branch-lineage diff", async () => {
+    // The branch guard catches the cause we found; this catches the shape whatever
+    // the cause -- a stale base branch, a rebase, a squashed merge.
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner, repo } = makeRunner(sessions, {
+      paths: Array.from({ length: 2000 }, (_, i) => `tools/sql/f${i}.sql`),
+      rules: {
+        rules: [
+          {
+            id: "etl",
+            reason: "ETL touched",
+            when: { anyPathMatches: ["**/*.sql"] },
+            stage: { id: "r-etl", label: "ETL review", kind: "domainReview", intent: "i" },
+          },
+        ] as never,
+        problems: [],
+        noRulesConfigured: false,
+      },
+    });
+    const subject = task();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages.some((s) => s.id === "r-etl")).toBe(false);
+    expect(report.steps.join(" ")).toContain("branch-lineage diff");
+  });
+
+  it("applies rules normally for a change of a believable size", async () => {
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner, repo } = makeRunner(sessions, {
+      paths: ["tools/sql/x.sql"],
+      rules: {
+        rules: [
+          {
+            id: "etl",
+            reason: "ETL touched",
+            when: { anyPathMatches: ["**/*.sql"] },
+            stage: { id: "r-etl", label: "ETL review", kind: "domainReview", intent: "i" },
+          },
+        ] as never,
+        problems: [],
+        noRulesConfigured: false,
+      },
+    });
+    const subject = task();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages.some((s) => s.id === "r-etl")).toBe(true);
+  });
+});
+
 describe("the branch guard", () => {
   it("refuses to run a stage when the worktree moved to another branch", async () => {
     // The reported failure: a rule review spliced in behind a UAT promotion ran on
