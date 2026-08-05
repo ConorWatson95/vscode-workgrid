@@ -159,6 +159,40 @@ export function truncateHandoff(text: string): string {
 }
 
 /**
+ * Work a stage declined because it judged it to belong to a different stage.
+ *
+ * Every stage is told to stay within its objective and say so rather than reach
+ * outside it, which is right — but the saying-so was prose at the end of a reply,
+ * and nothing read it. So work that belonged to *no* stage was declined by each
+ * one in turn and discovered only where it finally mattered: a live publish that
+ * halted on a structure nobody had created, several stages after the first agent
+ * noticed it was missing.
+ *
+ * Recorded so the engine can hold a deployment until each one has an owner. The
+ * text is the stage's own words, because the value is in what it actually saw.
+ */
+export interface DeferralItem {
+  id: string;
+  /** What was declined, as the stage described it. */
+  text: string;
+  raisedByStage: string;
+  raisedByStageName: string;
+  at: string;
+  /**
+   * Set when a human has settled it — either the work has an owner now, or it
+   * genuinely needed nobody. Resolved rather than deleted so the record of what
+   * was noticed, and what was decided about it, survives in the report.
+   */
+  resolved?: boolean;
+  /** Why it was settled. Required in practice: "resolved" alone explains nothing. */
+  resolution?: string;
+  resolvedAt?: string;
+}
+
+/** Longest deferral text kept. They are one-liners; anything longer is a reply. */
+export const MAX_DEFERRAL_CHARS = 400;
+
+/**
  * One thing a human must verify. Produced by behaviour-review stages and
  * consumed at the human-verification gate — this is the evidence a task must
  * present before it can be called complete.
@@ -290,6 +324,15 @@ export interface TaskPipeline {
    * avoid.
    */
   handoffs?: StageHandoff[];
+  /**
+   * Work stages declined as belonging elsewhere, oldest first.
+   *
+   * Accumulated across the whole route rather than held on the stage that raised
+   * it, for the same reason the checklist is: the stage that notices is rarely the
+   * stage that should act, and an item held on the noticer is invisible to the
+   * gate that ought to care.
+   */
+  deferrals?: DeferralItem[];
 }
 
 /** Refusals from one stage, waiting on a decision. */

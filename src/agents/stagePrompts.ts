@@ -291,6 +291,52 @@ staying silent about it.`;
 }
 
 /**
+ * How a stage declines work it judges to belong to another stage.
+ *
+ * Every stage was already told to say so rather than reach outside its objective,
+ * and every stage did — in prose, at the end of a reply, which nothing read. Work
+ * belonging to *no* stage was therefore declined by each one in turn and surfaced
+ * only where it finally bit: a live publish halted on a structure nobody had
+ * created, several stages after the first agent noticed it was missing.
+ *
+ * A marker makes the decline a fact the engine holds rather than a sentence in a
+ * document, which is the same move `NEEDS-INFO` and `VERDICT` already made.
+ */
+export const DEFERRED_MARKER = "DEFERRED:";
+
+/**
+ * Every piece of work a reply declined, in the stage's own words.
+ *
+ * Anchored to the start of a line so the word inside prose — "I deferred to the
+ * existing convention" — is not read as a decline. The text is kept verbatim
+ * because what a later reader needs is what the stage actually saw, not a
+ * normalised version of it.
+ */
+export function parseDeferrals(reply: string): string[] {
+  const items: string[] = [];
+  for (const match of reply.matchAll(/^[ \t]*DEFERRED:[ \t]*(.+)$/gim)) {
+    const text = match[1].trim();
+    if (text) items.push(text);
+  }
+  return items;
+}
+
+/**
+ * The reply without its deferral lines.
+ *
+ * Stripped for the same reason the verdict is: it is protocol between the harness
+ * and the agent. Left in, the same item appears twice in front of a reader — once
+ * as a raw marker line in the middle of a report, and once as the item the route
+ * is actually holding on.
+ */
+export function stripDeferrals(reply: string): string {
+  return reply
+    .replace(/^[ \t]*DEFERRED:[ \t]*.+$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+/**
  * Introduces the block a stage writes for the stages after it.
  *
  * A marker rather than a separate turn. Asking for the handoff in a second
@@ -375,7 +421,10 @@ Objective: ${subtask.title}
 ${subtask.prompt}
 
 Stay within this objective. If you discover work that belongs to a different
-stage of the workflow, say so at the end rather than doing it.${handoffInstruction(stage)}${verdictInstruction(stage)}`;
+stage of the workflow, do not do it — instead write it on its own line as
+"${DEFERRED_MARKER} <what needs doing, and where you think it belongs>". Use one
+line per item. Something declined this way is followed up by the workflow, so it
+is not lost; something merely mentioned in your reply is not.${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

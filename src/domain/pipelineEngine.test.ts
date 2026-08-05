@@ -9,6 +9,9 @@ import {
   ruleInsertionIndex,
   recordHandoff,
   handoffsBefore,
+  recordDeferrals,
+  outstandingDeferrals,
+  resolveDeferral,
   holdStageForFindings,
   pipelineProgress,
   planStage,
@@ -982,6 +985,81 @@ describe("ruleInsertionIndex", () => {
 
   it("appends when there is no barrier at all", () => {
     expect(ruleInsertionIndex([s("write", "implementation")])).toBe(1);
+  });
+});
+
+describe("work a stage declined", () => {
+  /** Two stages that act, then one that ships — the shape that failed on live. */
+  const route = (): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        { id: "build", name: "Build", kind: "implementation", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "review", name: "Review", kind: "codeReview", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "publish", name: "Live publish", kind: "deployment", status: "pending", intent: "", splittable: false, requiresApproval: false, subtasks: [{ id: "publish-1", title: "Publish", prompt: "", status: "pending" }] },
+      ],
+    }) as TaskPipeline;
+
+  const declined = (text = "the export structure is missing on live") =>
+    recordDeferrals(route(), "build", [text], "t1");
+
+  it("holds the route in front of the stage that ships", () => {
+    // The reported failure: a live publish halted on a structure nobody created,
+    // several stages after the first agent noticed it was missing.
+    const action = nextAction(declined());
+    expect(action.kind).toBe("deferredWork");
+    expect(action.kind === "deferredWork" && action.stage.id).toBe("publish");
+    expect(action.kind === "deferredWork" && action.items[0].raisedByStageName).toBe("Build");
+  });
+
+  it("lets a route with no deployment stage run on", () => {
+    // Most deferrals are correct and harmless. Holding every stage on one would
+    // stop routes constantly, which is how a safety net gets switched off.
+    const p = recordDeferrals(
+      { ...route(), stages: route().stages.slice(0, 2) } as TaskPipeline,
+      "build",
+      ["something for later"],
+      "t1",
+    );
+    expect(nextAction(p).kind).toBe("done");
+  });
+
+  it("runs the deployment once every item has an owner", () => {
+    const settled = resolveDeferral(declined(), "d1", {
+      resolution: "Live-only by design; the publish stage creates it.",
+      at: "t2",
+    });
+    expect(settled.ok && nextAction(settled.value).kind).toBe("run");
+  });
+
+  it("does not record the same item twice for one stage", () => {
+    // A split stage's subtasks each run cold and each notice the same gap; three
+    // identical items would read as three separate problems.
+    let p = declined();
+    p = recordDeferrals(p, "build", ["the export structure is missing on live"], "t2");
+    expect(p.deferrals).toHaveLength(1);
+  });
+
+  it("ignores an item raised by a stage that has been re-opened", () => {
+    // Reverting discards what those stages produced, and an observation about a
+    // run that no longer exists must not hold a deployment.
+    const p = declined();
+    const reopened = {
+      ...p,
+      stages: p.stages.map((s) => (s.id === "build" ? { ...s, status: "pending" } : s)),
+    } as TaskPipeline;
+    expect(outstandingDeferrals(reopened)).toEqual([]);
+  });
+
+  it("keeps the reason rather than deleting the item", () => {
+    // The knowledge that was missing when every stage declined it in the first
+    // place is exactly this sentence.
+    const settled = resolveDeferral(declined(), "d1", { resolution: "Publish owns it.", at: "t2" });
+    expect(settled.ok && settled.value.deferrals?.[0]).toMatchObject({
+      resolved: true,
+      resolution: "Publish owns it.",
+      text: "the export structure is missing on live",
+    });
   });
 });
 

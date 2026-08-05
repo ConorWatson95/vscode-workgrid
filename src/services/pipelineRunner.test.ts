@@ -395,6 +395,75 @@ describe("advance", () => {
   });
 });
 
+describe("work every stage declined", () => {
+  /** Build, then a stage that ships — the shape that failed on a live publish. */
+  const shippingRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      { ...ROUTE.stages[0], splittable: false },
+      {
+        id: "publish",
+        label: "Live publish",
+        kind: "deployment",
+        intent: "Publish to live.",
+        splittable: false,
+        gate: "auto",
+      },
+    ],
+  });
+
+  const shippingTask = (): TaskWorkspace => ({
+    ...task(),
+    pipeline: createPipeline(shippingRoute()),
+  });
+
+  const REPLY =
+    "Corrected the mapping.\nDEFERRED: the export structure exists on live only and is missing";
+
+  it("holds before the deployment instead of running it", async () => {
+    const sessions = fakeSessions({ "build:": { text: REPLY } });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(shippingTask());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({ kind: "deferredWork", stageId: "publish" });
+    // The publish stage never got a session at all, which is the entire point.
+    expect(sessions.calls.some((c) => c.label.startsWith("publish:"))).toBe(false);
+  });
+
+  it("names what was declined and which stage declined it", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "build:": { text: REPLY } }));
+    await repo.save(shippingTask());
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({
+      kind: "deferredWork",
+      items: [{ text: "the export structure exists on live only and is missing", raisedByStageName: "Build" }],
+    });
+  });
+
+  it("keeps the marker out of the stage's recorded reply", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "build:": { text: REPLY } }));
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const reply = (await repo.get("t1"))!.pipeline!.stages[0].subtasks[0].reply ?? "";
+    expect(reply).toContain("Corrected the mapping");
+    expect(reply).not.toContain("DEFERRED:");
+  });
+
+  it("records what a failed stage declined, since it still saw the gap", async () => {
+    const { repo, runner } = makeRunner(
+      fakeSessions({ "build:": { ok: false, text: REPLY } }),
+    );
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.deferrals).toHaveLength(1);
+  });
+});
+
 describe("the handoff carried between stages", () => {
   /** The same route, with the first stage marked as one worth carrying forward. */
   const handoffRoute = (): RouteDefinition => ({

@@ -4,6 +4,8 @@ import {
   DenialItem,
   QuestionItem,
   Subtask,
+  DeferralItem,
+  MAX_DEFERRAL_CHARS,
   SubtaskActivity,
   TaskPipeline,
   TaskStage,
@@ -37,6 +39,7 @@ export type PipelineError =
   | { kind: "notAwaitingApproval"; message: string }
   | { kind: "checklistIncomplete"; message: string; outstanding: number }
   | { kind: "unknownChecklistItem"; message: string }
+  | { kind: "unknownDeferral"; message: string }
   | { kind: "noPendingQuestion"; message: string }
   | { kind: "unknownQuestion"; message: string };
 
@@ -52,6 +55,12 @@ export type NextAction =
   | { kind: "awaitApproval"; stage: TaskStage }
   /** A stage failed. The route cannot proceed until it is retried or skipped. */
   | { kind: "blocked"; stage: TaskStage }
+  /**
+   * A stage that ships is next, and work every earlier stage declined has no
+   * owner. Distinct from `blocked`: nothing has failed and nothing needs
+   * retrying — a human has to say who owns the work, or that nobody need.
+   */
+  | { kind: "deferredWork"; stage: TaskStage; items: DeferralItem[] }
   /** No stages left. */
   | { kind: "done" };
 
@@ -111,6 +120,16 @@ export function nextAction(pipeline: TaskPipeline): NextAction {
     if (stage.status === "failed") return { kind: "blocked", stage };
     if (stage.status === "awaiting-approval") {
       return { kind: "awaitApproval", stage };
+    }
+
+    // Checked before the stage is allowed to start, and only for a stage that
+    // ships. A deferral is not a defect — most are correct, and the stage that
+    // raised one was right to stay in its lane — so holding every stage on one
+    // would stop routes constantly. What must not happen is the one that did:
+    // work declined by every stage in turn, discovered by a live publish.
+    if (stage.kind === "deployment") {
+      const items = outstandingDeferrals(pipeline);
+      if (items.length > 0) return { kind: "deferredWork", stage, items };
     }
 
     if (stage.splittable && stage.subtasks.length === 0) {
@@ -553,6 +572,100 @@ export function setChecklistItem(
   return err({
     kind: "unknownChecklistItem",
     message: `No checklist item "${itemId}" in pipeline.`,
+  });
+}
+
+/**
+ * Records work a stage declined as belonging to a different stage.
+ *
+ * Deduplicated on the text, per stage: a split stage's subtasks each run cold and
+ * each notice the same missing structure, and three identical items would read as
+ * three separate problems.
+ */
+export function recordDeferrals(
+  pipeline: TaskPipeline,
+  stageId: string,
+  texts: readonly string[],
+  at: string,
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage) return pipeline;
+
+  const existing = pipeline.deferrals ?? [];
+  const seen = new Set(
+    existing.filter((d) => d.raisedByStage === stageId).map((d) => d.text),
+  );
+
+  const added: DeferralItem[] = [];
+  for (const raw of texts) {
+    const text = raw.trim().slice(0, MAX_DEFERRAL_CHARS);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    added.push({
+      id: `d${existing.length + added.length + 1}`,
+      text,
+      raisedByStage: stageId,
+      raisedByStageName: stage.name,
+      at,
+    });
+  }
+  if (added.length === 0) return pipeline;
+  return { ...pipeline, deferrals: [...existing, ...added] };
+}
+
+/**
+ * Deferrals nobody has settled, ignoring any raised by a stage that has since
+ * been re-opened or skipped.
+ *
+ * The exclusion matters as much as the list. Reverting to an earlier stage
+ * discards what the later ones produced, and a deferral raised by work that no
+ * longer exists would hold a deployment on an observation about a run that has
+ * been thrown away — the same reasoning that discards those stages' checklist
+ * items.
+ */
+export function outstandingDeferrals(pipeline: TaskPipeline): DeferralItem[] {
+  const settled = new Set(
+    pipeline.stages
+      .filter((s) => s.status === "passed" || s.status === "skipped")
+      .map((s) => s.id),
+  );
+  return (pipeline.deferrals ?? []).filter(
+    (item) => !item.resolved && settled.has(item.raisedByStage),
+  );
+}
+
+/**
+ * Settles one deferral: the work has an owner now, or it needed nobody.
+ *
+ * The reason is kept rather than the item deleted. "We decided this structure is
+ * live-only and the publish stage creates it" is exactly the knowledge that was
+ * missing when every stage declined the work in the first place, and a route that
+ * forgets it will lose it again on the next task.
+ */
+export function resolveDeferral(
+  pipeline: TaskPipeline,
+  itemId: string,
+  update: { resolution: string; at: string },
+): Result<TaskPipeline, PipelineError> {
+  const items = pipeline.deferrals ?? [];
+  if (!items.some((item) => item.id === itemId)) {
+    return err({
+      kind: "unknownDeferral",
+      message: `No deferred item "${itemId}" in pipeline.`,
+    });
+  }
+  return ok({
+    ...pipeline,
+    deferrals: items.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            resolved: true,
+            resolution: update.resolution.trim() || undefined,
+            resolvedAt: update.at,
+          }
+        : item,
+    ),
   });
 }
 

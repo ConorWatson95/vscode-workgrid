@@ -151,6 +151,12 @@
         "icon": "$(comment)"
       },
       {
+        "command": "taskWorkspaces.settleDeferrals",
+        "title": "Settle Deferred Work",
+        "category": "Task Workspaces",
+        "icon": "$(inbox)"
+      },
+      {
         "command": "taskWorkspaces.copyPath",
         "title": "Copy Path",
         "category": "Task Workspaces"

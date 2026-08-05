@@ -10,6 +10,8 @@ import {
   parseVerdict,
   stripVerdict,
   splitStageHandoff,
+  parseDeferrals,
+  stripDeferrals,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
 
@@ -434,6 +436,43 @@ describe("review verdicts", () => {
   it("tells a reviewer not to block on something pre-existing", () => {
     const prompt = subtaskPrompt(CONTEXT, review("codeReview"), sub);
     expect(prompt).toContain("Judge only what this change did");
+  });
+});
+
+describe("declining work that belongs to another stage", () => {
+  const sub = { id: "s1-1", title: "t", prompt: "p", status: "pending" as const };
+
+  it("asks for a marker rather than a mention in the prose", () => {
+    // The whole failure: every stage said "not mine" in a reply nobody parsed,
+    // and the work surfaced at a live publish.
+    const prompt = subtaskPrompt(CONTEXT, stage(), sub);
+    expect(prompt).toContain("DEFERRED:");
+    expect(prompt).toContain("followed up by the workflow");
+  });
+
+  it("reads one item per line, verbatim", () => {
+    const reply = [
+      "I corrected the mapping.",
+      "DEFERRED: the export structure does not exist on live; belongs to publish",
+      "DEFERRED: the retention job needs a schedule",
+    ].join("\n");
+    expect(parseDeferrals(reply)).toEqual([
+      "the export structure does not exist on live; belongs to publish",
+      "the retention job needs a schedule",
+    ]);
+  });
+
+  it("ignores the word inside prose", () => {
+    // "I deferred to the existing convention" is not a decline, and treating it
+    // as one would hold a deployment on a turn of phrase.
+    expect(parseDeferrals("I deferred to the existing convention here.")).toEqual([]);
+  });
+
+  it("strips the lines from what a reader sees", () => {
+    const stripped = stripDeferrals("Done.\nDEFERRED: something else\nAll good.");
+    expect(stripped).not.toContain("DEFERRED:");
+    expect(stripped).toContain("Done.");
+    expect(stripped).toContain("All good.");
   });
 });
 

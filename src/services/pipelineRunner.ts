@@ -13,6 +13,7 @@ import {
   recordDenials,
   recordQuestion,
   recordHandoff,
+  recordDeferrals,
   handoffsBefore,
   holdStageForFindings,
   recordStageVerdict,
@@ -44,6 +45,8 @@ import {
   parseVerdict,
   stripVerdict,
   splitStageHandoff,
+  parseDeferrals,
+  stripDeferrals,
 } from "../agents/stagePrompts";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
@@ -142,6 +145,19 @@ export type RunOutcome =
       subtaskId: string;
       /** One entry per question; each is answered separately. */
       questions: string[];
+    }
+  /**
+   * A stage that ships is next, and work earlier stages declined has no owner.
+   *
+   * Its own outcome rather than a `blocked`: nothing failed and nothing needs
+   * retrying. What it needs is a decision — who does this, or does it need doing
+   * at all — and presenting it as a failure sends the reader looking for a bug.
+   */
+  | {
+      kind: "deferredWork";
+      stageId: string;
+      stageName: string;
+      items: { id: string; text: string; raisedByStageName: string }[];
     }
   /** The route finished. */
   | { kind: "done" }
@@ -517,6 +533,37 @@ export class PipelineRunner {
             steps,
           };
 
+        case "deferredWork": {
+          // Stops *in front of* the stage that ships rather than inside it. The
+          // failure this exists for is a live publish that halted on a structure
+          // nobody had created; halting a step earlier, naming what was declined
+          // and who declined it, is the whole difference.
+          const listed = action.items
+            .map((item) => `${item.text} (declined by "${item.raisedByStageName}")`)
+            .join("; ");
+          this.logger.warn(
+            `Harness [${current.name}] holding "${action.stage.name}": ` +
+              `${action.items.length} deferred item(s) with no owner. ${listed}`,
+          );
+          steps.push(
+            `Held before "${action.stage.name}": ${action.items.length} item(s) ` +
+              `every stage declined and nobody picked up.`,
+          );
+          return {
+            outcome: {
+              kind: "deferredWork",
+              stageId: action.stage.id,
+              stageName: action.stage.name,
+              items: action.items.map((item) => ({
+                id: item.id,
+                text: item.text,
+                raisedByStageName: item.raisedByStageName,
+              })),
+            },
+            steps,
+          };
+        }
+
         case "running": {
           // A subtask this runner never started cannot still be in flight: agent
           // sessions die with the extension host, so the flag was left behind by
@@ -730,6 +777,12 @@ export class PipelineRunner {
     const handoffText = split.handoff;
     reply = { ...reply, text: split.report };
 
+    // Read from the report half only. A handoff that says "I deferred the export
+    // structure" is describing the decline, not making a second one, and counting
+    // it twice would hold the deployment on an item with no separate existence.
+    const deferred = parseDeferrals(reply.text);
+    reply = { ...reply, text: stripDeferrals(reply.text) };
+
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks
     // a question that reads like a briefing problem, and nothing anywhere says a
@@ -908,6 +961,17 @@ export class PipelineRunner {
     // Recorded only on success, and only for stages the route marks `handoff`. A
     // failed stage's conclusion is not a conclusion, and carrying it forward would
     // present a guess to every stage after it as established fact.
+    // Recorded whatever the outcome, unlike the handoff. A stage that declined
+    // work and then failed still saw the gap, and that observation is the only
+    // warning anyone gets before a deployment runs without it.
+    if (deferred.length > 0) {
+      pipeline = recordDeferrals(pipeline, stage.id, deferred, new Date().toISOString());
+      this.logger.info(
+        `Harness [${task.name}] ${stage.name} deferred ${deferred.length} item(s): ` +
+          deferred.join(" | "),
+      );
+    }
+
     if (reply.ok && (handoffText || reply.text.trim())) {
       pipeline = recordHandoff(
         pipeline,

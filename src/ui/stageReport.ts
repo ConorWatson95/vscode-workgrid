@@ -210,6 +210,25 @@ export function formatStageReport(
     }
   }
 
+  // Above the guidance, because a held route is usually what the report was
+  // opened to explain. The resolution is shown too: an item settled with a reason
+  // is the record of a decision, and stripping it back to "resolved" would lose
+  // exactly the knowledge whose absence caused the hold.
+  const declined = (pipeline?.deferrals ?? []).filter(
+    (item) => item.raisedByStage === stage.id,
+  );
+  if (declined.length > 0) {
+    lines.push("", "## Work it declined as belonging elsewhere", "");
+    for (const item of declined) {
+      lines.push(
+        `- ${item.text}` +
+          (item.resolved
+            ? ` — **settled:** ${item.resolution ?? "no reason recorded"}`
+            : " — **outstanding**, and a stage that ships will hold until it has an owner"),
+      );
+    }
+  }
+
   const guidance = (pipeline?.guidance ?? []).filter(
     (note) => note.stageId === stage.id,
   );

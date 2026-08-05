@@ -39,6 +39,8 @@ import {
   clearQuestion,
   grantDenial,
   outstandingChecklist,
+  outstandingDeferrals,
+  resolveDeferral,
   setChecklistItem,
   unansweredQuestions,
   ungrantedDenials,
@@ -132,6 +134,12 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.noteChecklistItem", (arg) =>
       noteChecklistItemCommand(ctx, arg),
+    ),
+    // Also a command, not only a button on the notification that announced it: a
+    // notification is dismissable and the hold is not, and a route stopped with no
+    // visible way to un-stop it reads as broken.
+    register("taskWorkspaces.settleDeferrals", (arg) =>
+      settleDeferralsCommand(ctx, taskIdOf(arg)),
     ),
   ];
 }
@@ -1282,6 +1290,21 @@ async function advanceRouteCommand(
       }
       return;
     }
+    case "deferredWork": {
+      // A warning, not an error. Every stage behaved correctly; what is missing is
+      // a decision only a person can make, and the one thing that must not happen
+      // is the route shipping while it is unmade.
+      const choice = await vscode.window.showWarningMessage(
+        `"${task.name}" is holding before "${outcome.stageName}": ` +
+          `${outcome.items.length} item(s) every stage declined and nobody picked up.`,
+        { modal: false },
+        "Settle Them…",
+        "Show Details",
+      );
+      if (choice === "Show Details") ctx.logger.show?.();
+      else if (choice === "Settle Them…") await settleDeferralsCommand(ctx, task.id);
+      return;
+    }
     case "exhausted":
       void vscode.window.showWarningMessage(
         `"${task.name}" hit the ${outcome.steps}-step limit without finishing. See the log.`,
@@ -1290,6 +1313,79 @@ async function advanceRouteCommand(
     case "unharnessed":
       return;
   }
+}
+
+/**
+ * Works through the items every stage declined, one at a time.
+ *
+ * Each needs a sentence, not a tick. The reason a live publish halted on a
+ * missing structure was that nobody had ever written down who owns it — so
+ * settling an item with silence would reproduce exactly the gap this exists to
+ * close. The sentence is kept on the item and offered as route guidance, which is
+ * what carries it to the stages that still have to act.
+ */
+async function settleDeferralsCommand(
+  ctx: CommandContext,
+  taskId: string | undefined,
+): Promise<void> {
+  let task = taskId ? await ctx.repository.get(taskId) : undefined;
+  if (!task?.pipeline) return;
+
+  const pipeline = task.pipeline;
+  for (const item of outstandingDeferrals(pipeline)) {
+    const resolution = await vscode.window.showInputBox({
+      title: `Declined by "${item.raisedByStageName}"`,
+      prompt: item.text,
+      placeHolder:
+        "Who owns this, or why it needs nobody — e.g. live-only by design; the publish stage creates it",
+      ignoreFocusOut: true,
+    });
+    // Escape stops the whole run rather than skipping to the next item: the
+    // remaining ones are still outstanding, and silently moving past one would
+    // look like it had been settled.
+    if (resolution === undefined) break;
+    if (!resolution.trim()) {
+      void vscode.window.showWarningMessage(
+        "A reason is required — it is the thing that was missing when every stage declined this.",
+      );
+      break;
+    }
+
+    const settled = resolveDeferral(task.pipeline ?? pipeline, item.id, {
+      resolution,
+      at: new Date().toISOString(),
+    });
+    if (!settled.ok) {
+      void vscode.window.showErrorMessage(settled.error.message);
+      return;
+    }
+    task = { ...task, pipeline: settled.value, updatedAt: new Date().toISOString() };
+    await ctx.repository.save(task);
+    ctx.logger.info(
+      `Harness [${task.name}] settled a deferred item from "${item.raisedByStageName}": ` +
+        `${item.text} → ${resolution.trim()}`,
+    );
+  }
+
+  ctx.tree.refresh();
+  const left = outstandingDeferrals(task.pipeline ?? pipeline).length;
+  if (left > 0) {
+    void vscode.window.showInformationMessage(
+      `${left} item(s) still outstanding — the route holds until each has an owner.`,
+    );
+    return;
+  }
+  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/** The task a command was invoked on, whether from a row or by id. */
+function taskIdOf(arg: unknown): string | undefined {
+  if (typeof arg === "string") return arg;
+  if (arg instanceof TaskWorkspaceTreeItem) return arg.task.id;
+  if (arg instanceof StageTreeItem) return arg.task.id;
+  return undefined;
 }
 
 /**

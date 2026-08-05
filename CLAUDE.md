@@ -237,6 +237,30 @@ sessions are invisible":
   read and rewritten whole — and truncation is announced, since output that just
   stops reads as the command having stopped.
 
+### Work that belongs to no stage
+
+Every stage is told to stay within its objective and say so rather than reach
+outside it. That instruction is right, but the saying-so was prose at the end of a
+reply and **nothing read it** — so work belonging to *no* stage was declined by
+each stage in turn and discovered where it finally bit: a live publish that halted
+on a data structure nobody had created, several stages after the first agent
+noticed it was missing.
+
+- A stage now declines work as `DEFERRED: <what>` (`stagePrompts.ts`), parsed and
+  stripped like `VERDICT` and `HANDOFF`. Read from the report half of the reply
+  only, so a handoff *describing* a decline is not counted as a second one.
+- `recordDeferrals`/`outstandingDeferrals`/`resolveDeferral` (`pipelineEngine.ts`)
+  hold them on the pipeline, deduplicated per stage — a split stage's subtasks each
+  run cold and each notice the same gap.
+- **`nextAction` holds in front of a `deployment` stage** while any is
+  unsettled, returning `deferredWork`. Only a stage that ships: most deferrals are
+  correct and harmless, and holding every stage on one is how a safety net gets
+  switched off.
+- Settling one **requires a sentence**, not a tick. What was missing when every
+  stage declined the work was the knowledge of who owns it, so silence would
+  reproduce the gap. Items raised by a re-opened stage are ignored, exactly as
+  that stage's checklist items are discarded.
+
 ### What a stage carries forward, and what it cost
 
 - **Handoffs** (`TaskPipeline.handoffs`) — a stage the route marks `handoff: true`
