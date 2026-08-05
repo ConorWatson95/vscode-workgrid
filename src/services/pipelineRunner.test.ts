@@ -872,6 +872,11 @@ describe("the branch guard", () => {
     expect(report.outcome.kind).toBe("blocked");
     expect(sessions.calls).toHaveLength(0);
     expect(report.steps.join(" ")).toContain("LIVE_MultiMarket");
+    // Carried structurally, not only in the message: the caller offers checking the
+    // branch out as a button, and being told a git command is not being able to run it.
+    expect(
+      report.outcome.kind === "blocked" && report.outcome.branchMismatch,
+    ).toMatchObject({ intended: "bug/dealer-mapping", actual: "LIVE_MultiMarket" });
   });
 
   it("runs normally when the worktree is where it should be", async () => {

@@ -117,7 +117,20 @@ export type RunOutcome =
   /** Stopped at a human gate; the stage id is awaiting approval. */
   | { kind: "awaitingApproval"; stageId: string; stageName: string }
   /** A stage failed. Nothing further was attempted. */
-  | { kind: "blocked"; stageId: string; stageName: string; reason?: string }
+  | {
+      kind: "blocked";
+      stageId: string;
+      stageName: string;
+      reason?: string;
+      /**
+       * Set when the block is the worktree being on the wrong branch.
+       *
+       * Carried structurally rather than left in `reason` so the caller can offer to
+       * fix it: the message tells you the git command to run, and being told a
+       * command is not the same as being able to act.
+       */
+      branchMismatch?: BranchMismatch;
+    }
   /** A stage needs information the brief does not contain. */
   | {
       kind: "needsInput";
@@ -467,6 +480,7 @@ export class PipelineRunner {
               stageId: action.stage.id,
               stageName: action.stage.name,
               reason: mismatch.message,
+              branchMismatch: mismatch,
             },
             steps,
           };

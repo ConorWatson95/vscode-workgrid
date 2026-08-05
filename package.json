@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.46.0",
+  "version": "0.47.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -119,6 +119,12 @@
         "title": "Advance Route",
         "category": "Task Workspaces",
         "icon": "$(debug-continue)"
+      },
+      {
+        "command": "taskWorkspaces.checkoutTaskBranch",
+        "title": "Check Out This Task’s Branch",
+        "category": "Task Workspaces",
+        "icon": "$(git-branch)"
       },
       {
         "command": "taskWorkspaces.answerQuestions",
@@ -324,6 +330,11 @@
           "command": "taskWorkspaces.advanceRoute",
           "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
           "group": "inline@1"
+        },
+        {
+          "command": "taskWorkspaces.checkoutTaskBranch",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
+          "group": "3_lifecycle@3"
         },
         {
           "command": "taskWorkspaces.startChat",

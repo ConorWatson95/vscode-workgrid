@@ -217,6 +217,28 @@ export class GitWorktreeService {
   }
 
   /**
+   * Checks a branch out in a worktree.
+   *
+   * For putting a task's worktree back on its own branch after a promotion stage
+   * moved it. Deliberately plain: no `-f`, no stash, no `-B`. Git refuses when the
+   * switch would discard local changes, and that refusal is the useful answer — the
+   * whole reason the worktree is being moved back is that something is in the wrong
+   * place, and silently overwriting work would be a worse version of the problem.
+   */
+  async checkoutBranch(
+    worktreePath: string,
+    branchName: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void, WorktreeError>> {
+    const result = await this.git.run(["checkout", branchName], {
+      cwd: worktreePath,
+      signal,
+    });
+    if (!result.ok) return gitErr(result.error);
+    return ok(undefined);
+  }
+
+  /**
    * Lists tracked and untracked-but-not-ignored files in a worktree, for
    * @-mention autocomplete. Paths are worktree-relative, forward-slashed.
    */

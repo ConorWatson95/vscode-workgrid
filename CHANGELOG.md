@@ -2,6 +2,20 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.47.0
+
+- **The branch guard offers a button rather than a command to type.** When a route
+  stops because the worktree is on another branch, the notification now carries
+  **Check Out "<branch>"**, which returns the worktree and advances. Also on the task's
+  context menu and in the palette as "Check Out This Task's Branch", since the
+  notification is dismissable and the stop is not.
+
+  Plain `git checkout` — no force, no stash. Git refuses when the switch would discard
+  local changes, and that refusal is the useful answer: the reason the worktree is
+  being moved back is that something is in the wrong place, and overwriting work
+  silently would be a worse version of that problem. Git's own stderr is shown,
+  because it names exactly which files are in the way.
+
 ## 0.46.0
 
 - **A stage's outcome can come from a process instead of the agent's word for it.** A

@@ -106,6 +106,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       createReviewRulesCommand(ctx),
     ),
     register("taskWorkspaces.advanceRoute", (arg) => advanceRouteCommand(ctx, arg)),
+    register("taskWorkspaces.checkoutTaskBranch", (arg) =>
+      checkoutTaskBranchCommand(ctx, arg),
+    ),
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
@@ -952,6 +955,76 @@ async function toggleChecklistItemCommand(
  * first human gate or failure. Cancellable, because each step spawns an agent
  * session and the whole run can take many minutes.
  */
+/**
+ * Puts a task's worktree back on the branch the task is about.
+ *
+ * Exists because the branch guard's message names the git command to run, and being
+ * told a command is not the same as being able to run it — the point of the guard is
+ * that the route stopped, so the fix belongs where the stop is reported.
+ *
+ * Plain `git checkout`: no force, no stash. Git refuses when switching would discard
+ * local changes, and that refusal is the useful answer rather than an obstacle.
+ */
+async function checkoutTaskBranchCommand(
+  ctx: CommandContext,
+  arg: unknown,
+  options: { andAdvance?: boolean } = {},
+): Promise<void> {
+  const taskId =
+    typeof arg === "string"
+      ? arg
+      : arg instanceof TaskWorkspaceTreeItem
+        ? arg.task.id
+        : arg instanceof StageTreeItem
+          ? arg.task.id
+          : undefined;
+  const task = taskId ? await ctx.repository.get(taskId) : undefined;
+  if (!task) return;
+
+  // The recorded intent, not the current branch: the whole question is where the
+  // worktree should be, and `branchName` is refreshed from wherever it actually is.
+  const target = task.intendedBranch ?? task.branchName;
+  if (!target) {
+    void vscode.window.showErrorMessage(
+      `"${task.name}" has no recorded branch to return to.`,
+    );
+    return;
+  }
+
+  const result = await ctx.worktrees.checkoutBranch(task.worktreePath, target);
+  if (!result.ok) {
+    // Git's own words: it says precisely which files would be overwritten, which is
+    // the information needed to decide what to do about it.
+    // git's own words, which name precisely which files would be overwritten — the
+    // information needed to decide what to do about it.
+    const detail =
+      result.error.kind === "git"
+        ? result.error.error.stderr?.trim() || result.error.error.message
+        : result.error.message;
+    void vscode.window.showErrorMessage(
+      `Could not check out "${target}" in ${task.worktreePath}: ${detail}`,
+    );
+    ctx.logger.error(
+      `Harness [${task.name}] checkout of "${target}" failed`,
+      result.error,
+    );
+    return;
+  }
+
+  ctx.logger.info(`Harness [${task.name}] worktree returned to "${target}".`);
+  ctx.tree.refresh();
+
+  if (!options.andAdvance) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is back on "${target}".`,
+    );
+    return;
+  }
+  // Advancing straight away, because the user pressed this button on a notification
+  // that said the route had stopped: checking out was a means, not the goal.
+  await advanceRouteCommand(ctx, task.id);
+}
+
 async function advanceRouteCommand(
   ctx: CommandContext,
   arg: unknown,
@@ -1129,12 +1202,20 @@ async function advanceRouteCommand(
       return;
     }
     case "blocked": {
+      // A block whose cause is a fixable one gets the fix as a button. Being told
+      // the git command to run is not the same as being able to run it, and this
+      // particular block has exactly one sensible remedy.
+      const mismatch = outcome.branchMismatch;
       const choice = await vscode.window.showWarningMessage(
         `"${task.name}" stopped at "${outcome.stageName}"` +
           (outcome.reason ? `: ${outcome.reason}` : "."),
+        ...(mismatch ? [`Check Out "${mismatch.intended}"`] : []),
         "Show Details",
       );
       if (choice === "Show Details") ctx.logger.show?.();
+      else if (mismatch && choice?.startsWith("Check Out")) {
+        await checkoutTaskBranchCommand(ctx, task.id, { andAdvance: true });
+      }
       return;
     }
     case "exhausted":
