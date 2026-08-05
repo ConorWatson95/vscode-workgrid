@@ -43,7 +43,10 @@ import {
   subtaskPrompt,
   parseVerdict,
   stripVerdict,
+  splitStageHandoff,
 } from "../agents/stagePrompts";
+import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
+import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
 import { ReviewPlanService } from "./reviewPlanService";
@@ -719,6 +722,14 @@ export class PipelineRunner {
     const verdict = parseVerdict(reply.text);
     reply = { ...reply, text: stripVerdict(reply.text) };
 
+    // After the verdict is stripped, so a review that ends "…HANDOFF: <block>
+    // VERDICT: block" does not carry the protocol line into the block. Split here
+    // rather than at the point of recording, because everything downstream —
+    // findings, the checklist, the report — should see the report half only.
+    const split = splitStageHandoff(reply.text);
+    const handoffText = split.handoff;
+    reply = { ...reply, text: split.report };
+
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks
     // a question that reads like a briefing problem, and nothing anywhere says a
@@ -897,11 +908,16 @@ export class PipelineRunner {
     // Recorded only on success, and only for stages the route marks `handoff`. A
     // failed stage's conclusion is not a conclusion, and carrying it forward would
     // present a guess to every stage after it as established fact.
-    if (reply.ok && reply.text.trim()) {
+    if (reply.ok && (handoffText || reply.text.trim())) {
       pipeline = recordHandoff(
         pipeline,
         stage.id,
-        reply.text,
+        // The distilled block when the stage wrote one, the whole reply when it
+        // did not. The fallback is not a formality: the block is asked for in a
+        // prompt, so a stage that ignores the instruction, or one whose route
+        // enabled handoff after it ran, must still carry something forward rather
+        // than silently contributing nothing to every stage after it.
+        handoffText ? distilHandoff(handoffText) : reply.text,
         new Date().toISOString(),
       );
     }
@@ -943,6 +959,31 @@ function isLastUnresolved(stage: TaskStage, subtaskId: string): boolean {
       subtask.id !== subtaskId &&
       (subtask.status === "pending" || subtask.status === "active"),
   );
+}
+
+/**
+ * Turns the block a stage wrote into the text later stages are given.
+ *
+ * The parse-and-reformat is not cosmetic. What is carried forward has a hard
+ * ceiling, and the previous behaviour — cut the reply at the limit — kept whatever
+ * happened to come first, which in a reply written for a human reader is the
+ * restatement and the context. Re-emitting the parsed sections in priority order
+ * means a squeeze drops the file list and the already-done items, and keeps the
+ * next step and the decisions that a later stage genuinely cannot re-derive.
+ *
+ * A block that parsed into nothing recognisable is passed through as written. The
+ * parser is tolerant by design, and a stage that wrote a useful paragraph under no
+ * heading at all should not have it discarded for being the wrong shape.
+ */
+function distilHandoff(block: string): string {
+  const { handoff, structured } = parseHandoff(block);
+  if (!structured || isEmptyHandoff(handoff)) return block;
+  return formatHandoffBrief(handoff, {
+    omitHeader: true,
+    // Under the ceiling `recordHandoff` applies, so the priority-ordered drop
+    // above decides what goes rather than a blind cut at the boundary.
+    maxChars: MAX_HANDOFF_CHARS - 100,
+  });
 }
 
 /** Folds a verification into a subtask's activity, creating one if it had none. */

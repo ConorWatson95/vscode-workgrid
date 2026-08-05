@@ -237,11 +237,39 @@ sessions are invisible":
   read and rewritten whole — and truncation is announced, since output that just
   stops reads as the command having stopped.
 
+### What a stage carries forward, and what it cost
+
+- **Handoffs** (`TaskPipeline.handoffs`) — a stage the route marks `handoff: true`
+  ends its reply with a `HANDOFF:` block, which is parsed out, distilled and given
+  to every later stage via `StageContext.handoffs`. A marker inside the reply, not
+  a second turn: asking separately would cost a full round trip per stage to
+  produce text the model already has. It is **parsed and re-emitted in priority
+  order** rather than cut at the limit — a reply is written for a human, so its
+  opening is restatement and the part a later stage needs is at the end, exactly
+  where a blind truncation lands. A stage that writes no block has its whole reply
+  carried forward as before, since the block is asked for in a prompt and can be
+  ignored. The verdict line moves after the block when a stage is asked for both,
+  because contradictory instructions get one of them dropped at random.
+- **Usage** (`SubtaskActivity.costUsd`/`tokens`, `domain/stageUsage.ts`) — cost and
+  cumulative tokens are read from the session's `result` event, which never becomes
+  a transcript item, so the activity watcher cannot see them. **`sessionTokensOf`
+  reads the top-level `usage`; `contextTokensOf` reads `message.usage`** — the same
+  four field names in different places, one a run total and one a per-turn
+  snapshot. Confusing them does not fail loudly; it reports a number wrong by
+  roughly the turn count. Summing across subtasks is only sound because each is a
+  fresh session. Elapsed time is summed **per subtask**, never first-start to
+  last-finish, because a route waits at a gate for as long as a human takes. Runs
+  that reported nothing are counted and announced rather than dropped from the
+  total.
+
 **Status:** wired end to end — route picker → stages in the tree → Advance Route
-drives split/run/checklist → approve gate. Remaining gap: stage outcomes are
-**self-reported**. `finishSubtask(..., "done")` records that the agent session
-ended without error, not that the build or tests actually passed. A stage kind
-whose outcome comes from a process exit code is the next real correctness step.
+drives split/run/checklist → approve gate, with outcomes for a stage that declares
+`verify` coming from a process exit code rather than the agent's own account.
+
+Remaining gap: a stage without `verify` is still **self-reported** —
+`finishSubtask(..., "done")` records that the session ended without error. And the
+handoff-versus-rediscovery question is now measurable but **not yet measured**: the
+next real step is a route run both ways, compared on the recorded cost.
 
 ## Context discipline
 

@@ -273,15 +273,93 @@ Reply with only a numbered list, one subtask per line, in this format:
  */
 function verdictInstruction(stage: TaskStage): string {
   if (stage.kind !== "codeReview" && stage.kind !== "domainReview") return "";
+  // Where the line goes has to account for the handoff block, or a review asked
+  // for both is given two instructions that cannot both be obeyed — and which one
+  // it drops is a coin toss, with the verdict being the one that stops a route.
+  const position = stage.handoff
+    ? `Put the verdict on its own line at the very end, after the handoff block`
+    : `End your reply with a single line`;
   return `
 
-End your reply with a single line, exactly "${VERDICT_MARKER} pass" or
+${position}, exactly "${VERDICT_MARKER} pass" or
 "${VERDICT_MARKER} block", and nothing after it. Use "block" when you found
 something that should be fixed before the work goes any further; use "pass" when
 what you found is advisory — pre-existing, cosmetic, or a suggestion someone may
 reasonably decline. Judge only what this change did: a long-standing problem you
 noticed in passing is not a reason to block, and say so in that case rather than
 staying silent about it.`;
+}
+
+/**
+ * Introduces the block a stage writes for the stages after it.
+ *
+ * A marker rather than a separate turn. Asking for the handoff in a second
+ * exchange would cost a full extra round trip per stage — the model re-reading
+ * everything it just did — to produce text it already has in hand. The verdict
+ * line established the pattern: a protocol line inside the reply, parsed out and
+ * stripped before anything human-facing sees it.
+ */
+export const HANDOFF_MARKER = "HANDOFF:";
+
+/**
+ * Asks a stage to end with a distilled handoff, and only a stage the route marks
+ * as one worth carrying forward.
+ *
+ * The stage's reply was previously carried forward whole and cut at 1500
+ * characters, which is close to the worst possible selection: a reply is written
+ * for a person reading a report, so its opening is context and restatement, and
+ * the part a later stage actually needs — what was decided, what is left, what to
+ * do next — is at the end, where the cut lands. Asking for the summary explicitly
+ * puts the choice of what survives with the stage that knows.
+ */
+function handoffInstruction(stage: TaskStage): string {
+  if (!stage.handoff) return "";
+  return `
+
+After your reply, add a line containing only "${HANDOFF_MARKER}" and then a short
+handoff for the later stages of this workflow. They run in fresh sessions with no
+memory of yours, and this is the only thing of yours they will see. Use these
+headings, and keep the whole block under 250 words:
+
+## Summary
+Where the work stands, in one or two sentences.
+
+## Done
+## Remaining
+## Decisions
+## Files
+## Next step
+
+Under "Decisions", record only what a later stage could NOT work out by reading
+the code: constraints you were given, approaches you rejected and why, assumptions
+you had to make. Do not describe the diff — the code is on disk and will be re-read
+— and do not restate the brief. Everything above the marker is for a person; the
+block below it is for the next stage.`;
+}
+
+/**
+ * Separates a reply's report from the handoff block it ends with.
+ *
+ * The last marker wins, so a stage that quotes the instruction earlier in its
+ * reply does not have its own explanation parsed as the handoff. A reply with no
+ * marker returns no handoff at all rather than a guess — the caller then falls
+ * back to carrying the reply forward, which is what it did before.
+ */
+export function splitStageHandoff(reply: string): {
+  report: string;
+  handoff?: string;
+} {
+  const matches = [...reply.matchAll(/^[ \t]*HANDOFF:[ \t]*$/gim)];
+  const last = matches[matches.length - 1];
+  if (!last || last.index === undefined) return { report: reply };
+
+  const handoff = reply.slice(last.index + last[0].length).trim();
+  const report = reply.slice(0, last.index).trimEnd();
+  // An empty block is the same as none: the stage announced a handoff and then
+  // said nothing, and carrying an empty section forward would tell a later stage
+  // this stage concluded nothing.
+  if (!handoff) return { report };
+  return { report, handoff };
 }
 
 /** The brief handed to a session that will execute one subtask. */
@@ -297,7 +375,7 @@ Objective: ${subtask.title}
 ${subtask.prompt}
 
 Stay within this objective. If you discover work that belongs to a different
-stage of the workflow, say so at the end rather than doing it.${verdictInstruction(stage)}`;
+stage of the workflow, say so at the end rather than doing it.${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

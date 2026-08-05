@@ -395,6 +395,99 @@ describe("advance", () => {
   });
 });
 
+describe("the handoff carried between stages", () => {
+  /** The same route, with the first stage marked as one worth carrying forward. */
+  const handoffRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: ROUTE.stages.map((s) =>
+      s.id === "build" ? { ...s, splittable: false, handoff: true } : s,
+    ),
+  });
+
+  const handoffTask = (): TaskWorkspace => ({
+    ...task(),
+    pipeline: createPipeline(handoffRoute()),
+  });
+
+  const REPLY = [
+    "I corrected the mapping in the customer editor.",
+    "",
+    "HANDOFF:",
+    "## Summary",
+    "Dealer id now survives an edit.",
+    "## Decisions",
+    "- Kept the legacy column; three reports still read it.",
+    "## Next step",
+    "Exercise an edit against staging.",
+  ].join("\n");
+
+  it("carries the block forward and keeps it out of the report", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "build:": { text: REPLY } }));
+    await repo.save(handoffTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const pipeline = (await repo.get("t1"))!.pipeline!;
+    const handoff = pipeline.handoffs?.[0];
+    expect(handoff?.text).toContain("Kept the legacy column");
+    expect(handoff?.text).toContain("Exercise an edit against staging");
+    // The marker is protocol between harness and agent; a reader of the report
+    // should never see it, exactly as with the verdict line.
+    const reply = pipeline.stages[0].subtasks[0].reply ?? "";
+    expect(reply).toContain("I corrected the mapping");
+    expect(reply).not.toContain("HANDOFF:");
+    expect(reply).not.toContain("## Decisions");
+  });
+
+  it("gives a later stage the handoff in its prompt", async () => {
+    const sessions = fakeSessions({ "build:": { text: REPLY } });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(handoffTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const later = sessions.calls.find((c) => c.label.startsWith("behaviour:"));
+    expect(later?.prompt).toContain("Kept the legacy column");
+  });
+
+  it("falls back to the whole reply when the stage wrote no block", async () => {
+    // The block is asked for in a prompt, so it can be ignored — and a stage that
+    // ignores it must still contribute something rather than silently nothing.
+    const { repo, runner } = makeRunner(
+      fakeSessions({ "build:": { text: "Fixed it. No block here." } }),
+    );
+    await repo.save(handoffTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.handoffs?.[0]?.text).toBe(
+      "Fixed it. No block here.",
+    );
+  });
+
+  it("keeps the decisions and drops the file list when the block is too long", async () => {
+    // The point of parsing rather than cutting: a blind truncation keeps whatever
+    // came first, and what a later stage needs is at the end.
+    const long = [
+      "Report.",
+      "HANDOFF:",
+      "## Summary",
+      "Short.",
+      "## Files",
+      ...Array.from({ length: 200 }, (_, i) => `- src/generated/file-${i}.ts`),
+      "## Decisions",
+      "- The dealer id must stay nullable for the legacy import.",
+      "## Next step",
+      "Run the import against staging.",
+    ].join("\n");
+    const { repo, runner } = makeRunner(fakeSessions({ "build:": { text: long } }));
+    await repo.save(handoffTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const text = (await repo.get("t1"))!.pipeline!.handoffs![0].text;
+    expect(text).toContain("must stay nullable");
+    expect(text).toContain("Run the import against staging");
+    expect(text).not.toContain("src/generated/file-150.ts");
+  });
+});
+
 describe("per-stage model", () => {
   /** Records the options each call received alongside its label. */
   function recordingSessions(): StageSessionRunner & {

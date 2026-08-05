@@ -146,6 +146,15 @@ export interface BriefOptions {
   taskName?: string;
   /** Optional outstanding verification items to carry over. */
   outstandingChecklist?: readonly string[];
+  /**
+   * Drops the "you have no memory of the previous session" opening.
+   *
+   * For a stage handoff, which is embedded in a prompt that has already said who
+   * the reader is and that several earlier stages are being quoted. Repeating it
+   * per handoff would tell a stage three times over that it has no memory, and
+   * read as three separate sessions rather than three stages of one route.
+   */
+  omitHeader?: boolean;
 }
 
 const DEFAULT_MAX_CHARS = 4000;
@@ -162,9 +171,11 @@ export function formatHandoffBrief(
   options: BriefOptions = {},
 ): string {
   const max = options.maxChars ?? DEFAULT_MAX_CHARS;
-  const header = options.taskName
-    ? `Continuing work on "${options.taskName}". You have no memory of the previous session; this is the handoff.`
-    : "You have no memory of the previous session; this is the handoff.";
+  const header = options.omitHeader
+    ? ""
+    : options.taskName
+      ? `Continuing work on "${options.taskName}". You have no memory of the previous session; this is the handoff.`
+      : "You have no memory of the previous session; this is the handoff.";
 
   const sections: string[] = [];
   if (handoff.summary) sections.push(`## Summary\n${handoff.summary}`);
@@ -185,13 +196,13 @@ export function formatHandoffBrief(
     sections.push(`## Files touched\n${bullets(handoff.filesTouched)}`);
   }
 
-  const parts = [header, ...sections];
+  const parts = [header, ...sections].filter(Boolean);
   let brief = parts.join("\n\n");
   if (brief.length <= max) return brief;
 
   // Drop whole trailing sections rather than cutting mid-sentence; only fall
   // back to a hard cut if even the header plus first section is too long.
-  const kept = [header];
+  const kept = header ? [header] : [];
   for (const section of sections) {
     const candidate = [...kept, section].join("\n\n");
     if (candidate.length + TRUNCATION_NOTE.length > max) break;

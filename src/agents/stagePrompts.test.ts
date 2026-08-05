@@ -9,6 +9,7 @@ import {
   subtaskPrompt,
   parseVerdict,
   stripVerdict,
+  splitStageHandoff,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
 
@@ -433,6 +434,64 @@ describe("review verdicts", () => {
   it("tells a reviewer not to block on something pre-existing", () => {
     const prompt = subtaskPrompt(CONTEXT, review("codeReview"), sub);
     expect(prompt).toContain("Judge only what this change did");
+  });
+});
+
+describe("the handoff a stage writes for later stages", () => {
+  const sub = { id: "s1-1", title: "t", prompt: "p", status: "pending" as const };
+
+  it("is asked for only when the route marks the stage as one", () => {
+    // Prompt space every stage pays for, so a project decides where continuity
+    // is worth it.
+    expect(subtaskPrompt(CONTEXT, stage({ handoff: true }), sub)).toContain("HANDOFF:");
+    expect(subtaskPrompt(CONTEXT, stage(), sub)).not.toContain("HANDOFF:");
+  });
+
+  it("asks for what a later stage could not re-derive, not a description of the diff", () => {
+    const prompt = subtaskPrompt(CONTEXT, stage({ handoff: true }), sub);
+    expect(prompt).toContain("could NOT work out by reading");
+    expect(prompt).toContain("Do not describe the diff");
+  });
+
+  it("moves the verdict line after the block, so both instructions can be obeyed", () => {
+    // Given contradictory instructions the model drops one, and the verdict is
+    // the one that stops a route from deploying over a real finding.
+    const both = subtaskPrompt(CONTEXT, stage({ kind: "codeReview", handoff: true }), sub);
+    expect(both).toContain("after the handoff block");
+    const verdictOnly = subtaskPrompt(CONTEXT, stage({ kind: "codeReview" }), sub);
+    expect(verdictOnly).toContain("End your reply with a single line");
+  });
+});
+
+describe("splitStageHandoff", () => {
+  it("separates the report from the block below the marker", () => {
+    const split = splitStageHandoff("I fixed the mapping.\n\nHANDOFF:\n## Done\n- fixed it");
+    expect(split.report).toBe("I fixed the mapping.");
+    expect(split.handoff).toBe("## Done\n- fixed it");
+  });
+
+  it("takes the last marker, so quoting the instruction does not fool it", () => {
+    const reply = [
+      "I was told to end with HANDOFF: and a summary.",
+      "",
+      "HANDOFF:",
+      "## Summary",
+      "Done.",
+    ].join("\n");
+    // The first mention is inline prose, not a marker on its own line.
+    expect(splitStageHandoff(reply).handoff).toBe("## Summary\nDone.");
+  });
+
+  it("returns no handoff when there is no marker, so the caller can fall back", () => {
+    const split = splitStageHandoff("Just a reply.");
+    expect(split.handoff).toBeUndefined();
+    expect(split.report).toBe("Just a reply.");
+  });
+
+  it("treats an announced but empty block as none", () => {
+    // Otherwise a later stage is told this one concluded nothing, which is a
+    // different claim from this one not having said.
+    expect(splitStageHandoff("Work done.\n\nHANDOFF:\n\n  ").handoff).toBeUndefined();
   });
 });
 
