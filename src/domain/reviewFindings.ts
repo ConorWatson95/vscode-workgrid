@@ -60,9 +60,20 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     const line = rawLine.trim();
     if (!line) continue;
 
+    // A heading may carry the finding with it: "### Critical: the change is against
+    // the wrong stored procedure" is one line that is both the section and the
+    // problem. Only a *marked* heading is read this way — a bare "CRITICAL: …" line
+    // is left to the list-item path below, so that it reports itself without also
+    // reclassifying every plain bullet that follows it.
     const asHeading = severityHeading(line);
-    if (asHeading) {
-      heading = asHeading;
+    // A label with nothing after it is a section heading either way. One that
+    // carries a summary is only *taken* as a heading when the line is marked as
+    // one; otherwise it falls through to the list-item path below, which reports it
+    // as its own finding without putting every following bullet under its severity.
+    if (asHeading && (!asHeading.rest.trim() || isMarkedHeading(line))) {
+      heading = asHeading.severity;
+      const summary = asHeading.rest.trim();
+      if (summary) findings.push({ severity: heading, text: summary });
       continue;
     }
     // Any other heading *clears* the severity rather than leaving it in force.
@@ -164,14 +175,35 @@ function looksLikeHeading(line: string): boolean {
   return /^\*\*.*\*\*:?$/.test(line.trim()) || /:$/.test(stripped) || !/\s{0,}[,;]/.test(stripped);
 }
 
-/** A heading like "## Critical", "Critical issues:", "**Important**". */
-function severityHeading(line: string): FindingSeverity | undefined {
-  const stripped = line
-    .replace(/^#{1,6}\s*/, "")
-    .replace(/[*_`]/g, "")
-    .replace(/[:.]+\s*$/, "")
-    .trim()
-    .toLowerCase();
+/** Whether the line is explicitly marked as a heading, rather than merely looking like one. */
+function isMarkedHeading(line: string): boolean {
+  return /^#{1,6}\s/.test(line) || /^\*\*[^*]+\*\*:?$/.test(line.trim());
+}
+
+/**
+ * A heading like "## Critical", "Critical issues:", "**Important**", and anything
+ * it carries after its label.
+ *
+ * `rest` exists because the most natural way to write a review is one line per
+ * problem with the severity in front of it — `### Critical: the change is against
+ * the wrong stored procedure`. That is 55 characters, so the length cap below
+ * rejected it, and the generic heading rule then cleared the severity: a real
+ * blocking finding parsed to nothing at all, and the review displayed as clean.
+ */
+function severityHeading(
+  line: string,
+): { severity: FindingSeverity; rest: string } | undefined {
+  const bare = line.replace(/^#{1,6}\s*/, "").replace(/[*_`]/g, "").trim();
+
+  // Split on the label's own punctuation first, so the cap applies to the label
+  // and not to the summary after it.
+  const labelled = /^([a-z][a-z -]{0,38}?)\s*[:–—-]\s+(.+)$/i.exec(bare);
+  if (labelled) {
+    const severity = severityOf(labelled[1]);
+    if (severity) return { severity, rest: labelled[2] };
+  }
+
+  const stripped = bare.replace(/[:.]+\s*$/, "").trim().toLowerCase();
   // Headings are short. Without this, a sentence merely containing "critical"
   // would reclassify every bare item after it.
   if (!stripped || stripped.length > 40) return undefined;
@@ -188,7 +220,27 @@ function severityHeading(line: string): FindingSeverity | undefined {
           singular.startsWith(`${word} `),
       )
     ) {
-      return severity;
+      return { severity, rest: "" };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The severity a short label names, whole or by any of its words.
+ *
+ * Shared with the inline path, because "Blocking issue" and "Minor ordering nit"
+ * have to read the same whether they arrive as a heading or in a bullet.
+ */
+function severityOf(label: string): FindingSeverity | undefined {
+  const text = label.trim().toLowerCase();
+  if (!text || text.length > 40) return undefined;
+  for (const severity of SEVERITY_ORDER) {
+    if (SEVERITY_WORDS[severity].includes(text)) return severity;
+  }
+  for (const word of text.split(/[\s-]+/)) {
+    for (const severity of SEVERITY_ORDER) {
+      if (SEVERITY_WORDS[severity].includes(word)) return severity;
     }
   }
   return undefined;

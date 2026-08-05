@@ -2,6 +2,21 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.41.1
+
+- **A finding stated in its own heading is no longer lost.** The most natural way to
+  write a review is one line per problem with the severity in front of it —
+  `### Critical: the change is against the wrong stored procedure`. That is 55
+  characters, so it failed the 40-character label cap that stops a sentence merely
+  containing "critical" from reclassifying everything after it, and the generic
+  heading rule then cleared the severity. A review with a blocking finding and an
+  important one parsed to nothing and displayed as clean. The cap now applies to the
+  label, not to the summary after it.
+
+  A bare `CRITICAL: …` line still reports only itself: a severity heading takes the
+  bullets below it, and treating an unmarked line as a heading is how one blocker was
+  counted as fourteen.
+
 ## 0.41.0
 
 - **A session that fails before running anything leaves its reason behind.** The

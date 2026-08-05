@@ -194,3 +194,71 @@ describe("sections that clear the severity", () => {
     expect(findings.filter((f) => f.severity === "critical")).toHaveLength(2);
   });
 });
+
+describe("a heading that carries its finding", () => {
+  // Verbatim shape from a real SQL object review that reported a blocking problem
+  // and displayed as clean: the severity heading also states the problem, which put
+  // it over the 40-character label cap, and the generic heading rule then cleared
+  // the severity so nothing at all was recorded.
+  const REPLY = [
+    "What I found already in place",
+    "",
+    "The only code change is one line adding SalesMonth to the SELECT list.",
+    "",
+    "### Critical: the change is against the wrong stored procedure",
+    "",
+    "RU-547 has an attachment the earlier stages did not read.",
+    "",
+    "### Important: column position is not controlled by the SELECT list",
+    "",
+    "FieldName is matched by name; order comes from Weight.",
+    "",
+    "The rest of the checklist",
+    "",
+    "- Layer: correct in principle.",
+    "- Encoding: UTF-16LE with BOM intact.",
+    "",
+    "VERDICT: block",
+  ].join("\n");
+
+  it("reads the finding out of the heading that states it", () => {
+    const findings = parseReviewFindings(REPLY);
+    expect(findings).toEqual([
+      { severity: "critical", text: "the change is against the wrong stored procedure" },
+      { severity: "important", text: "column position is not controlled by the SELECT list" },
+    ]);
+  });
+
+  it("blocks on it, and says so", () => {
+    const findings = parseReviewFindings(REPLY);
+    expect(hasBlockingFindings(findings)).toBe(true);
+    expect(summariseFindings(findings)).toBe("1 critical, 1 important");
+  });
+
+  it("does not let the checklist below inherit the last severity", () => {
+    // "The rest of the checklist" clears it. Those bullets are the review saying
+    // things are fine, and counting them was how one blocker became fourteen.
+    expect(parseReviewFindings(REPLY)).toHaveLength(2);
+  });
+
+  it("keeps a bare severity line from claiming the bullets after it", () => {
+    // Not a marked heading, so it reports itself and nothing else. A plain bullet
+    // following it has no severity of its own and is not a finding.
+    const findings = parseReviewFindings(
+      ["CRITICAL: the migration drops a column", "- unrelated observation"].join("\n"),
+    );
+    expect(findings).toEqual([
+      { severity: "critical", text: "the migration drops a column" },
+    ]);
+  });
+
+  it("still treats a severity word in a heading as a section, not a finding", () => {
+    // "### Critical path analysis" names a section; there is no problem stated.
+    const findings = parseReviewFindings(
+      ["### Critical path analysis", "- the overnight proc is the long pole"].join("\n"),
+    );
+    expect(findings).toEqual([
+      { severity: "critical", text: "the overnight proc is the long pole" },
+    ]);
+  });
+});
