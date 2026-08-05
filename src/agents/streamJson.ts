@@ -6,6 +6,8 @@
  * Parsing is isolated here (no I/O) so it can be unit-tested against fixtures.
  */
 
+import type { SessionTokenTotals } from "../domain/taskPipeline";
+
 /** A renderable entry in the chat transcript. */
 export type ChatItem =
   | { kind: "user"; text: string }
@@ -126,6 +128,45 @@ export function contextTokensOf(event: {
     (u.cache_read_input_tokens ?? 0) +
     (u.cache_creation_input_tokens ?? 0);
   return total > 0 ? total : undefined;
+}
+
+/**
+ * Cumulative token totals for the whole session, from a `result` event.
+ *
+ * The exact mirror image of `contextTokensOf` above, reading the same four field
+ * names in the other place — and the distinction is the only thing that makes
+ * either number meaningful:
+ *
+ * - `message.usage` is a *snapshot* of one turn's context. It is what a gauge or
+ *   a compaction threshold wants, and summing it is nonsense.
+ * - the top-level `usage` on `result` is the *run total*, like `total_cost_usd`.
+ *   It is what a cost comparison wants, and reading only the final one per
+ *   session is what keeps it from being counted several times over.
+ *
+ * Getting them the wrong way round does not fail loudly: it reports a plausible
+ * number that is wrong by roughly the number of turns, which is exactly the size
+ * of error that would make a benchmark of "did the handover brief pay for itself"
+ * come out backwards.
+ */
+export function sessionTokensOf(event: StreamEvent): SessionTokenTotals | undefined {
+  if (event.type !== "result") return undefined;
+  const u = event.usage;
+  if (!u) return undefined;
+  const totals: SessionTokenTotals = {
+    input: u.input_tokens ?? 0,
+    output: u.output_tokens ?? 0,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+    cacheCreation: u.cache_creation_input_tokens ?? 0,
+  };
+  // A result carrying an all-zero usage says nothing; undefined lets callers
+  // distinguish "no measurement" from "measured as free", which the report needs
+  // in order to avoid presenting a partial total as a complete one.
+  const any =
+    totals.input > 0 ||
+    totals.output > 0 ||
+    totals.cacheRead > 0 ||
+    totals.cacheCreation > 0;
+  return any ? totals : undefined;
 }
 
 /** Parses a single NDJSON line; returns null for blank or malformed lines. */

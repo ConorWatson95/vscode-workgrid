@@ -37,6 +37,79 @@ function stage(overrides: Partial<TaskStage> = {}): TaskStage {
 const pipeline = (stages: TaskStage[], guidance?: TaskPipeline["guidance"]) =>
   ({ routeId: "sql-change", routeLabel: "SQL change", stages, guidance }) as TaskPipeline;
 
+describe("usage in the report", () => {
+  const measured = (over: Record<string, unknown> = {}) =>
+    stage({
+      subtasks: [
+        {
+          id: "p-1",
+          title: "Preview",
+          prompt: "Run it.",
+          status: "done",
+          startedAt: "2026-08-04T10:00:00Z",
+          finishedAt: "2026-08-04T10:04:00Z",
+          activity: {
+            costUsd: 0.4213,
+            tokens: { input: 12_000, output: 4500, cacheRead: 88_000, cacheCreation: 300 },
+          },
+          ...over,
+        },
+      ],
+    } as Partial<TaskStage>);
+
+  it("puts the cost in the header, not under the command output", () => {
+    const report = formatStageReport("Task", measured(), undefined);
+    const header = report.slice(0, report.indexOf("## "));
+    expect(header).toContain("$0.4213");
+    expect(header).toContain("4m in session");
+    expect(header).toContain("out");
+  });
+
+  it("names the cached share, which is the point of a fresh session per subtask", () => {
+    // 88k of 100.3k input served from cache.
+    expect(formatStageReport("Task", measured(), undefined)).toContain("88.0k cached, 88%");
+  });
+
+  it("says when a total is partial rather than showing a small number", () => {
+    const partial = stage({
+      subtasks: [
+        ...measured().subtasks,
+        {
+          id: "p-2",
+          title: "Older",
+          prompt: "…",
+          status: "done",
+          activity: { toolCounts: { Read: 1 } },
+        },
+      ],
+    } as Partial<TaskStage>);
+    expect(formatStageReport("Task", partial, undefined)).toContain(
+      "1 subtask(s) reported no usage",
+    );
+  });
+
+  it("shows nothing at all when there is not even a duration", () => {
+    const bare = stage({
+      subtasks: [{ id: "p-1", title: "Preview", prompt: "…", status: "done" }],
+    } as Partial<TaskStage>);
+    expect(formatStageReport("Task", bare, undefined)).not.toContain("**Cost:**");
+  });
+
+  it("still reports elapsed time for a stage that ran before cost was recorded", () => {
+    // And does not call it a partial *total* — there is no total, only a duration,
+    // and the two invite different comparisons.
+    const report = formatStageReport("Task", stage(), undefined);
+    expect(report).toContain("4m in session");
+    expect(report).toContain("no cost was recorded for 1 subtask(s)");
+    expect(report).not.toContain("partial");
+  });
+
+  it("totals the whole route, so work pushed to a later stage is still counted", () => {
+    const report = formatTaskReport("Task", pipeline([measured(), measured()]));
+    expect(report).toContain("$0.8426");
+  });
+});
+
 describe("withLiveActivity", () => {
   const running = {
     subtaskId: "p-1",

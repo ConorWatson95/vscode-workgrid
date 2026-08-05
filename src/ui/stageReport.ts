@@ -6,6 +6,13 @@ import {
 } from "../domain/reviewFindings";
 import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
+import {
+  UsageTotals,
+  hasUsage,
+  pipelineUsage,
+  stageUsage,
+  subtasksUsage,
+} from "../domain/stageUsage";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -51,6 +58,67 @@ export function describeFailure(reason: string | undefined): string {
   return text;
 }
 
+/** Compact token count: 128_400 -> "128.4k". Full precision below 10,000. */
+function formatTokens(count: number): string {
+  if (count < 10_000) return count.toLocaleString("en-GB");
+  return `${(count / 1000).toFixed(1)}k`;
+}
+
+/** "4m 12s" — a duration a reader can compare against another run at a glance. */
+function formatElapsed(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * One line of "what this cost", or undefined when nothing was measured.
+ *
+ * A single line by design. It exists to make two runs of the same route
+ * comparable — a cheaper model on a stage, a narrower tool set, a handover brief
+ * instead of rediscovery — and a table nobody reads would not do that. The cached
+ * share is called out because with a fresh session per subtask it is the number
+ * that says whether any of the prompt preamble was reused at all.
+ */
+export function formatUsageLine(totals: UsageTotals): string | undefined {
+  if (!hasUsage(totals)) return undefined;
+
+  const parts: string[] = [];
+  if (totals.costUsd > 0) parts.push(`$${totals.costUsd.toFixed(4)}`);
+  if (totals.elapsedMs > 0) parts.push(`${formatElapsed(totals.elapsedMs)} in session`);
+
+  const { input, output, cacheRead, cacheCreation } = totals.tokens;
+  if (input + output + cacheRead + cacheCreation > 0) {
+    const fresh = input + cacheCreation;
+    const share = fresh + cacheRead > 0 ? Math.round((cacheRead / (fresh + cacheRead)) * 100) : 0;
+    parts.push(
+      `${formatTokens(fresh)} in (${formatTokens(cacheRead)} cached, ${share}%)`,
+      `${formatTokens(output)} out`,
+    );
+  }
+
+  if (parts.length === 0) return undefined;
+
+  // Said out loud rather than left to be inferred from a small-looking total. Two
+  // runs are only comparable if they measured the same work, and a total quietly
+  // missing three subtasks looks like an improvement.
+  //
+  // Worded on whether there is a total to be partial *about*: a stage that ran
+  // before any of this was recorded has a real elapsed time and no money at all,
+  // and calling that a partial total invites a reader to compare it with one.
+  let caveat = "";
+  if (totals.unmeasured > 0) {
+    caveat =
+      totals.measured > 0
+        ? ` · ${totals.unmeasured} subtask(s) reported no usage, so this total is partial`
+        : ` · no cost was recorded for ${totals.unmeasured} subtask(s)`;
+  }
+  return `**Cost:** ${parts.join(" · ")}${caveat}`;
+}
+
 /** One stage's report. */
 export function formatStageReport(
   taskName: string,
@@ -82,6 +150,11 @@ export function formatStageReport(
       `**The review's verdict:** ${stage.verdict === "block" ? "block" : "pass"}  `,
     );
   }
+  // In the header rather than down with the mechanics: the stage total is the
+  // figure a route is tuned on, and burying it under the output of the commands
+  // that produced it is how it went unrecorded for this long.
+  const usage = formatUsageLine(stageUsage(stage));
+  if (usage) lines.push(`${usage}  `);
 
   // What is being asked of the reader, and what to do about it, above everything
   // else — a gate that presents only evidence makes the reader derive the question.
@@ -230,6 +303,12 @@ function formatSubtaskDetail(subtask: Subtask): string[] {
   if (subtask.finishedAt) lines.push(`Finished: ${subtask.finishedAt}  `);
   if (subtask.sessionId) lines.push(`Session: \`${subtask.sessionId}\``);
 
+  // Per subtask as well as per stage: a split stage's cost is rarely spread
+  // evenly, and "which of these five was expensive" is the question that decides
+  // what to change.
+  const usage = formatUsageLine(subtasksUsage([subtask]));
+  if (usage) lines.push("", usage);
+
   const activity = subtask.activity;
   if (!activity) {
     // Said explicitly rather than left blank: an empty section reads as "it did
@@ -299,6 +378,11 @@ export function formatTaskReport(
     "",
     `Route: ${pipeline.routeLabel ?? pipeline.routeId} · ${pipeline.stages.length} stages`,
   ];
+  // The whole-route figure, which is the one a change to the harness is judged
+  // on: a stage that got cheaper by pushing its work into the next stage has not
+  // got cheaper.
+  const total = formatUsageLine(pipelineUsage(pipeline));
+  if (total) parts.push("", total);
   // Stages that never ran are listed but not expanded: a report mostly made of
   // "pending" hides the part worth reading.
   const ran = pipeline.stages.filter((s) => s.subtasks.some((t) => t.activity || t.reply));

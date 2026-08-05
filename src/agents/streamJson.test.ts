@@ -11,9 +11,60 @@ import {
   summariseToolInput,
   encodeUserMessage,
   contextTokensOf,
+  sessionTokensOf,
   compactInfoOf,
   mcpServersOf,
 } from "./streamJson";
+
+describe("sessionTokensOf", () => {
+  it("reads the cumulative top-level usage on a result event", () => {
+    expect(
+      sessionTokensOf({
+        type: "result",
+        usage: {
+          input_tokens: 1200,
+          output_tokens: 3400,
+          cache_read_input_tokens: 98000,
+          cache_creation_input_tokens: 5600,
+        },
+      }),
+    ).toEqual({ input: 1200, output: 3400, cacheRead: 98000, cacheCreation: 5600 });
+  });
+
+  it("ignores message.usage, which is one turn's context and not a total", () => {
+    // The trap this function exists to avoid: the same field names in the other
+    // place. Reading them here would report a per-turn snapshot as a run total.
+    expect(
+      sessionTokensOf({
+        type: "result",
+        message: { usage: { input_tokens: 999, output_tokens: 999 } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for events that are not a result", () => {
+    expect(
+      sessionTokensOf({ type: "assistant", usage: { input_tokens: 50 } }),
+    ).toBeUndefined();
+  });
+
+  it("treats an all-zero usage as no measurement", () => {
+    expect(
+      sessionTokensOf({ type: "result", usage: { input_tokens: 0, output_tokens: 0 } }),
+    ).toBeUndefined();
+  });
+
+  it("does not double-count with contextTokensOf, which reads the other field", () => {
+    const event = {
+      type: "result",
+      usage: { input_tokens: 4_000_000, cache_read_input_tokens: 1_000_000 },
+      message: { usage: { input_tokens: 60_000, cache_read_input_tokens: 70_000 } },
+    };
+    // 130k of context, 5m of cumulative spend — the two must not be confusable.
+    expect(contextTokensOf(event)).toBe(130_000);
+    expect(sessionTokensOf(event)?.input).toBe(4_000_000);
+  });
+});
 
 describe("compactInfoOf", () => {
   it("recognises a compact_boundary and reads pre_tokens", () => {

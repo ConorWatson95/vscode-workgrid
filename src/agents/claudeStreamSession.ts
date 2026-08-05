@@ -17,8 +17,10 @@ import {
   isTurnComplete,
   encodeUserMessage,
   contextTokensOf,
+  sessionTokensOf,
   compactInfoOf,
 } from "./streamJson";
+import { SessionTokenTotals } from "../domain/taskPipeline";
 import {
   HANDOFF_PROMPT,
   Handoff,
@@ -142,6 +144,13 @@ export class ClaudeStreamSession {
   rateLimit?: RateLimitStatus;
   /** Cumulative cost of this session in USD. */
   costUsd?: number;
+  /**
+   * Cumulative tokens for this session, from the latest `result` event.
+   *
+   * Distinct from `contextTokens`, which is the current context size and resets
+   * to zero on compaction. This one only grows, and is what a stage persists.
+   */
+  tokenTotals?: SessionTokenTotals;
   /** True between issuing `/compact` and seeing its result, for feedback. */
   private compacting = false;
   /** True between asking for a handoff and consuming the reply. */
@@ -363,6 +372,12 @@ export class ClaudeStreamSession {
     // total. Cache reads specifically, since a fresh session per subtask means
     // every prompt is a candidate for reuse and nothing said whether any of it was.
     if (event.type === "result") {
+      // Kept as well as logged. The log answers "what is happening"; the field is
+      // what survives the session, and a stage's report and any comparison
+      // between two ways of running one are downstream of it.
+      const totals = sessionTokensOf(event);
+      if (totals) this.tokenTotals = totals;
+
       const usage = event.usage ?? event.message?.usage;
       const cached = usage?.cache_read_input_tokens ?? 0;
       const fresh = usage?.input_tokens ?? 0;

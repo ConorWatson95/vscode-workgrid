@@ -80,6 +80,38 @@ export interface SubtaskActivity {
    * started.
    */
   errors?: string[];
+
+  /**
+   * What this subtask's session cost, in USD.
+   *
+   * The CLI reports it, and it was logged and then dropped — so a route's cost
+   * was visible while it ran and unattributable afterwards. Persisted because
+   * the questions being asked of the harness are comparative: whether a cheaper
+   * model on a stage, a narrower tool set, or a handover brief that prevents
+   * rediscovery actually costs less than what it replaces. None of those can be
+   * answered from a number that no longer exists once the stage ends.
+   */
+  costUsd?: number;
+  /** Cumulative tokens for the session, once it reported a result. */
+  tokens?: SessionTokenTotals;
+}
+
+/**
+ * Cumulative token counts for one agent session.
+ *
+ * Four numbers rather than one total because they price differently and answer
+ * different questions: `cacheRead` is nearly free and is the whole argument for a
+ * stable prompt preamble, while `input` is what a rediscovering session actually
+ * spends. Collapsing them to a total hides the effect being measured.
+ */
+export interface SessionTokenTotals {
+  /** Fresh (uncached) input tokens. */
+  input: number;
+  output: number;
+  /** Input served from the prompt cache. */
+  cacheRead: number;
+  /** Input written *into* the cache, which is charged at a premium. */
+  cacheCreation: number;
 }
 
 /**

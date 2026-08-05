@@ -3,7 +3,7 @@ import { StreamSessionOptions } from "./claudeStreamSession";
 import { ChatItem } from "./streamJson";
 import { DenialWatcher, PermissionDenial } from "./permissionDenials";
 import { StageActivityWatcher } from "./stageActivity";
-import { SubtaskActivity } from "../domain/taskPipeline";
+import { SessionTokenTotals, SubtaskActivity } from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 import { redactSecrets } from "../domain/secretRedaction";
@@ -18,6 +18,15 @@ export interface StageSession {
   readonly lastTurnErrored: boolean;
   /** What the CLI said went wrong, when it did. */
   readonly lastTurnError?: string;
+  /**
+   * Cumulative cost and tokens for the session, once it has reported a result.
+   *
+   * Read from the session rather than accumulated from `items`: the CLI reports
+   * both on its `result` event, which never becomes a transcript item, so no
+   * amount of watching the item stream would find them.
+   */
+  readonly costUsd?: number;
+  readonly tokenTotals?: SessionTokenTotals;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
   off(event: "status", listener: (status: string) => void): unknown;
@@ -216,8 +225,23 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         options?.onDenial?.(denial);
       };
       const denials = (): PermissionDenial[] => watcher.all();
-      const activity = (): SubtaskActivity | undefined =>
-        activityWatcher.isEmpty() ? undefined : activityWatcher.result();
+      // Cost and tokens are taken from the session rather than the watcher: the
+      // CLI reports them on its `result` event, which is not a transcript item, so
+      // the item stream the watcher sees never carries them.
+      //
+      // A subtask with nothing but a cost is still recorded. A stage that only
+      // thought — a planning session that replied without calling a tool — used to
+      // be indistinguishable from one that never ran, and it is precisely the kind
+      // of stage whose cost is being questioned.
+      const activity = (): SubtaskActivity | undefined => {
+        const measured = session.costUsd !== undefined || session.tokenTotals !== undefined;
+        if (activityWatcher.isEmpty() && !measured) return undefined;
+        return {
+          ...activityWatcher.result(),
+          ...(session.costUsd !== undefined ? { costUsd: session.costUsd } : {}),
+          ...(session.tokenTotals ? { tokens: session.tokenTotals } : {}),
+        };
+      };
 
       const lastAssistantText = (): string => {
         const reply = [...session.items]
