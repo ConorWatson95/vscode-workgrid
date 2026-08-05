@@ -27,7 +27,22 @@ export interface TaskWorkspace {
   repositoryRoot: string;
   worktreePath: string;
 
+  /**
+   * The branch the worktree is on *now*, refreshed from git by reconciliation.
+   * Display truth, not identity — see `intendedBranch`.
+   */
   branchName: string;
+  /**
+   * The branch this task is about, recorded once and never refreshed.
+   *
+   * Separate from `branchName` because git is the source of truth for what a
+   * worktree *is* on, and reconciliation therefore adopts whatever it finds. That
+   * made a stage running `git checkout` redefine the task rather than break it:
+   * afterwards nothing was inconsistent, so nothing could be detected, and a review
+   * reported truthfully about a tree nobody had asked about. Optional so tasks
+   * created before this existed are backfilled rather than invalidated.
+   */
+  intendedBranch?: string;
   baseBranch: string;
 
   status: TaskWorkspaceStatus;

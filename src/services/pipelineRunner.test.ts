@@ -97,6 +97,8 @@ function makeRunner(
     pauseOnDenial?: boolean;
     /** Current project config, for resolving stage models afresh. */
     harness?: { routes: RouteDefinition[]; rules: ReviewRule[] };
+    /** The branch the worktree reports being on, for the branch guard. */
+    currentBranch?: string;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -117,6 +119,9 @@ function makeRunner(
       options.onDenial,
       () => options.pauseOnDenial ?? true,
       () => options.harness,
+      options.currentBranch === undefined
+        ? undefined
+        : async () => options.currentBranch,
     ),
   };
 }
@@ -778,5 +783,53 @@ describe("refusals persisted for the sidebar", () => {
     expect(pending.items[0].rule).toBe(
       "PowerShell(tools/jira/Get-JiraAttachment.ps1:*)",
     );
+  });
+});
+
+describe("the branch guard", () => {
+  it("refuses to run a stage when the worktree moved to another branch", async () => {
+    // The reported failure: a rule review spliced in behind a UAT promotion ran on
+    // the branch the promotion left checked out, found no migration scripts, and
+    // reported that absence truthfully about a tree nobody had asked about.
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner } = makeRunner(sessions, { currentBranch: "LIVE_MultiMarket" });
+    const subject = { ...task(), intendedBranch: "bug/dealer-mapping" };
+
+    const report = await runner.advance(subject);
+
+    expect(report.outcome.kind).toBe("blocked");
+    expect(sessions.calls).toHaveLength(0);
+    expect(report.steps.join(" ")).toContain("LIVE_MultiMarket");
+  });
+
+  it("runs normally when the worktree is where it should be", async () => {
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner } = makeRunner(sessions, { currentBranch: "bug/dealer-mapping" });
+    const subject = { ...task(), intendedBranch: "bug/dealer-mapping" };
+
+    await runner.advance(subject);
+    expect(sessions.calls.length).toBeGreaterThan(0);
+  });
+
+  it("lets a stage that may move the worktree run anyway", async () => {
+    // A UAT promotion needs a PR, so moving is its work rather than a mistake.
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner } = makeRunner(sessions, { currentBranch: "LIVE_MultiMarket" });
+    const subject = { ...task(), intendedBranch: "bug/dealer-mapping" };
+    subject.pipeline = {
+      ...subject.pipeline!,
+      stages: subject.pipeline!.stages.map((s) => ({ ...s, mayChangeBranch: true })),
+    };
+
+    await runner.advance(subject);
+    expect(sessions.calls.length).toBeGreaterThan(0);
+  });
+
+  it("does nothing when no branch source is wired in", async () => {
+    // A headless run without one must behave exactly as before.
+    const sessions = fakeSessions({ "": { text: "done" } });
+    const { runner } = makeRunner(sessions);
+    await runner.advance({ ...task(), intendedBranch: "something/else" });
+    expect(sessions.calls.length).toBeGreaterThan(0);
   });
 });

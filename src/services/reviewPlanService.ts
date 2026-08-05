@@ -141,6 +141,19 @@ export class ReviewPlanService {
       `Task "${task.name}": added ${result.added.length} required review(s): ` +
         result.added.map((s) => s.name).join(", "),
     );
+    // Loud, because it is the difference between a review that can prevent something
+    // and one that can only report on it. A rule review spliced in behind a UAT
+    // promotion also runs after a stage that may have moved the worktree, which is
+    // how a migration review came to report truthfully about the wrong branch.
+    if (result.deployedAlready.length > 0) {
+      this.logger.warn(
+        `Task "${task.name}": ${result.added.map((s) => s.name).join(", ")} could only be ` +
+          `placed AFTER ${result.deployedAlready.map((s) => s.name).join(", ")}, which ` +
+          `already ran. These reviews cannot prevent what those stages did — treat their ` +
+          `findings as something to undo, not to avoid. If this rule should always run ` +
+          `before a deployment, the route needs it as a declared stage rather than a rule.`,
+      );
+    }
 
     return ok({ added: result.added, plan: planned.value });
   }

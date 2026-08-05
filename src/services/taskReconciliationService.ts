@@ -59,10 +59,21 @@ export function reconcileTasks(
     matchedPaths.add(key);
     const refreshedBranch = worktree.branch ?? task.branchName;
     const branchChanged = refreshedBranch !== task.branchName;
+    // Backfilled once, from the recorded name rather than from git: a task created
+    // before this field existed may already be sitting on a switched branch, and
+    // taking git's answer would enshrine the wrong branch as the intended one.
+    const backfill = task.intendedBranch === undefined;
     tasks.push({
-      task: branchChanged ? { ...task, branchName: refreshedBranch } : task,
+      task:
+        branchChanged || backfill
+          ? {
+              ...task,
+              branchName: refreshedBranch,
+              intendedBranch: task.intendedBranch ?? task.branchName,
+            }
+          : task,
       worktreeExists: true,
-      changed: branchChanged,
+      changed: branchChanged || backfill,
     });
   }
 

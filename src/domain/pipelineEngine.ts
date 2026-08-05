@@ -82,6 +82,7 @@ function createStage(
       ? { sendBackTo: [...definition.sendBackTo] }
       : {}),
     ...(definition.handoff ? { handoff: true } : {}),
+    ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.
@@ -134,6 +135,16 @@ export interface AppliedRules {
   added: TaskStage[];
   /** Every rule that matched, including ones whose stage was already present. */
   matches: RuleMatch[];
+  /**
+   * Deployment stages that had already run by the time these reviews were added.
+   *
+   * A review's whole purpose is to be in front of a deployment, and where one
+   * cannot be, that is a material fact rather than a detail of ordering: the review
+   * can no longer prevent what has already happened, and it may be running against
+   * a tree a promotion stage moved. Reported so the caller can say so, because the
+   * placement otherwise looks routine.
+   */
+  deployedAlready: TaskStage[];
 }
 
 /**
@@ -164,12 +175,27 @@ export function applyRules(
     added.push(createStage(definition, match.rule.reason));
   }
 
-  if (added.length === 0) return { pipeline, added, matches };
+  if (added.length === 0) {
+    return { pipeline, added, matches, deployedAlready: [] };
+  }
 
   const stages = [...pipeline.stages];
-  stages.splice(ruleInsertionIndex(pipeline.stages), 0, ...added);
+  const at = ruleInsertionIndex(pipeline.stages);
+  stages.splice(at, 0, ...added);
 
-  return { pipeline: { ...pipeline, stages }, added, matches };
+  // Deployments already behind the insertion point. There is nowhere earlier to put
+  // these reviews — a pending stage cannot be placed before one that has run, where
+  // the order would no longer describe anything that happened — so the answer is to
+  // say so rather than to file them quietly and look normal.
+  const deployedAlready = pipeline.stages
+    .slice(0, at)
+    .filter(
+      (stage) =>
+        stage.kind === "deployment" &&
+        (stage.status === "passed" || stage.status === "awaiting-approval"),
+    );
+
+  return { pipeline: { ...pipeline, stages }, added, matches, deployedAlready };
 }
 
 /**

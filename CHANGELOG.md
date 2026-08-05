@@ -2,6 +2,29 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.43.0
+
+- **A task's branch is now tracked, so moving the worktree breaks rather than
+  redefines it.** Git is the source of truth for which branch a worktree is on, and
+  reconciliation therefore adopted whatever it found — so a stage that ran
+  `git checkout` silently made that branch the task's branch. Nothing was
+  inconsistent afterwards, so nothing could be detected: a migration-and-rollback
+  review found no migration scripts on the branch it had moved to and reported that
+  absence truthfully, about a tree nobody had asked about. `intendedBranch` is
+  recorded once and never refreshed (backfilled from the recorded name, not from
+  git, so a task already sitting on a switched branch is not enshrined), and a stage
+  will not start a session — split or run — while the worktree is elsewhere.
+- **`mayChangeBranch` marks the stages where moving is the work.** A UAT promotion
+  goes through a PR and a live publish runs out of the standing publish worktrees, so
+  a blanket prohibition would have broken exactly the stages that need it. Such a
+  stage is told it may move the worktree and asked to return it, and stages after it
+  refuse to run until it is back.
+- **A review spliced in behind a deployment that already ran says so.** There is
+  nowhere earlier to put it — a pending stage cannot be placed before one that has
+  run — so the placement looked routine while the review had lost the ability to
+  prevent anything. It now reports which deployments it could not get in front of,
+  and suggests declaring the stage in the route rather than leaving it to a rule.
+
 ## 0.42.0
 
 - **An approval gate says what it found and what to do about it.** It previously said

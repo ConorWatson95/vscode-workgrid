@@ -667,6 +667,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Read per advance rather than cached: editing a stage's model in
     // harness.json should take effect on the next stage, not the next task.
     () => currentHarness(),
+    // Read from the worktree itself, so a stage that checked out another branch is
+    // caught before the next stage reports on the wrong tree.
+    async (worktreePath) => {
+      const current = await worktreeService.getCurrentBranch(worktreePath);
+      return current.ok ? current.value : undefined;
+    },
   );
 
   // Lets an open report show a stage's commands as they run, rather than nothing

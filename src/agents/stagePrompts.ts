@@ -151,6 +151,17 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `run in-process, while every shell call pays a process launch. Reserve the shell`,
     `for work that genuinely needs it, and when you do use it, combine the steps`,
     `into one command rather than issuing several.`,
+    "",
+    // In the invariant block, because it applies to every stage of every task and
+    // because the failure it prevents is silent: a stage that switched branches to
+    // look for something found the branch it switched to, reported the absence
+    // truthfully, and left a review that was about the wrong tree entirely.
+    `You are already in the worktree and on the branch for this task. Unless this`,
+    `stage is told otherwise below, do not run "git checkout", "git switch" or`,
+    `anything else that changes which branch is checked out here — the worktree is`,
+    `the task, and moving it makes every following stage report on the wrong tree.`,
+    `If what you need is on another branch, say so and stop rather than going to`,
+    `get it.`,
     ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
 
     // Everything below varies per task and per stage, so it comes after the block
@@ -160,6 +171,19 @@ function preamble(context: StageContext, stage: TaskStage): string {
     context.taskDescription ? `Brief: ${context.taskDescription}` : "",
     `Branch: ${context.branchName} (based on ${context.baseBranch})`,
     `Stage: ${stage.name}`,
+    // The exception to the rule above, and it lives down here rather than in that
+    // block so the block stays byte-identical across stages and therefore cacheable.
+    // Promotion is the case: a UAT promotion goes through a PR, and a live publish
+    // runs out of the standing publish worktrees.
+    ...(stage.mayChangeBranch
+      ? [
+          `Unlike the general rule above, this stage MAY change which branch is`,
+          `checked out, because moving is part of its work. Return the worktree to`,
+          `${context.branchName} when you are finished, and say so — the stages after`,
+          `you refuse to run until it is back, since they would otherwise report on`,
+          `whatever tree you left behind.`,
+        ]
+      : []),
     ...(context.handoffs && context.handoffs.length > 0
       ? [
           "",

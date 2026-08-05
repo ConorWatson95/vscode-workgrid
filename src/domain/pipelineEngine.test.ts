@@ -1085,3 +1085,77 @@ describe("holdStageForFindings", () => {
     expect(held.ok && nextAction(held.value).kind).toBe("awaitApproval");
   });
 });
+
+describe("a review that arrives after a deployment has run", () => {
+  const stage = (over: Partial<TaskStage>): TaskStage =>
+    ({
+      id: "s",
+      name: "S",
+      kind: "implementation",
+      status: "pending",
+      intent: "",
+      splittable: false,
+      requiresApproval: false,
+      subtasks: [],
+      ...over,
+    }) as TaskStage;
+
+  const RULES = [
+    {
+      id: "sql-objects",
+      reason: "SQL changed",
+      when: { anyPathMatches: ["**/*.sql"] },
+      stage: { id: "r-sql", label: "SQL object review", kind: "domainReview", intent: "Review." },
+    },
+  ] as never;
+
+  it("reports the deployments it could not get in front of", () => {
+    // There is nowhere earlier to put it: a pending stage cannot be placed before one
+    // that has run. So the fact is reported rather than filed quietly.
+    const pipeline = {
+      routeId: "sql-quick",
+      stages: [
+        stage({ id: "change", status: "passed" }),
+        stage({ id: "deploy-dev", kind: "deployment", status: "passed" }),
+        stage({ id: "deploy-uat", kind: "deployment", status: "passed" }),
+        stage({ id: "gate", kind: "humanVerification", status: "pending" }),
+      ],
+    } as TaskPipeline;
+
+    const result = applyRules(pipeline, ["tools/sql/x.sql"], RULES);
+    expect(result.added.map((s) => s.id)).toEqual(["r-sql"]);
+    expect(result.deployedAlready.map((s) => s.id)).toEqual(["deploy-dev", "deploy-uat"]);
+  });
+
+  it("reports nothing when the review lands in front of every deployment", () => {
+    const pipeline = {
+      routeId: "sql-quick",
+      stages: [
+        stage({ id: "change", status: "passed" }),
+        stage({ id: "deploy-dev", kind: "deployment", status: "pending" }),
+      ],
+    } as TaskPipeline;
+
+    const result = applyRules(pipeline, ["tools/sql/x.sql"], RULES);
+    expect(result.added.map((s) => s.id)).toEqual(["r-sql"]);
+    expect(result.deployedAlready).toEqual([]);
+  });
+});
+
+describe("mayChangeBranch", () => {
+  it("is snapshotted onto the stage from the route", () => {
+    // A promotion goes through a PR, so moving the worktree is part of its work; a
+    // stage that has run keeps the permission it ran with.
+    const route = {
+      id: "r",
+      label: "R",
+      stages: [
+        { id: "promote", label: "Promote", kind: "deployment", intent: "i", mayChangeBranch: true },
+        { id: "review", label: "Review", kind: "codeReview", intent: "i", gate: "approval" },
+      ],
+    } as never;
+    const pipeline = createPipeline(route);
+    expect(pipeline.stages[0].mayChangeBranch).toBe(true);
+    expect(pipeline.stages[1].mayChangeBranch).toBeUndefined();
+  });
+});

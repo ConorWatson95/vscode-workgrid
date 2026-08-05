@@ -201,6 +201,7 @@ function parseStage(
     splittable: raw.splittable === true,
     gate: gate as StageGate,
     ...(raw.handoff === true ? { handoff: true } : {}),
+    ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
   };
 }

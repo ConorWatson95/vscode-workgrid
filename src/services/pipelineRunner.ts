@@ -20,6 +20,7 @@ import {
   startSubtask,
 } from "../domain/pipelineEngine";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
+import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import {
   hasBlockingFindings,
   parseReviewFindings,
@@ -189,7 +190,39 @@ export class PipelineRunner {
      */
     private readonly stageModelSource: () => StageModelSource | undefined = () =>
       undefined,
+    /**
+     * The branch a worktree is currently on, or undefined if it cannot be read.
+     *
+     * Injected and optional, so the runner's tests need no git and a headless run
+     * without it behaves exactly as before.
+     */
+    private readonly currentBranch?: (
+      worktreePath: string,
+    ) => Promise<string | undefined>,
   ) {}
+
+  /**
+   * Whether the worktree is on the task's branch, for a stage that requires it.
+   *
+   * Per stage, not per advance: a promotion stage may legitimately need to move the
+   * worktree — a UAT promotion goes through a PR — so the question is not "is this
+   * the right branch" but "does *this* stage depend on being on it". A review does;
+   * a deployment that promotes does not.
+   *
+   * Undefined when no branch source is injected, so the runner's tests need no git
+   * and a headless run without one behaves exactly as before.
+   */
+  private async checkBranch(
+    task: TaskWorkspace,
+    stage: TaskStage,
+  ): Promise<BranchMismatch | undefined> {
+    const source = this.currentBranch;
+    if (!source || stage.mayChangeBranch) return undefined;
+    const actual = await source(task.worktreePath);
+    // A git failure is not a mismatch: refusing to run because a call returned
+    // nothing would strand the task for a reason the message could not explain.
+    return actual ? branchMismatch(task.intendedBranch, actual) : undefined;
+  }
 
   /** The model a stage should run on now, not when the task was created. */
   private modelFor(task: TaskWorkspace, stage: TaskStage): string | undefined {
@@ -326,6 +359,34 @@ export class PipelineRunner {
       if (!pipeline) return { outcome: { kind: "unharnessed" }, steps };
 
       const action = nextAction(pipeline);
+
+      // Ahead of the dispatch, so it covers splitting as well as running: both start
+      // an agent session in the worktree, and a planning session that reads the wrong
+      // tree produces a plan for work that is not there. Keyed on the stage about to
+      // act, because a promotion stage may legitimately have moved the worktree —
+      // a UAT promotion goes through a PR.
+      if (action.kind === "split" || action.kind === "run") {
+        const mismatch = await this.checkBranch(current, action.stage);
+        if (mismatch) {
+          this.logger.error(
+            `Harness [${current.name}] "${action.stage.name}" not run. ${mismatch.message}`,
+          );
+          steps.push(
+            `"${action.stage.name}" was not run: the worktree is on ` +
+              `"${mismatch.actual}", not "${mismatch.intended}".`,
+          );
+          return {
+            outcome: {
+              kind: "blocked",
+              stageId: action.stage.id,
+              stageName: action.stage.name,
+              reason: mismatch.message,
+            },
+            steps,
+          };
+        }
+      }
+
       switch (action.kind) {
         case "done":
           return { outcome: { kind: "done" }, steps };
@@ -515,6 +576,7 @@ export class PipelineRunner {
     denied?: PermissionDenial[];
   }> {
     const { stage, subtask } = action;
+
     const context = this.contextFor(task, stage.id);
 
     // A behaviour review is asked for a checklist; everything else does the work.

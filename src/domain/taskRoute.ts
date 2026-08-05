@@ -158,6 +158,21 @@ export interface RouteStageDefinition {
    * itself, which the next stage can simply read.
    */
   handoff?: boolean;
+  /**
+   * Whether this stage may change which branch the worktree has checked out.
+   *
+   * Off by default, and the default is the safety property: a stage that switched
+   * branches to go and look for something redefined the task, because git is the
+   * source of truth for a worktree's branch and reconciliation adopts what it finds.
+   * A migration review did exactly that, found no migration scripts on the branch it
+   * had moved to, and reported the absence truthfully about the wrong tree.
+   *
+   * On for the stages where moving is the work: a UAT promotion goes through a PR,
+   * and a live publish runs out of the standing publish worktrees. Such a stage is
+   * asked to return the worktree to the task's branch when it is done, and any later
+   * stage without this flag refuses to run until it is.
+   */
+  mayChangeBranch?: boolean;
 }
 
 export interface RouteDefinition {

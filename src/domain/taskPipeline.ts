@@ -175,6 +175,11 @@ export interface TaskStage {
   /** Carry this stage's conclusion to later stages; see the route definition. */
   handoff?: boolean;
   /**
+   * This stage may move the worktree to another branch; see the route definition.
+   * Snapshotted at creation, so a stage that ran keeps the permission it ran with.
+   */
+  mayChangeBranch?: boolean;
+  /**
    * What a review stage concluded, in its own words: `block` means it said the work
    * may not proceed.
    *
