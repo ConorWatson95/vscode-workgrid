@@ -57,16 +57,25 @@ class FakeSessions implements StageSessions {
   }
 }
 
-function runner(sessions: FakeSessions, timeoutMs = 1000) {
+function runner(sessions: FakeSessions, timeoutMs = 1000, logger = silentLogger) {
   return new ClaudeStageSessionRunner(
     sessions,
     () => ({ cwd: "/repo", autoCompactThreshold: 160_000, model: "opus" }) as Omit<
       StreamSessionOptions,
       "command"
     >,
-    silentLogger,
+    logger,
     timeoutMs,
   );
+}
+
+/** Captures error lines, so what a reader would actually see can be asserted. */
+function capturingLogger() {
+  const errors: string[] = [];
+  return {
+    logger: { info: () => {}, warn: () => {}, debug: () => {}, error: (m: string) => errors.push(m) } as never,
+    errors,
+  };
 }
 
 describe("ClaudeStageSessionRunner", () => {
@@ -207,6 +216,36 @@ describe("failure reasons", () => {
     const result = await promise;
     expect(result.ok).toBe(false);
     expect(result.error).toBe("error_max_turns");
+  });
+
+  it("logs the reason and how far it got, at error level", async () => {
+    // The whole failure used to arrive as one info line saying a stage failed.
+    // stderr went to debug, which the output channel discards at its default
+    // level, so the cause was gone by the time anyone looked.
+    const { logger, errors } = capturingLogger();
+    const sessions = new FakeSessions();
+    const promise = runner(sessions, 1000, logger).run(TASK, "p", "stage:sub-1");
+
+    sessions.session.lastTurnErrored = true;
+    sessions.session.lastTurnError = "error_max_turns";
+    sessions.session.settle("waiting");
+    await promise;
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("error_max_turns");
+    expect(errors[0]).toContain("stage:sub-1");
+    expect(errors[0]).toContain("no activity recorded");
+  });
+
+  it("says nothing at error level when the stage succeeded", async () => {
+    const { logger, errors } = capturingLogger();
+    const sessions = new FakeSessions();
+    const promise = runner(sessions, 1000, logger).run(TASK, "p", "stage:sub-1");
+    sessions.session.reply("done");
+    sessions.session.settle("waiting");
+    await promise;
+
+    expect(errors).toEqual([]);
   });
 
   it("falls back to the generic sentence when the CLI said nothing", async () => {

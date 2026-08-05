@@ -2,6 +2,22 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.40.3
+
+- **A failure now leaves a trail, not one line.** 0.40.2 fixed the reason string but
+  not where it went: the CLI's stderr was logged at `debug`, which the output channel
+  discards unless someone has set the level to Debug, and an errored result was never
+  logged at all. So one info line was the entire record. An errored turn now logs at
+  error level with the subtype, the CLI's message and its stderr (redacted), and every
+  failing path through the stage runner logs the reason, the session id and how far it
+  got — because "died having run no tools" and "died after forty" read identically
+  from a reason alone.
+- **Show What This Did leads with the failure.** The reason sat halfway down, below
+  the tool counts, reading as a footnote to a successful run. It is now the first
+  thing under the header, and the CLI's machine-readable subtypes are explained:
+  `error_max_turns` says the stage ran out of turns and should be narrowed or split,
+  rather than leaving the reader to find that out.
+
 ## 0.40.2
 
 - **A failed stage says what actually went wrong.** The reason was the fixed string

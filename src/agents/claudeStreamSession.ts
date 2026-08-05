@@ -27,6 +27,7 @@ import {
   parseHandoff,
 } from "./handoff";
 import { buildCliArgs } from "./claudeCliArgs";
+import { redactSecrets } from "../domain/secretRedaction";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 
@@ -396,6 +397,20 @@ export class ClaudeStreamSession {
           undefined;
         const detail = this.stderrTail.trim();
         if (detail) this.pushItem({ kind: "tool-result", text: detail, isError: true });
+        // Logged here, at error level, because this is the only place the CLI's
+        // account of the failure exists. stderr goes to debug — which a
+        // LogOutputChannel discards unless someone has set the level to Debug —
+        // so a failed stage used to produce exactly one line, the generic
+        // sentence, and the cause was thrown away before anyone could ask for it.
+        // Redacted: a failing deployment command reports itself back in full.
+        this.logger.error(
+          "Claude turn errored" +
+            (event.subtype ? ` (${event.subtype})` : "") +
+            (this.lastTurnError ? `: ${redactSecrets(this.lastTurnError)}` : "") +
+            (detail && detail !== this.lastTurnError
+              ? `\nstderr: ${redactSecrets(detail)}`
+              : ""),
+        );
       }
       this.busy = false;
       this.setStatus("waiting");

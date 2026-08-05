@@ -17,6 +17,39 @@ import { redactSecrets } from "../domain/secretRedaction";
  * failure mode of a report is being subtly wrong about what happened.
  */
 
+/**
+ * Turns a failure reason into something a reader can act on.
+ *
+ * The reasons that matter most are the CLI's own machine-readable subtypes, which
+ * say precisely what happened and nothing at all about what to do about it. A
+ * reader seeing `error_max_turns` for the first time has to go and find out that
+ * it means the stage ran out of turns rather than hit a bug in its work.
+ */
+export function describeFailure(reason: string | undefined): string {
+  const text = reason?.trim();
+  if (!text) return "The agent session failed without saying why.";
+
+  if (text === "error_max_turns") {
+    return (
+      "`error_max_turns` — the agent used up its turn budget before finishing. " +
+      "Usually a stage doing too much: narrow its intent, or split it."
+    );
+  }
+  if (text === "error_during_execution") {
+    return (
+      "`error_during_execution` — the CLI itself failed mid-turn, rather than the " +
+      "work being wrong. Re-running the stage is the first thing to try."
+    );
+  }
+  if (/rate.?limit|429|usage limit/i.test(text)) {
+    return `${text}\n\nRate-limited rather than wrong. The stage can be re-run once the limit resets.`;
+  }
+  if (/timed out after/i.test(text)) {
+    return `${text}\n\nThe work may have been progressing — check the commands below. Raise \`taskWorkspaces.stageTimeoutMinutes\` if stages here legitimately take this long.`;
+  }
+  return text;
+}
+
 /** One stage's report. */
 export function formatStageReport(
   taskName: string,
@@ -34,6 +67,22 @@ export function formatStageReport(
   ];
   if (stage.model) lines.push(`**Model:** ${stage.model}  `);
   if (stage.addedByRule) lines.push(`**Added by rule:** ${stage.addedByRule}  `);
+
+  // Above the intent, because someone opening the report of a failed stage is
+  // asking one question. The reason was recorded per subtask and rendered halfway
+  // down, under the tool counts, where it read as a footnote to a successful run.
+  const failures = stage.subtasks.filter((subtask) => subtask.status === "failed");
+  if (failures.length > 0) {
+    lines.push("", "## ⚠ Failed", "");
+    for (const subtask of failures) {
+      const reason = subtask.failureReason?.trim();
+      lines.push(
+        failures.length > 1 ? `- **${subtask.title}:** ${describeFailure(reason)}` : describeFailure(reason),
+      );
+    }
+    lines.push("", "_What it did before failing is below._");
+  }
+
   lines.push("", "## Intent", "", stage.intent);
 
   const guidance = (pipeline?.guidance ?? []).filter(
@@ -107,6 +156,8 @@ function formatSubtask(subtask: Subtask): string[] {
   if (subtask.startedAt) lines.push(`Started: ${subtask.startedAt}`);
   if (subtask.finishedAt) lines.push(`Finished: ${subtask.finishedAt}`);
   if (subtask.sessionId) lines.push(`Session: \`${subtask.sessionId}\``);
+  // Not repeated in full: the reason is at the top of the report now, and the
+  // point here is only to mark which subtask it belonged to.
   if (subtask.failureReason) lines.push("", `**Failed:** ${subtask.failureReason}`);
 
   const activity = subtask.activity;

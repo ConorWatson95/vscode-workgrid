@@ -174,6 +174,20 @@ describe("formatStageReport", () => {
     expect(report).toContain("got partway");
   });
 
+  it("leads with the failure, above the intent", () => {
+    // Someone opening the report of a failed stage is asking one question, and
+    // the reason used to sit halfway down under the tool counts.
+    const failed = stage({
+      status: "failed",
+      subtasks: [
+        { id: "p-1", title: "Review", prompt: "p", status: "failed", failureReason: "error_max_turns" },
+      ],
+    } as Partial<TaskStage>);
+    const report = formatStageReport("t", failed, undefined);
+    expect(report.indexOf("Failed")).toBeLessThan(report.indexOf("## Intent"));
+    expect(report).toContain("turn budget");
+  });
+
   it("handles a stage that has not run yet", () => {
     const pending = stage({ status: "pending", subtasks: [] });
     expect(formatStageReport("t", pending, undefined)).toContain("no subtasks yet");

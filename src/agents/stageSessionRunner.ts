@@ -151,6 +151,18 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         clearTimeout(timer);
         session.off("status", onStatus);
         session.off("item", onItem);
+        // Every failing path logs here, so none can be added later that reports
+        // nothing. The counts matter as much as the reason: "died having run no
+        // tools" and "died after forty" are different problems, and the failure
+        // reason alone reads the same either way.
+        if (!result.ok) {
+          this.logger.error(
+            `Harness [${task.name}] ${label} failed: ${result.error ?? "unknown"}` +
+              ` (session ${result.sessionId ?? "unknown"}, ` +
+              `${describeProgress(result.activity)}).` +
+              " Open Show What This Did on the stage for the full account.",
+          );
+        }
         // The CLI has gone, so anything still holding is holding for nothing —
         // and a row the user could click but never satisfy is worse than none.
         if (gateSession) this.gate?.release(task.id);
@@ -258,4 +270,22 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       for (const item of session.items) onItem(item);
     });
   }
+}
+
+/**
+ * How far a subtask got, for a failure line. Deliberately short: this goes in a
+ * log, and the report is where the detail lives.
+ */
+function describeProgress(activity: SubtaskActivity | undefined): string {
+  if (!activity) return "no activity recorded";
+  const tools = Object.entries(activity.toolCounts ?? {}).reduce(
+    (total, [, count]) => total + count,
+    0,
+  );
+  const parts = [`${tools} tool call(s)`];
+  const written = activity.pathsWritten?.length ?? 0;
+  if (written > 0) parts.push(`${written} file(s) written`);
+  const commands = activity.commands?.length ?? 0;
+  if (commands > 0) parts.push(`${commands} command(s) run`);
+  return parts.join(", ");
 }
