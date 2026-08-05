@@ -83,6 +83,7 @@ function createStage(
       : {}),
     ...(definition.handoff ? { handoff: true } : {}),
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
+    ...(definition.verify ? { verify: definition.verify } : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.

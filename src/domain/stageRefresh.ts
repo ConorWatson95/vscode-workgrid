@@ -37,7 +37,7 @@ export interface StageDefinitionSource {
  *
  * `workflow` is absent because it is a *subtask* field, not a stage one.
  */
-const REFRESHABLE = ["intent", "model"] as const;
+const REFRESHABLE = ["intent", "model", "verify"] as const;
 
 /**
  * Brings every not-yet-started stage into line with current config.
@@ -309,7 +309,7 @@ function findDefinition(
   source: StageDefinitionSource,
   routeId: string,
   stage: Pick<TaskStage, "id" | "addedByRule">,
-): { intent?: string; model?: string; handoff?: boolean } | undefined {
+): { intent?: string; model?: string; handoff?: boolean; verify?: string } | undefined {
   if (stage.addedByRule) {
     return source.rules.find((rule) => rule.stage.id === stage.id)?.stage;
   }

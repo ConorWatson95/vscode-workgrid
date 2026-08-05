@@ -202,6 +202,7 @@ function parseStage(
     gate: gate as StageGate,
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
+    ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
   };
 }

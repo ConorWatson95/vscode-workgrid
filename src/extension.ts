@@ -30,6 +30,7 @@ import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
+import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
@@ -695,6 +696,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const current = await worktreeService.getCurrentBranch(worktreePath);
       return current.ok ? current.value : undefined;
     },
+    // Turns a stage's declared check into its outcome, so "done" stops meaning
+    // "the session ended without error".
+    new NodeVerificationRunner(),
   );
 
   // Lets an open report show a stage's commands as they run, rather than nothing

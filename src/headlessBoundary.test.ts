@@ -18,6 +18,9 @@ import { describe, expect, it } from "vitest";
 /** Entry points a headless run has to be able to construct. */
 const HEADLESS_ROOTS = [
   "src/services/pipelineRunner.ts",
+  // A headless run has to be able to decide a stage's outcome from a process, so the
+  // verification runner is on the path a CLI must construct.
+  "src/services/nodeVerificationRunner.ts",
   "src/services/taskWorkspaceService.ts",
   "src/services/reviewPlanService.ts",
   "src/services/taskReconciliationService.ts",

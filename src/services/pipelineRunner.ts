@@ -21,6 +21,12 @@ import {
 } from "../domain/pipelineEngine";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
+import { redactSecrets } from "../domain/secretRedaction";
+import {
+  CommandOutcome,
+  VerificationCommandRunner,
+  describeVerification,
+} from "./verificationRunner";
 import {
   hasBlockingFindings,
   parseReviewFindings,
@@ -199,6 +205,14 @@ export class PipelineRunner {
     private readonly currentBranch?: (
       worktreePath: string,
     ) => Promise<string | undefined>,
+    /**
+     * Runs a stage's declared verification command.
+     *
+     * Optional: a stage with no `verify` never needs it, and a runner built without
+     * one behaves exactly as before — so this adds a check without making process
+     * execution a prerequisite for driving a route at all.
+     */
+    private readonly verifier?: VerificationCommandRunner,
   ) {}
 
   /**
@@ -212,6 +226,33 @@ export class PipelineRunner {
    * Undefined when no branch source is injected, so the runner's tests need no git
    * and a headless run without one behaves exactly as before.
    */
+  /**
+   * Runs a stage's declared check, recording it where the stage's work is recorded.
+   *
+   * The command and its output go into the subtask's activity as well as the log, so
+   * the report shows the evidence rather than only the verdict — a stage that failed
+   * verification is exactly the one whose output someone needs.
+   */
+  private async runVerification(
+    task: TaskWorkspace,
+    stage: TaskStage,
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<CommandOutcome | undefined> {
+    this.logger.info(
+      `Harness [${task.name}] verifying "${stage.name}": ${redactSecrets(command)}`,
+    );
+    const outcome = await this.verifier!.run(command, task.worktreePath, signal);
+    if (outcome.exitCode === 0) {
+      this.logger.info(`Harness [${task.name}] "${stage.name}" verified (exit 0).`);
+    } else {
+      this.logger.error(
+        `Harness [${task.name}] ${describeVerification(command, outcome)}`,
+      );
+    }
+    return outcome;
+  }
+
   private async branchState(
     task: TaskWorkspace,
   ): Promise<BranchMismatch | undefined> {
@@ -748,6 +789,30 @@ export class PipelineRunner {
       return { task: await this.save(task, pipeline), failed: false, question };
     }
 
+    // The agent has said it is done; now something other than the agent decides.
+    //
+    // This is the one place a stage outcome stops being self-reported. Run only when
+    // the stage is about to settle — the last unresolved subtask — because the check
+    // certifies the stage's work, not each unit of it, and re-running a build once
+    // per subtask would cost minutes to learn the same thing.
+    const verification =
+      reply.ok && stage.verify && this.verifier && isLastUnresolved(stage, subtask.id)
+        ? await this.runVerification(task, stage, stage.verify, signal)
+        : undefined;
+    if (verification && verification.exitCode !== 0) {
+      // Overrides the reply: the session ended cleanly and the work is not proven.
+      reply = {
+        ...reply,
+        ok: false,
+        error: describeVerification(stage.verify!, verification),
+      };
+      steps.push(
+        `"${stage.name}" failed verification (exit ${verification.exitCode}).`,
+      );
+    } else if (verification) {
+      steps.push(`"${stage.name}" passed verification.`);
+    }
+
     if (reply.ok && producesChecklist(stage.kind)) {
       const items = parseChecklistReply(reply.text);
       const recorded = recordChecklist(pipeline, stage.id, items);
@@ -771,7 +836,12 @@ export class PipelineRunner {
       // Kept so the stage is not invisible afterwards. On failure especially: a
       // stage that went wrong is the one you most want to be able to read.
       reply: reply.text,
-      activity: reply.activity,
+      // The check is appended to what the stage did, not kept apart from it: it ran
+      // in the same worktree for the same purpose, and a reader asking "what proves
+      // this?" is reading this section.
+      activity: verification
+        ? withVerification(reply.activity, stage.verify!, verification)
+        : reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
 
@@ -844,3 +914,39 @@ export class PipelineRunner {
 }
 
 
+
+/**
+ * Whether this is the last subtask of its stage still to resolve.
+ *
+ * Decides when a stage's verification runs. A stage's check certifies the stage, so
+ * running it per subtask would pay for the same build several times to learn the
+ * same thing — and a check run halfway through a split stage would fail on work
+ * that was always going to be finished by the next subtask.
+ */
+function isLastUnresolved(stage: TaskStage, subtaskId: string): boolean {
+  return !stage.subtasks.some(
+    (subtask) =>
+      subtask.id !== subtaskId &&
+      (subtask.status === "pending" || subtask.status === "active"),
+  );
+}
+
+/** Folds a verification into a subtask's activity, creating one if it had none. */
+function withVerification(
+  activity: SubtaskActivity | undefined,
+  command: string,
+  outcome: CommandOutcome,
+): SubtaskActivity {
+  const header = `$ ${redactSecrets(command)}   [verification, exit ${outcome.exitCode}]`;
+  const block = outcome.output ? `${header}\n${outcome.output}` : header;
+  return {
+    ...(activity ?? {}),
+    commands: [...(activity?.commands ?? []), redactSecrets(command)],
+    output: [activity?.output, block].filter(Boolean).join("\n\n"),
+    // A command that could not start is the session's problem, not the work's, so it
+    // goes where session-level failures go rather than reading as a failed build.
+    errors: outcome.spawnError
+      ? [...(activity?.errors ?? []), `verification could not run: ${outcome.spawnError}`]
+      : activity?.errors,
+  };
+}

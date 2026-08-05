@@ -2,6 +2,32 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.46.0
+
+- **A stage's outcome can come from a process instead of the agent's word for it.** A
+  route stage may declare `verify`, a command run in the worktree once its last
+  subtask succeeds; a non-zero exit fails the stage whatever the agent reported. This
+  closes the harness's oldest correctness gap: `finishSubtask(..., "done")` recorded
+  that a session ended without error, not that the build compiled or the object
+  deployed — and everything above it, gates and handoffs and reviews holding a route,
+  rested on an agent's account of its own work. Observed in one afternoon: the same
+  review reporting `block` and then `pass` on identical evidence.
+
+  A command that cannot *start* is reported differently from one that fails: nothing
+  verified the work either way, so the stage still fails, but the message says to fix
+  the command rather than the work. The command and its output are recorded with the
+  stage's activity and shown in the report, redacted — a stage that failed
+  verification is exactly the one whose output is wanted. Read from the repository
+  root like the rest of the harness config, never from a worktree, so a branch cannot
+  choose the command that certifies it.
+
+- **"Show What This Did" leads with what the agent reported.** The reply was last,
+  under the tool counts, the file lists, the commands and their output — so reading a
+  finished stage's conclusion meant scrolling past everything that produced it. Order
+  is now findings, the reply, checklist, guidance, intent, and the mechanics last —
+  collapsed once the stage has settled, left open while it is running or if it failed,
+  which are the two times those details are the point.
+
 ## 0.45.0
 
 - **Rules ask before appending more than a couple of reviews.** Rule-added stages are

@@ -180,6 +180,12 @@ export interface TaskStage {
    */
   mayChangeBranch?: boolean;
   /**
+   * Command whose exit code decides this stage's outcome; see the route definition.
+   * Refreshed for a stage that has not started, like `intent`, so correcting a check
+   * does not require a new task.
+   */
+  verify?: string;
+  /**
    * What a review stage concluded, in its own words: `block` means it said the work
    * may not proceed.
    *

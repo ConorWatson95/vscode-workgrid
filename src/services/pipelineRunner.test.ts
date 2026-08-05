@@ -76,7 +76,10 @@ function fakeSessions(
     async run(_task, prompt, label) {
       calls.push({ label, prompt });
       const key = Object.keys(replies).find((k) => label.startsWith(k));
-      const reply = key ? replies[key] : undefined;
+      // `key !== undefined`, not `key ?`: "" is a legitimate catch-all prefix and is
+      // falsy, so a reply registered under it was silently ignored and every caller
+      // got the default "ok, done" instead of what it asked for.
+      const reply = key !== undefined ? replies[key] : undefined;
       return {
         ok: reply?.ok ?? true,
         text: reply?.text ?? "done",
@@ -99,9 +102,12 @@ function makeRunner(
     harness?: { routes: RouteDefinition[]; rules: ReviewRule[] };
     /** The branch the worktree reports being on, for the branch guard. */
     currentBranch?: string;
+    /** Canned verification outcomes, keyed by the command run. */
+    verify?: Record<string, { exitCode: number; output?: string; spawnError?: string }>;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
+  const verified: string[] = [];
   const changed: ChangedPathsSource = {
     getChangedPaths: async () => ok(options.paths ?? []),
   };
@@ -122,7 +128,17 @@ function makeRunner(
       options.currentBranch === undefined
         ? undefined
         : async () => options.currentBranch,
+      options.verify === undefined
+        ? undefined
+        : {
+            run: async (command) => {
+              verified.push(command);
+              const canned = options.verify?.[command] ?? { exitCode: 0 };
+              return { exitCode: canned.exitCode, output: canned.output ?? "", spawnError: canned.spawnError };
+            },
+          },
     ),
+    verified,
   };
 }
 
@@ -920,5 +936,132 @@ describe("the branch guard", () => {
     const { runner } = makeRunner(sessions);
     await runner.advance({ ...task(), intendedBranch: "something/else" });
     expect(sessions.calls.length).toBeGreaterThan(0);
+  });
+});
+
+describe("declared verification", () => {
+  /** A route whose one stage's outcome is decided by a command, not by the agent. */
+  const VERIFIED: RouteDefinition = {
+    id: "test",
+    label: "Test",
+    description: "d",
+    stages: [
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Build it.",
+        splittable: false,
+        gate: "auto",
+        verify: "dotnet build",
+      },
+      {
+        id: "human-verification",
+        label: "Sign off",
+        kind: "humanVerification",
+        intent: "Check it.",
+        splittable: false,
+        gate: "approval",
+      },
+    ],
+  };
+
+  const verifiedTask = () => ({
+    ...task(),
+    pipeline: createPipeline(VERIFIED),
+  });
+
+  it("fails a stage whose check fails, however cleanly the agent finished", async () => {
+    // The gap this closes: finishSubtask(..., "done") recorded that a session ended
+    // without error, not that anything worked.
+    const sessions = fakeSessions({ "": { text: "All done, builds cleanly." } });
+    const { runner, repo, verified } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: 1, output: "CS1002: ; expected" } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    expect(verified).toEqual(["dotnet build"]);
+    expect(report.outcome.kind).toBe("blocked");
+    const saved = await repo.get(subject.id);
+    const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.status).toBe("failed");
+    expect(build?.subtasks[0].failureReason).toContain("CS1002");
+  });
+
+  it("passes a stage whose check passes", async () => {
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo, verified } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: 0, output: "Build succeeded" } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(verified).toEqual(["dotnet build"]);
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages.find((s) => s.id === "build")?.status).toBe("passed");
+  });
+
+  it("records the command and its output where the stage's work is recorded", async () => {
+    // A stage that failed verification is exactly the one whose output is wanted.
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: 1, output: "CS1002" } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    const activity = saved?.pipeline?.stages.find((s) => s.id === "build")?.subtasks[0]
+      .activity;
+    expect(activity?.commands).toContain("dotnet build");
+    expect(activity?.output).toContain("CS1002");
+  });
+
+  it("fails the stage when the command cannot run at all", async () => {
+    // Nothing verified it, so it must not pass — but the fault is the command's.
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: -1, spawnError: "spawn ENOENT" } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.status).toBe("failed");
+    expect(build?.subtasks[0].failureReason).toContain("could not be started");
+  });
+
+  it("does not verify a stage the agent already failed", async () => {
+    // There is nothing to certify, and running a build over a stage that never
+    // finished wastes minutes to learn what is already known.
+    const sessions = fakeSessions({ "": { ok: false, text: "" } });
+    const { runner, repo, verified } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: 0 } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+    expect(verified).toEqual([]);
+  });
+
+  it("does nothing for a stage that declares no check", async () => {
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo, verified } = makeRunner(sessions, { verify: {} });
+    const subject = task();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+    expect(verified).toEqual([]);
   });
 });

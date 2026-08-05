@@ -296,3 +296,85 @@ describe("credentials", () => {
     expect(report).not.toContain("S3cr3t!Value");
   });
 });
+
+describe("reading order", () => {
+  it("puts what the agent reported above the commands and output", () => {
+    // The reported complaint: "I always find myself scrolling forever". The reply is
+    // what the report is opened for and it used to be last, under the tool counts,
+    // the file lists, the commands and their output.
+    const report = formatStageReport("t", stage(), pipeline([stage()]));
+    const reply = report.indexOf("What the agent reported");
+    expect(reply).toBeGreaterThan(-1);
+    expect(reply).toBeLessThan(report.indexOf("Commands run"));
+    expect(reply).toBeLessThan(report.indexOf("### Output"));
+    // The intent is the instruction you wrote, not something it found out.
+    expect(reply).toBeLessThan(report.indexOf("## Intent"));
+  });
+
+  it("collapses the mechanics once the stage has settled", () => {
+    const report = formatStageReport("t", stage({ status: "passed" }), undefined);
+    expect(report).toContain("<details><summary>What it did");
+  });
+
+  it("leaves them open while the stage is still running", () => {
+    // Mid-run they are the point: it is how you tell whether it is progressing.
+    const report = formatStageReport("t", stage({ status: "active" }), undefined);
+    expect(report).not.toContain("<details><summary>What it did");
+    expect(report).toContain("## What it did");
+  });
+
+  it("leaves them open when the stage failed", () => {
+    const failed = stage({
+      status: "failed",
+      subtasks: [
+        {
+          id: "p-1",
+          title: "Preview",
+          prompt: "p",
+          status: "failed",
+          failureReason: "exit 1",
+          reply: "it broke",
+          activity: { toolCounts: { PowerShell: 1 }, commands: ["build"], output: "error" },
+        },
+      ],
+    } as Partial<TaskStage>);
+    const report = formatStageReport("t", failed, undefined);
+    expect(report).not.toContain("<details><summary>What it did");
+  });
+
+  it("keeps findings above the reply, being the reason to read it", () => {
+    const review = stage({
+      kind: "domainReview",
+      subtasks: [
+        {
+          id: "r-1",
+          title: "Review",
+          prompt: "p",
+          status: "done",
+          reply: "### Critical: wrong proc\n\nDetail here.",
+        },
+      ],
+    } as Partial<TaskStage>);
+    const report = formatStageReport("t", review, undefined);
+    expect(report.indexOf("## Findings")).toBeLessThan(
+      report.indexOf("What the agent reported"),
+    );
+  });
+});
+
+describe("declared verification", () => {
+  it("names the command that decided the outcome", () => {
+    // Whether an outcome came from a process or from the agent's word for it is not
+    // otherwise visible, and they mean very different things.
+    const verified = stage({ verify: "dotnet build -warnaserror" });
+    expect(formatStageReport("t", verified, undefined)).toContain(
+      "**Verified by:** `dotnet build -warnaserror`",
+    );
+  });
+
+  it("masks a credential in the command", () => {
+    const verified = stage({ verify: 'sqlcmd -S x -U deploy -P S3cr3t!Value -Q "select 1"' });
+    const report = formatStageReport("t", verified, undefined);
+    expect(report).not.toContain("S3cr3t!Value");
+  });
+});

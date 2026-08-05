@@ -71,6 +71,12 @@ export function formatStageReport(
   // The verdict is stripped out of the reply before it is stored, so this is the
   // only place it appears. A held stage whose verdict said nothing on screen was
   // indistinguishable from a clean one.
+  // Named even when it passed. The whole point of a declared check is that the
+  // outcome came from a process rather than the agent's word for it, and a reader
+  // cannot tell which they are looking at unless the report says.
+  if (stage.verify) {
+    lines.push(`**Verified by:** \`${redactSecrets(stage.verify)}\`  `);
+  }
   if (stage.verdict) {
     lines.push(
       `**The review's verdict:** ${stage.verdict === "block" ? "block" : "pass"}  `,
@@ -98,7 +104,38 @@ export function formatStageReport(
     lines.push("", "_What it did before failing is below._");
   }
 
-  lines.push("", "## Intent", "", stage.intent);
+  if (stage.subtasks.length === 0) {
+    lines.push("", "## Intent", "", stage.intent, "", "_This stage has no subtasks yet._");
+    return redactSecrets(lines.join("\n"));
+  }
+
+  // A review's findings, then what the agent said, then everything else. This order
+  // is the answer to "I always find myself scrolling forever": the reply is what the
+  // report is opened for, and it used to sit at the very bottom, under the tool
+  // counts, the file lists, the commands and their output.
+  const findings = parseReviewFindings(
+    stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
+  );
+  if (findings.length > 0) {
+    lines.push(
+      "",
+      `## Findings — ${summariseFindings(findings)}`,
+      "",
+      formatFindings(findings),
+    );
+  }
+
+  for (const subtask of stage.subtasks) {
+    lines.push("", "---", "", ...formatSubtaskReply(subtask, stage.subtasks.length > 1));
+  }
+
+  const checklist = stage.checklist ?? [];
+  if (checklist.length > 0) {
+    lines.push("", "## Verification items raised", "");
+    for (const item of checklist) {
+      lines.push(`- [${item.checked ? "x" : " "}] ${item.text}`);
+    }
+  }
 
   const guidance = (pipeline?.guidance ?? []).filter(
     (note) => note.stageId === stage.id,
@@ -108,38 +145,24 @@ export function formatStageReport(
     for (const note of guidance) lines.push(`- ${note.text}`);
   }
 
-  if (stage.subtasks.length === 0) {
-    lines.push("", "_This stage has no subtasks yet._");
-    return redactSecrets(lines.join("\n"));
-  }
+  // Below the reply, because it is the instruction the stage was given rather than
+  // anything it found out — you wrote it, and it is in the route.
+  lines.push("", "## Intent", "", stage.intent);
 
+  // The mechanics last, and collapsed once the stage has settled cleanly. They are
+  // what you want while a stage runs or when one has gone wrong, and noise when you
+  // are reading a finished stage's conclusion.
+  const settled = stage.status === "passed" || stage.status === "skipped";
   for (const subtask of stage.subtasks) {
-    lines.push("", "---", "", ...formatSubtask(subtask));
-  }
-
-  // Lifted out of the prose and put where a reader looks first. A review's whole
-  // output is a list of things to do about the code, and it used to be buried in
-  // whatever paragraphs the agent wrote around it.
-  const findings = parseReviewFindings(
-    stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
-  );
-  if (findings.length > 0) {
-    lines.splice(
-      lines.indexOf("## Intent"),
-      0,
-      `## Findings — ${summariseFindings(findings)}`,
+    const detail = formatSubtaskDetail(subtask);
+    if (detail.length === 0) continue;
+    const heading = `What ${stage.subtasks.length > 1 ? `"${subtask.title}"` : "it"} did — tools, commands and output`;
+    lines.push(
       "",
-      formatFindings(findings),
-      "",
+      ...(settled
+        ? [`<details><summary>${heading}</summary>`, "", ...detail, "", "</details>"]
+        : [`## ${heading}`, "", ...detail]),
     );
-  }
-
-  const checklist = stage.checklist ?? [];
-  if (checklist.length > 0) {
-    lines.push("", "## Verification items raised", "");
-    for (const item of checklist) {
-      lines.push(`- [${item.checked ? "x" : " "}] ${item.text}`);
-    }
   }
 
   return redactSecrets(lines.join("\n"));
@@ -166,39 +189,57 @@ export function withLiveActivity(
   return { ...stage, subtasks };
 }
 
-function formatSubtask(subtask: Subtask): string[] {
-  const lines: string[] = [`## ${subtask.title}`, "", `Status: ${subtask.status}`];
-  if (subtask.startedAt) lines.push(`Started: ${subtask.startedAt}`);
-  if (subtask.finishedAt) lines.push(`Finished: ${subtask.finishedAt}`);
-  if (subtask.sessionId) lines.push(`Session: \`${subtask.sessionId}\``);
-  // Not repeated in full: the reason is at the top of the report now, and the
-  // point here is only to mark which subtask it belonged to.
-  if (subtask.failureReason) lines.push("", `**Failed:** ${subtask.failureReason}`);
+/**
+ * The half of a subtask a reader opens the report for: what the agent said.
+ *
+ * Split from the mechanics because the reply used to come *after* the tool counts,
+ * the file lists, the commands and their output — so reading a finished stage's
+ * conclusion meant scrolling past everything that produced it.
+ */
+function formatSubtaskReply(subtask: Subtask, name: boolean): string[] {
+  const lines: string[] = [];
+  if (name) lines.push(`## ${subtask.title}`, "");
 
-  const activity = subtask.activity;
-  if (!activity && subtask.status === "failed") {
-    // Distinguished from the case below, because they read identically and mean
-    // opposite things. "No activity was recorded" invites the reader to look for
-    // what it did; this says there is nothing to look for.
+  if (subtask.reply?.trim()) {
+    lines.push("## What the agent reported", "", subtask.reply.trim());
+  } else if (subtask.status === "failed" && !subtask.activity) {
+    // Distinguished from "nothing was recorded", because they read identically and
+    // mean opposite things: one invites the reader to go looking for what it did,
+    // this says there is nothing to find.
     lines.push(
-      "",
       "_The session failed without calling a single tool, so there is nothing to show " +
         "for it — the reason above is the whole of what happened._",
     );
-    return withReply(lines, subtask);
+  } else if (!subtask.reply?.trim()) {
+    lines.push(`_This subtask recorded no reply. Status: ${subtask.status}._`);
   }
+  return lines;
+}
+
+/**
+ * The mechanics: tools, files, commands, output. Collapsed by the caller once a
+ * stage has settled cleanly — wanted while a stage runs or when one went wrong, and
+ * noise when reading a finished stage's conclusion.
+ *
+ * Returns an empty list when there is nothing to show, so the caller can omit the
+ * section rather than render an empty one.
+ */
+function formatSubtaskDetail(subtask: Subtask): string[] {
+  const lines: string[] = [];
+  if (subtask.startedAt) lines.push(`Started: ${subtask.startedAt}  `);
+  if (subtask.finishedAt) lines.push(`Finished: ${subtask.finishedAt}  `);
+  if (subtask.sessionId) lines.push(`Session: \`${subtask.sessionId}\``);
+
+  const activity = subtask.activity;
   if (!activity) {
     // Said explicitly rather than left blank: an empty section reads as "it did
-    // nothing", when the truth is that this subtask ran before activity was kept.
-    // Falls through rather than returning, because the reply may still be there —
-    // and a stage that failed with an explanation is the one most worth reading.
+    // nothing", when the truth is this subtask ran before activity was kept.
+    if (subtask.status === "failed") return [];
     lines.push("", "_No activity was recorded for this subtask._");
-    return withReply(lines, subtask);
+    return lines;
   }
 
-  const tools = Object.entries(activity.toolCounts ?? {}).sort(
-    (a, b) => b[1] - a[1],
-  );
+  const tools = Object.entries(activity.toolCounts ?? {}).sort((a, b) => b[1] - a[1]);
   if (tools.length > 0) {
     lines.push(
       "",
@@ -221,8 +262,8 @@ function formatSubtask(subtask: Subtask): string[] {
     lines.push("", "### Output", "", "```", activity.output.trimEnd(), "```");
   }
 
-  // Above the files-read block: when a session fails, this is what is being
-  // looked for, and it is often the only thing here.
+  // Above the files-read block: when a session fails, this is what is being looked
+  // for, and it is often the only thing here.
   if ((activity.errors ?? []).length > 0) {
     lines.push("", "### Session errors", "");
     for (const error of activity.errors ?? []) {
@@ -231,8 +272,8 @@ function formatSubtask(subtask: Subtask): string[] {
   }
 
   if ((activity.pathsRead ?? []).length > 0) {
-    // Last and collapsed: useful for "what did it base this on", but long and
-    // rarely the thing being looked for.
+    // Last, and collapsed even inside the collapsed section: useful for "what did it
+    // base this on", but long and rarely what is being looked for.
     lines.push(
       "",
       "<details><summary>Files read (" + (activity.pathsRead?.length ?? 0) + ")</summary>",
@@ -242,14 +283,6 @@ function formatSubtask(subtask: Subtask): string[] {
     lines.push("", "</details>");
   }
 
-  return withReply(lines, subtask);
-}
-
-/** Appends the agent's own words, which are worth having whatever else is missing. */
-function withReply(lines: string[], subtask: Subtask): string[] {
-  if (subtask.reply?.trim()) {
-    lines.push("", "### What the agent reported", "", subtask.reply.trim());
-  }
   return lines;
 }
 

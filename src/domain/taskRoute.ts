@@ -173,6 +173,24 @@ export interface RouteStageDefinition {
    * stage without this flag refuses to run until it is.
    */
   mayChangeBranch?: boolean;
+  /**
+   * A command whose exit code decides whether this stage passed.
+   *
+   * The harness's oldest correctness gap is that a stage outcome is *self-reported*:
+   * `finishSubtask(..., "done")` records that the agent's session ended without
+   * error, not that the build compiled or the object deployed. Everything built on
+   * top of that — gates, handoffs, reviews holding a route — rests on an agent's
+   * account of its own work. Observed in one afternoon: the same review reporting
+   * `block` and then `pass` on identical evidence.
+   *
+   * Run in the worktree after the stage's last subtask succeeds. A non-zero exit
+   * fails the stage whatever the agent claimed, and its output is recorded, so the
+   * verdict comes from a process rather than from prose.
+   *
+   * Read from the repository root like the rest of the harness config, never from a
+   * worktree — a branch must not be able to choose the command that certifies it.
+   */
+  verify?: string;
 }
 
 export interface RouteDefinition {
