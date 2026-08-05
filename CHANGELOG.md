@@ -2,6 +2,14 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.40.2
+
+- **A failed stage says what actually went wrong.** The reason was the fixed string
+  "the agent reported an error", while the CLI's own account — a turn limit, a rate
+  limit, a spawn failure — sat in a transcript item nobody persisted. The stage row,
+  the report and the log now carry the CLI's words, its subtype (e.g.
+  `error_max_turns`) or its stderr, in that order.
+
 ## 0.40.1
 
 - **An existing task picks up stage handoffs without being recreated.** `handoff`

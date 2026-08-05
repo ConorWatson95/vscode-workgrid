@@ -16,6 +16,8 @@ export interface StageSession {
   readonly items: readonly ChatItem[];
   readonly sessionId?: string;
   readonly lastTurnErrored: boolean;
+  /** What the CLI said went wrong, when it did. */
+  readonly lastTurnError?: string;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
   off(event: "status", listener: (status: string) => void): unknown;
@@ -224,7 +226,12 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             ok: !errored,
             text: lastAssistantText(),
             sessionId: session.sessionId,
-            error: errored ? "the agent reported an error" : undefined,
+            // The CLI's own account of it, not a generic sentence. This string is
+            // the stage's failure reason: it lands on the row, in the report and in
+            // the log, and is the only thing a reader has to go on.
+            error: errored
+              ? (session.lastTurnError ?? "the agent reported an error")
+              : undefined,
             denials: denials(),
             activity: activity(),
           });

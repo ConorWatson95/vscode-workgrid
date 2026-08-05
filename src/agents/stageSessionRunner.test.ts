@@ -23,6 +23,7 @@ class FakeSession extends EventEmitter implements StageSession {
   items: ChatItem[] = [];
   sessionId = "sess-1";
   lastTurnErrored = false;
+  lastTurnError?: string;
 
   reply(text: string): void {
     this.items.push({ kind: "assistant", text });
@@ -189,5 +190,32 @@ describe("ClaudeStageSessionRunner", () => {
     sessions.session.settle("failed");
 
     await expect(promise).resolves.toMatchObject({ ok: true, text: "the real answer" });
+  });
+});
+
+describe("failure reasons", () => {
+  it("reports what the CLI said, not a generic sentence", async () => {
+    // "the agent reported an error" was all a reader got: the cause — a turn
+    // limit, a rate limit, a spawn failure — sat in a transcript item nobody kept.
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "stage:sub-1");
+
+    sessions.session.lastTurnErrored = true;
+    sessions.session.lastTurnError = "error_max_turns";
+    sessions.session.settle("waiting");
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("error_max_turns");
+  });
+
+  it("falls back to the generic sentence when the CLI said nothing", async () => {
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "stage:sub-1");
+
+    sessions.session.lastTurnErrored = true;
+    sessions.session.settle("waiting");
+
+    expect((await promise).error).toBe("the agent reported an error");
   });
 });

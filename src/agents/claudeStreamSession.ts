@@ -124,6 +124,15 @@ export class ClaudeStreamSession {
    * output on further input, so the next send should resume a fresh process.
    */
   lastTurnErrored = false;
+  /**
+   * What the CLI said went wrong, when it did.
+   *
+   * Kept because the alternative is what callers had: a boolean. A stage that
+   * failed reported "the agent reported an error" and the actual cause -- a turn
+   * limit, a rate limit, a spawn failure -- was in a transcript item nobody
+   * persisted. The one thing a failure has to carry is why.
+   */
+  lastTurnError?: string;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
   /** Model the CLI reported for this session (short form), once known. */
@@ -246,6 +255,7 @@ export class ClaudeStreamSession {
     this.pushItem({ kind: "user", text: trimmed });
     this.busy = true;
     this.lastTurnErrored = false;
+    this.lastTurnError = undefined;
     this.stderrTail = "";
     this.setStatus("running");
     this.child.stdin.write(encodeUserMessage(trimmed));
@@ -377,6 +387,13 @@ export class ClaudeStreamSession {
       // rather than writing into a CLI that has stopped responding.
       if (event.type === "result" && event.is_error) {
         this.lastTurnErrored = true;
+        // The CLI's own words first, then its subtype (e.g. "error_max_turns"),
+        // then stderr. Any of the three beats a generic sentence.
+        this.lastTurnError =
+          (typeof event.result === "string" && event.result.trim()) ||
+          event.subtype ||
+          this.stderrTail.trim() ||
+          undefined;
         const detail = this.stderrTail.trim();
         if (detail) this.pushItem({ kind: "tool-result", text: detail, isError: true });
       }
