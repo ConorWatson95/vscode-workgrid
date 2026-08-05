@@ -33,6 +33,16 @@ export interface StageActivity {
   pathsRead: string[];
   /** Text the tools returned, capped. Empty when nothing notable came back. */
   output: string;
+  /**
+   * Error text that belonged to no tool call: the CLI's own failures.
+   *
+   * A session that dies before calling anything produces no tools, no commands
+   * and no reply, so this is the only thing it leaves behind. It used to be
+   * dropped — the item arrives with no owning tool, and the filter below only
+   * kept output from command tools — which is why such a stage's report said
+   * nothing at all and read as though it had never started.
+   */
+  errors: string[];
 }
 
 /** Tools whose argument is a command rather than a path. */
@@ -61,6 +71,10 @@ export const MAX_OUTPUT_CHARS = 20000;
  */
 const TAIL_CHARS = 3000;
 
+/** Session-level errors kept, and how much of each. Small: they repeat. */
+const MAX_ERRORS = 5;
+const MAX_ERROR_CHARS = 2000;
+
 /** Says what is missing and how much, rather than trailing off. */
 function omissionMarker(chars: number): string {
   return `…${chars.toLocaleString("en-GB")} characters omitted here; the end of the output follows…`;
@@ -78,6 +92,7 @@ export class StageActivityWatcher {
   private readonly written: string[] = [];
   private readonly read: string[] = [];
   private readonly chunks: string[] = [];
+  private readonly errors: string[] = [];
   private outputChars = 0;
   private truncated = false;
   /** The call a result belongs to: items carry no ids, so it is the last `tool`. */
@@ -94,9 +109,18 @@ export class StageActivityWatcher {
     }
     if (item.kind !== "tool-result") return;
 
+    const owner = this.pending?.name;
+
+    // An error with no owning tool call is the session itself failing, and it is
+    // the whole of what a stage that died on startup leaves behind. Kept before
+    // the command-tool filter below, which would otherwise discard it.
+    if (item.isError && !owner) {
+      this.recordError(item.textFull ?? item.text);
+      return;
+    }
+
     // Only command output is kept. File reads are recoverable from the repository
     // and would swamp the useful part; an edit's result is a confirmation.
-    const owner = this.pending?.name;
     if (!owner || !COMMAND_TOOLS.has(owner)) return;
     this.append(this.pending?.detail, item.textFull ?? item.text, item.isError);
   }
@@ -118,6 +142,25 @@ export class StageActivityWatcher {
     if (READ_TOOLS.has(tool)) {
       if (!this.read.includes(value)) this.read.push(value);
     }
+  }
+
+  /**
+   * Keeps a session-level error, bounded independently of command output.
+   *
+   * Its own small budget rather than a share of `MAX_OUTPUT_CHARS`: a stage that
+   * fails repeatedly must not be able to crowd out the record of what it did, and
+   * a stage that fails on startup has nothing else to spend the budget on.
+   */
+  private recordError(text: string): void {
+    const body = redactSecrets(text.trim());
+    if (!body) return;
+    if (this.errors.includes(body)) return;
+    if (this.errors.length >= MAX_ERRORS) return;
+    this.errors.push(
+      body.length > MAX_ERROR_CHARS
+        ? `${body.slice(0, MAX_ERROR_CHARS)}\n${omissionMarker(body.length - MAX_ERROR_CHARS)}`
+        : body,
+    );
   }
 
   private append(
@@ -166,13 +209,19 @@ export class StageActivityWatcher {
       pathsWritten: [...this.written],
       pathsRead: [...this.read],
       output: this.chunks.join("\n\n"),
+      errors: [...this.errors],
     };
   }
 
   /** True when nothing worth recording happened, so nothing need be persisted. */
   isEmpty(): boolean {
     return (
-      Object.keys(this.toolCounts).length === 0 && this.chunks.length === 0
+      Object.keys(this.toolCounts).length === 0 &&
+      this.chunks.length === 0 &&
+      // A session that failed before calling a tool is *not* empty: the error is
+      // the only account of it there will ever be, and treating it as nothing is
+      // what made such a stage report look like one that never ran.
+      this.errors.length === 0
     );
   }
 }

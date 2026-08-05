@@ -396,7 +396,15 @@ export class ClaudeStreamSession {
           this.stderrTail.trim() ||
           undefined;
         const detail = this.stderrTail.trim();
-        if (detail) this.pushItem({ kind: "tool-result", text: detail, isError: true });
+        // Emitted as an item, not only logged, so the stage runner's activity
+        // watcher can keep it: for a session that failed before calling a tool
+        // this is the only trace of it, and it was previously pushed only when
+        // stderr had something in it — leaving an error that arrived in the
+        // result event itself with nowhere to go.
+        const trace = [this.lastTurnError, detail !== this.lastTurnError ? detail : ""]
+          .filter((part) => part && part.length > 0)
+          .join("\n");
+        if (trace) this.pushItem({ kind: "tool-result", text: trace, isError: true });
         // Logged here, at error level, because this is the only place the CLI's
         // account of the failure exists. stderr goes to debug — which a
         // LogOutputChannel discards unless someone has set the level to Debug —

@@ -70,6 +70,15 @@ export interface SubtaskActivity {
   pathsRead?: string[];
   /** Command output, capped. */
   output?: string;
+  /**
+   * Error output belonging to no tool call — the CLI's own complaints.
+   *
+   * Kept separately because it is the only evidence a session that failed before
+   * running anything leaves behind. Without it such a subtask recorded no tools,
+   * no commands and no reply, and its report read as though the stage had never
+   * started.
+   */
+  errors?: string[];
 }
 
 /**

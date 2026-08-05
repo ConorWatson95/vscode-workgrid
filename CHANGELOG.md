@@ -2,6 +2,21 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.41.0
+
+- **A session that fails before running anything leaves its reason behind.** The
+  CLI's error arrives as an item belonging to no tool call, and the activity watcher
+  only kept output from command tools — so it was discarded, the subtask recorded no
+  tools, no commands and no reply, and `isEmpty()` reported nothing worth persisting.
+  The report was then blank and read as though the stage had never started, which is
+  precisely the case where the reason is the only thing there is to see. Session-level
+  errors are now captured (redacted, capped, deduplicated) and shown under **Session
+  errors**, and the CLI's message is emitted as an item rather than only when stderr
+  happened to be non-empty.
+- **A failed session is no longer described as one with nothing recorded.** "No
+  activity was recorded for this subtask" invites the reader to go looking for what it
+  did; a stage that died on startup gets told plainly that there is nothing to find.
+
 ## 0.40.3
 
 - **A failure now leaves a trail, not one line.** 0.40.2 fixed the reason string but

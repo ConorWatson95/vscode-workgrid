@@ -140,6 +140,44 @@ describe("StageActivityWatcher", () => {
   });
 });
 
+describe("a session that failed before doing anything", () => {
+  it("keeps an error that belongs to no tool call", () => {
+    // The reported symptom: a stage failed and its report was blank, reading as
+    // though it had never started. The CLI's error arrives with no owning tool, so
+    // the command-tool filter discarded the only trace of what happened.
+    const watcher = watch([result("Error: unknown model 'sonnet-5-preview'", true)]);
+    expect(watcher.result().errors).toEqual(["Error: unknown model 'sonnet-5-preview'"]);
+  });
+
+  it("is not empty, so the error is persisted", () => {
+    // isEmpty() decides whether anything is recorded at all. Counting this as
+    // nothing is what made the failure unrecoverable.
+    expect(watch([result("boom", true)]).isEmpty()).toBe(false);
+  });
+
+  it("still ignores a tool's own error output here", () => {
+    // That belongs to the command, and is already kept under Output with its
+    // [failed] marker. Duplicating it would bury the session-level ones.
+    const activity = watch([tool("Bash", "dotnet build"), result("CS1002", true)]).result();
+    expect(activity.errors).toEqual([]);
+    expect(activity.output).toContain("[failed]");
+  });
+
+  it("masks credentials in a session error and caps a long one", () => {
+    const activity = watch([
+      result("failed: Password=S3cr3t!Value", true),
+      result("x".repeat(5000), true),
+    ]).result();
+    expect(activity.errors[0]).not.toContain("S3cr3t!Value");
+    expect(activity.errors[1].length).toBeLessThan(3000);
+    expect(activity.errors[1]).toContain("characters omitted");
+  });
+
+  it("does not repeat an identical error", () => {
+    expect(watch([result("same", true), result("same", true)]).result().errors).toHaveLength(1);
+  });
+});
+
 describe("credentials", () => {
   it("never records a credential, so none reaches the state file", () => {
     const watcher = new StageActivityWatcher();

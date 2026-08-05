@@ -161,6 +161,17 @@ function formatSubtask(subtask: Subtask): string[] {
   if (subtask.failureReason) lines.push("", `**Failed:** ${subtask.failureReason}`);
 
   const activity = subtask.activity;
+  if (!activity && subtask.status === "failed") {
+    // Distinguished from the case below, because they read identically and mean
+    // opposite things. "No activity was recorded" invites the reader to look for
+    // what it did; this says there is nothing to look for.
+    lines.push(
+      "",
+      "_The session failed without calling a single tool, so there is nothing to show " +
+        "for it — the reason above is the whole of what happened._",
+    );
+    return withReply(lines, subtask);
+  }
   if (!activity) {
     // Said explicitly rather than left blank: an empty section reads as "it did
     // nothing", when the truth is that this subtask ran before activity was kept.
@@ -193,6 +204,15 @@ function formatSubtask(subtask: Subtask): string[] {
 
   if (activity.output?.trim()) {
     lines.push("", "### Output", "", "```", activity.output.trimEnd(), "```");
+  }
+
+  // Above the files-read block: when a session fails, this is what is being
+  // looked for, and it is often the only thing here.
+  if ((activity.errors ?? []).length > 0) {
+    lines.push("", "### Session errors", "");
+    for (const error of activity.errors ?? []) {
+      lines.push("```", error.trimEnd(), "```");
+    }
   }
 
   if ((activity.pathsRead ?? []).length > 0) {

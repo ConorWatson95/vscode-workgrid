@@ -188,6 +188,46 @@ describe("formatStageReport", () => {
     expect(report).toContain("turn budget");
   });
 
+  it("shows the session's own error when no tool ever ran", () => {
+    const died = stage({
+      status: "failed",
+      subtasks: [
+        {
+          id: "p-1",
+          title: "Review",
+          prompt: "p",
+          status: "failed",
+          failureReason: "error_during_execution",
+          activity: {
+            toolCounts: {},
+            commands: [],
+            pathsWritten: [],
+            pathsRead: [],
+            output: "",
+            errors: ["Error: MCP server 'atlassian' failed to start"],
+          },
+        },
+      ],
+    } as Partial<TaskStage>);
+    const report = formatStageReport("t", died, undefined);
+    expect(report).toContain("### Session errors");
+    expect(report).toContain("MCP server 'atlassian' failed to start");
+  });
+
+  it("says a failed session did nothing, rather than that nothing was recorded", () => {
+    // The two read identically and mean opposite things: one invites the reader to
+    // look for what it did, the other says there is nothing to look for.
+    const died = stage({
+      status: "failed",
+      subtasks: [
+        { id: "p-1", title: "Review", prompt: "p", status: "failed", failureReason: "boom" },
+      ],
+    } as Partial<TaskStage>);
+    const report = formatStageReport("t", died, undefined);
+    expect(report).toContain("without calling a single tool");
+    expect(report).not.toContain("No activity was recorded");
+  });
+
   it("handles a stage that has not run yet", () => {
     const pending = stage({ status: "pending", subtasks: [] });
     expect(formatStageReport("t", pending, undefined)).toContain("no subtasks yet");
