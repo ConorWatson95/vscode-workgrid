@@ -65,6 +65,17 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       heading = asHeading;
       continue;
     }
+    // Any other heading *clears* the severity rather than leaving it in force.
+    //
+    // Without this, one "Must fix before UAT promotion" section made every bullet
+    // in the rest of the document critical — including a long "Other review points"
+    // section whose whole purpose was to say those things were fine. A real report
+    // with one blocker was counted as fourteen, which is exactly the direction that
+    // matters now that findings hold the route.
+    if (looksLikeHeading(line)) {
+      heading = undefined;
+      continue;
+    }
 
     const item = listItem(line);
     if (item === undefined) continue;
@@ -131,6 +142,28 @@ function label(severity: FindingSeverity, count: number): string {
   return severity;
 }
 
+/**
+ * Whether a line is a heading of any kind, severity or not.
+ *
+ * Tolerant because a reply's markdown does not survive intact — headings arrive as
+ * `### Other review points`, as `**Other review points**`, and as a bare short
+ * line. All three have to end the preceding section, or a severity heading leaks
+ * over everything below it.
+ *
+ * A trailing full stop disqualifies a line: that is a sentence, and treating short
+ * sentences as headings would clear the severity mid-list.
+ */
+function looksLikeHeading(line: string): boolean {
+  if (/^#{1,6}\s/.test(line)) return true;
+  if (listItem(line) !== undefined) return false;
+
+  const stripped = line.replace(/[*_`]/g, "").trim();
+  if (!stripped || stripped.length > 60) return false;
+  if (/[.!?]$/.test(stripped)) return false;
+  // A bolded line on its own, or a short colon-terminated label.
+  return /^\*\*.*\*\*:?$/.test(line.trim()) || /:$/.test(stripped) || !/\s{0,}[,;]/.test(stripped);
+}
+
 /** A heading like "## Critical", "Critical issues:", "**Important**". */
 function severityHeading(line: string): FindingSeverity | undefined {
   const stripped = line
@@ -180,10 +213,24 @@ function inlineSeverity(
     /^[[(]\s*([a-z][a-z -]*?)\s*[\])]\s*(.*)$/i.exec(text) ??
     /^[*_`\s]*([a-z][a-z -]*?)[*_`\s]*[:–—-]\s+(.*)$/i.exec(text);
   if (!match) return undefined;
-  const word = match[1].trim().toLowerCase();
+  const label = match[1].trim().toLowerCase();
+
+  // Whole label first, since that is what a bare "CRITICAL:" is.
   for (const severity of SEVERITY_ORDER) {
-    if (SEVERITY_WORDS[severity].includes(word)) {
+    if (SEVERITY_WORDS[severity].includes(label)) {
       return { severity, rest: match[2] };
+    }
+  }
+
+  // Then any word of it: real reviews write "Minor ordering nit:" and "Blocking
+  // issue:", not the single word the format asked for. Bounded to a short label so
+  // this reads a marker, not a sentence that happens to end in a colon.
+  if (label.length > 40) return undefined;
+  for (const word of label.split(/[\s-]+/)) {
+    for (const severity of SEVERITY_ORDER) {
+      if (SEVERITY_WORDS[severity].includes(word)) {
+        return { severity, rest: match[2] };
+      }
     }
   }
   return undefined;

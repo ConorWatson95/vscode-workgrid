@@ -139,3 +139,58 @@ describe("formatFindings", () => {
     );
   });
 });
+
+describe("sections that clear the severity", () => {
+  // Shaped like a real SQL object review: one blocker, then a long section whose
+  // whole purpose is to say the rest is fine.
+  const REPORT = [
+    "SQL object review complete. No SQL was changed in this stage.",
+    "",
+    "Must fix before UAT promotion",
+    "- Migration 004 hard-codes Bespoke_KPI.Id = 49; UAT has no Id 49.",
+    "",
+    "Other review points",
+    "- Sargability is fine: equality predicates on PeriodId.",
+    "- Join cardinality is pre-existing and shared by all six sibling procs.",
+    "- NULL handling is sound.",
+    "- Minor ordering nit: apply 002 before 001.",
+    "",
+    "Manufacturers affected",
+    "- NissanGB only, 1 of the 6.",
+  ].join("\n");
+
+  it("counts the blocker once, not the whole document", () => {
+    // The reported bug: one "Must fix" heading made fourteen findings critical,
+    // because a non-severity heading did not clear the context.
+    const findings = parseReviewFindings(REPORT);
+    const critical = findings.filter((f) => f.severity === "critical");
+    expect(critical).toHaveLength(1);
+    expect(critical[0].text).toContain("Bespoke_KPI.Id = 49");
+  });
+
+  it("does not classify the cleared sections at all", () => {
+    const findings = parseReviewFindings(REPORT);
+    expect(findings.map((f) => f.text)).not.toContain("NULL handling is sound.");
+  });
+
+  it("still reads an explicit marker inside a cleared section", () => {
+    // "Minor ordering nit:" carries its own severity, so it survives the clear.
+    const findings = parseReviewFindings(REPORT);
+    expect(findings.some((f) => f.severity === "suggestion")).toBe(true);
+  });
+
+  it("clears on a markdown heading too", () => {
+    const findings = parseReviewFindings(
+      ["## Critical", "- real one", "## Notes", "- not a finding"].join("\n"),
+    );
+    expect(findings).toHaveLength(1);
+  });
+
+  it("does not treat a short sentence as a heading", () => {
+    // That would clear the severity mid-list and lose the rest of the section.
+    const findings = parseReviewFindings(
+      ["## Critical", "- one", "It also drops a column.", "- two"].join("\n"),
+    );
+    expect(findings.filter((f) => f.severity === "critical")).toHaveLength(2);
+  });
+});

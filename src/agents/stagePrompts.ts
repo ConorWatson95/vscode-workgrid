@@ -50,6 +50,35 @@ export interface StageContext {
 export const NEEDS_INFO_MARKER = "NEEDS-INFO:";
 
 /**
+ * How a review stage states whether the work may proceed.
+ *
+ * Asked for explicitly because the alternative is inferring it from prose, and
+ * that inference was wrong in the direction that matters: a review with one
+ * blocker and a long "everything else is fine" section was read as fourteen
+ * blockers. A verdict a reviewer states cannot be mis-parsed into a route that
+ * stops for nothing, or worse, one that deploys over something real.
+ */
+export const VERDICT_MARKER = "VERDICT:";
+
+/** What a review concluded about whether the work may proceed. */
+export type ReviewVerdict = "pass" | "block";
+
+/**
+ * Reads the verdict line, or undefined when the reply has none.
+ *
+ * Undefined matters: it means "this review did not say", which is different from
+ * "this review said pass". The caller falls back to reading the findings rather
+ * than assuming the work is clear.
+ */
+export function parseVerdict(reply: string): ReviewVerdict | undefined {
+  // Last occurrence wins: the marker is asked for as a final line, and a review
+  // that quotes the instruction earlier should not be read as its own verdict.
+  const matches = [...reply.matchAll(/^\s*VERDICT:\s*(pass|block)\b/gim)];
+  const last = matches[matches.length - 1];
+  return last ? (last[1].toLowerCase() as ReviewVerdict) : undefined;
+}
+
+/**
  * Shared preamble: who you are, what you are working on, and how to ask.
  *
  * The escape hatch matters more than it looks. A brief is often thin — a bare
@@ -193,6 +222,27 @@ Reply with only a numbered list, one subtask per line, in this format:
 2. <short title> — <what to do, in one or two sentences>`;
 }
 
+/**
+ * Asks a review stage to state its verdict, and only a review stage.
+ *
+ * A stage that *does* work has no verdict to give: whether the build passed is a
+ * fact about a process, not an opinion, and asking an implementation stage to
+ * declare itself clear would be the same self-certification the harness exists to
+ * prevent.
+ */
+function verdictInstruction(stage: TaskStage): string {
+  if (stage.kind !== "codeReview" && stage.kind !== "domainReview") return "";
+  return `
+
+End your reply with a single line, exactly "${VERDICT_MARKER} pass" or
+"${VERDICT_MARKER} block", and nothing after it. Use "block" when you found
+something that should be fixed before the work goes any further; use "pass" when
+what you found is advisory — pre-existing, cosmetic, or a suggestion someone may
+reasonably decline. Judge only what this change did: a long-standing problem you
+noticed in passing is not a reason to block, and say so in that case rather than
+staying silent about it.`;
+}
+
 /** The brief handed to a session that will execute one subtask. */
 export function subtaskPrompt(
   context: StageContext,
@@ -206,7 +256,7 @@ Objective: ${subtask.title}
 ${subtask.prompt}
 
 Stay within this objective. If you discover work that belongs to a different
-stage of the workflow, say so at the end rather than doing it.`;
+stage of the workflow, say so at the end rather than doing it.${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

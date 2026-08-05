@@ -33,6 +33,7 @@ import {
   parseSubtaskPlan,
   splitPrompt,
   subtaskPrompt,
+  parseVerdict,
 } from "../agents/stagePrompts";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
@@ -665,7 +666,14 @@ export class PipelineRunner {
     // rather than letting the route deploy over it.
     if (reply.ok && REVIEW_KINDS.has(stage.kind)) {
       const findings = parseReviewFindings(reply.text);
-      if (hasBlockingFindings(findings)) {
+      // The reviewer's own verdict wins where it gave one. Reading severities out of
+      // prose is a fallback for a review that did not state one, not the primary
+      // signal: the same inference read a report with one blocker and a long
+      // "everything else is fine" section as fourteen blockers, and a route that
+      // stops for nothing teaches you to click past the stop.
+      const stated = parseVerdict(reply.text);
+      const blocking = stated ? stated === "block" : hasBlockingFindings(findings);
+      if (blocking) {
         const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
         if (held.ok) {
           pipeline = held.value;

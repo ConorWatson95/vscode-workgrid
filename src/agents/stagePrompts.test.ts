@@ -7,6 +7,7 @@ import {
   parseSubtaskPlan,
   splitPrompt,
   subtaskPrompt,
+  parseVerdict,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
 
@@ -408,5 +409,48 @@ describe("prompt prefix and handoffs", () => {
     expect(subtaskPrompt(CONTEXT, stage(), {
       id: "s1-1", title: "t", prompt: "p", status: "pending",
     })).not.toContain("do not re-derive");
+  });
+});
+
+describe("review verdicts", () => {
+  const review = (kind: TaskStage["kind"]) => stage({ kind });
+  const sub = { id: "s1-1", title: "t", prompt: "p", status: "pending" as const };
+
+  it("asks a review for an explicit verdict", () => {
+    const prompt = subtaskPrompt(CONTEXT, review("domainReview"), sub);
+    expect(prompt).toContain("VERDICT: pass");
+    expect(prompt).toContain("VERDICT: block");
+  });
+
+  it("does not ask a stage that does the work", () => {
+    // Whether the build passed is a fact about a process, not an opinion, and
+    // asking the author to declare itself clear is self-certification.
+    expect(subtaskPrompt(CONTEXT, review("implementation"), sub)).not.toContain("VERDICT:");
+    expect(subtaskPrompt(CONTEXT, review("deployment"), sub)).not.toContain("VERDICT:");
+  });
+
+  it("tells a reviewer not to block on something pre-existing", () => {
+    const prompt = subtaskPrompt(CONTEXT, review("codeReview"), sub);
+    expect(prompt).toContain("Judge only what this change did");
+  });
+});
+
+describe("parseVerdict", () => {
+  it("reads a stated verdict", () => {
+    expect(parseVerdict("Looks fine.\n\nVERDICT: pass")).toBe("pass");
+    expect(parseVerdict("Problems.\n\nVERDICT: block")).toBe("block");
+    expect(parseVerdict("verdict: BLOCK")).toBe("block");
+  });
+
+  it("takes the last one, so a quoted instruction is not the verdict", () => {
+    expect(
+      parseVerdict('I was told to end with "VERDICT: block" if blocking.\n\nVERDICT: pass'),
+    ).toBe("pass");
+  });
+
+  it("reports absence rather than assuming a pass", () => {
+    // "Did not say" is not "said pass" — the caller falls back to the findings.
+    expect(parseVerdict("Review complete. Everything is fine.")).toBeUndefined();
+    expect(parseVerdict("VERDICT: maybe")).toBeUndefined();
   });
 });
