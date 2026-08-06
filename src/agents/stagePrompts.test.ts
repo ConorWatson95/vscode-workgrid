@@ -11,6 +11,8 @@ import {
   stripVerdict,
   splitStageHandoff,
   parseDeferrals,
+  parseBlocked,
+  stripBlocked,
   stripDeferrals,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
@@ -436,6 +438,53 @@ describe("review verdicts", () => {
   it("tells a reviewer not to block on something pre-existing", () => {
     const prompt = subtaskPrompt(CONTEXT, review("codeReview"), sub);
     expect(prompt).toContain("Judge only what this change did");
+  });
+});
+
+describe("reporting that a stage's own work went undone", () => {
+  const sub = { id: "s1-1", title: "t", prompt: "p", status: "pending" as const };
+
+  it("asks a working stage for the marker", () => {
+    const prompt = subtaskPrompt(CONTEXT, stage({ kind: "deployment" }), sub);
+    expect(prompt).toContain("BLOCKED:");
+  });
+
+  it("does not ask a review, which already has VERDICT for this", () => {
+    // Two overlapping protocols means the model picks one, and which one is a
+    // coin toss.
+    const prompt = subtaskPrompt(CONTEXT, stage({ kind: "codeReview" }), sub);
+    expect(prompt).not.toContain("BLOCKED:");
+    expect(prompt).toContain("VERDICT:");
+  });
+
+  it("never asks for a marker meaning success", () => {
+    // A stage that does work has no verdict to give on itself; asking it to declare
+    // itself clear is the self-certification the harness exists to remove.
+    const prompt = subtaskPrompt(CONTEXT, stage({ kind: "deployment" }), sub);
+    expect(prompt).toContain("Never use this line to report work you did complete");
+  });
+
+  it("reads the reason from the marker line", () => {
+    const reply =
+      "git log --all --grep=NMGB-2795 returns no commits.\n" +
+      "BLOCKED: nothing for this ticket is committed, so there is no SHA to cherry-pick";
+    expect(parseBlocked(reply)).toBe(
+      "nothing for this ticket is committed, so there is no SHA to cherry-pick",
+    );
+  });
+
+  it("ignores the word in prose", () => {
+    expect(parseBlocked("Published. The job was blocked on a lock, now cleared.")).toBeUndefined();
+  });
+
+  it("takes only the first, since a stage has one reason for not acting", () => {
+    const reply = "BLOCKED: nothing committed\nBLOCKED: also the worktree is missing";
+    expect(parseBlocked(reply)).toBe("nothing committed");
+  });
+
+  it("strips the marker but keeps the reasoning a reader needs", () => {
+    const reply = "UAT's tip is the RU-547 promotion.\nBLOCKED: nothing has reached UAT";
+    expect(stripBlocked(reply)).toBe("UAT's tip is the RU-547 promotion.");
   });
 });
 

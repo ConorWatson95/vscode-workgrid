@@ -464,6 +464,92 @@ describe("work every stage declined", () => {
   });
 });
 
+describe("a stage that says it did not do its work", () => {
+  /**
+   * The exact shape that let a live publish pass having published nothing: a
+   * deployment stage with no `verify`, whose agent correctly refused because nothing
+   * was committed, and whose refusal was recorded as "done" because the session ended
+   * without error.
+   */
+  const shippingRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "publish",
+        label: "Live publish",
+        kind: "deployment",
+        intent: "Publish to live.",
+        splittable: false,
+        gate: "auto",
+      },
+    ],
+  });
+
+  const shippingTask = (): TaskWorkspace => ({
+    ...task(),
+    pipeline: createPipeline(shippingRoute()),
+  });
+
+  const REFUSAL =
+    "The plan's step 1 prerequisite is unmet. git log --all --grep=NMGB-2795 returns " +
+    "no commits, so there is no SHA to cherry-pick.\n" +
+    "BLOCKED: nothing for this ticket is committed anywhere, so there is nothing to publish";
+
+  it("holds the stage instead of passing it", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "publish:": { text: REFUSAL } }));
+    await repo.save(shippingTask());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    // Not "passed", which is what it used to be.
+    expect(stage.status).toBe("awaiting-approval");
+  });
+
+  it("says what was missing rather than only that it stopped", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "publish:": { text: REFUSAL } }));
+    await repo.save(shippingTask());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.steps.join(" ")).toContain("nothing for this ticket is committed");
+  });
+
+  it("keeps the marker out of the reply the report shows", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "publish:": { text: REFUSAL } }));
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const subtask = (await repo.get("t1"))!.pipeline!.stages[0].subtasks[0];
+    expect(subtask.reply).toContain("no commits");
+    expect(subtask.reply).not.toContain("BLOCKED:");
+  });
+
+  it("passes a stage that did its work and said nothing about being blocked", async () => {
+    const { repo, runner } = makeRunner(
+      fakeSessions({ "publish:": { text: "Published to all three live branches." } }),
+    );
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+
+  it("does not read the word in prose as a refusal", async () => {
+    // "blocked" is an ordinary word in a deployment report, and treating a mention of
+    // it as a refusal would hold routes that worked.
+    const { repo, runner } = makeRunner(
+      fakeSessions({
+        "publish:": { text: "Published. The old job was blocked on a lock, now cleared." },
+      }),
+    );
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});
+
 describe("the handoff carried between stages", () => {
   /** The same route, with the first stage marked as one worth carrying forward. */
   const handoffRoute = (): RouteDefinition => ({

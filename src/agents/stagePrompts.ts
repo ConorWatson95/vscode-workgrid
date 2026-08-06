@@ -305,6 +305,64 @@ staying silent about it.`;
 export const DEFERRED_MARKER = "DEFERRED:";
 
 /**
+ * How a stage reports that it did not do its work at all.
+ *
+ * Distinct from `DEFERRED`, which says "this belongs to another stage", and from
+ * `VERDICT: block`, which is a review's judgement about someone else's work. This
+ * says "my own objective went undone, and here is why".
+ *
+ * The gap it closes cost a live publish. A deployment stage has only two ways to
+ * fail — the session errors, or a `verify` command exits non-zero — so a stage with
+ * no `verify` that *correctly refused* was recorded as `done`, the route passed it,
+ * and the live verification gates were offered for a publish that never happened.
+ * The agent's reasoning was excellent and entirely in prose, which nothing read.
+ *
+ * Deliberately one-directional: there is no marker for "I succeeded". A stage that
+ * does work has no verdict to give on itself, and asking one to declare itself clear
+ * would be the self-certification the harness exists to remove. Reporting a refusal
+ * is not a claim of success, so only the refusal is asked for.
+ */
+export const BLOCKED_MARKER = "BLOCKED:";
+
+/**
+ * The reason a reply gives for not doing its work, if it gives one.
+ *
+ * Anchored to the start of a line, like `DEFERRED`, so the word in prose — "the
+ * migration is blocked on UAT" — is not read as the marker. Only the first is
+ * returned: a stage that did not act has one reason for it, and treating a second
+ * mention as a second refusal would double-count one event.
+ */
+export function parseBlocked(reply: string): string | undefined {
+  const match = /^[ \t]*BLOCKED:[ \t]*(.+)$/im.exec(reply);
+  const text = match?.[1]?.trim();
+  return text ? text : undefined;
+}
+
+/** The reply without its blocked line, which is protocol rather than report. */
+export function stripBlocked(reply: string): string {
+  return reply.replace(/^[ \t]*BLOCKED:[ \t]*.*$/gim, "").trimEnd();
+}
+
+/**
+ * Tells a stage that does work how to say it could not do it.
+ *
+ * Offered to every stage except a review, which has `VERDICT` for the same purpose
+ * and would otherwise be given two overlapping protocols to choose between.
+ */
+function blockedInstruction(stage: TaskStage): string {
+  if (stage.kind === "codeReview" || stage.kind === "domainReview") return "";
+  return `
+
+If you cannot do this stage's work at all — a prerequisite is missing, an earlier
+stage's output never arrived, the thing you were told to act on does not exist —
+then do not do part of it and do not describe the problem only in prose. Say so
+with a line starting exactly "${BLOCKED_MARKER}" followed by one sentence naming
+what is missing. Then stop. Refusing is a correct outcome and it is recorded as
+one; what must not happen is this stage being marked done because the session
+ended tidily. Never use this line to report work you did complete.`;
+}
+
+/**
  * Every piece of work a reply declined, in the stage's own words.
  *
  * Anchored to the start of a line so the word inside prose — "I deferred to the
@@ -424,7 +482,7 @@ Stay within this objective. If you discover work that belongs to a different
 stage of the workflow, do not do it — instead write it on its own line as
 "${DEFERRED_MARKER} <what needs doing, and where you think it belongs>". Use one
 line per item. Something declined this way is followed up by the workflow, so it
-is not lost; something merely mentioned in your reply is not.${handoffInstruction(stage)}${verdictInstruction(stage)}`;
+is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

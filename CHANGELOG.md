@@ -2,6 +2,33 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.53.0
+
+- **A stage that says it did not do its work no longer passes.** A stage may end its
+  reply with `BLOCKED: <what is missing>`; the route then holds that stage for a human
+  instead of recording it as done.
+
+  This closes the oldest and most expensive form of the self-report gap. A deployment
+  stage had exactly two ways to fail — the session erroring, or a declared `verify`
+  command exiting non-zero — so a stage with no `verify` whose agent *correctly
+  refused* was recorded as `finishSubtask(..., "done")`. Observed in full: a task
+  reached its live verification gate with twelve stages passed, having never committed
+  a line. The agent that stopped it had explained precisely why, in prose, and nothing
+  read prose. Even `VERDICT: block` would not have helped — the verdict is parsed on
+  every reply but only acted on for `codeReview` and `domainReview`.
+
+  Deliberately one-directional: there is no marker meaning "I succeeded". A stage that
+  does work has no verdict to give on itself, and asking one to declare itself clear
+  would be the self-certification the harness exists to remove. Reporting a refusal is
+  not a claim of success, so only the refusal is asked for. Reviews keep `VERDICT` and
+  are not offered `BLOCKED`, since two overlapping protocols means the model picks one
+  and which one is a coin toss.
+
+  Held rather than failed, like a blocking review: the stage did the right thing by
+  refusing, and what is wanted is a human deciding about the missing prerequisite, not
+  a red mark against the agent that spotted it. The marker is stripped from the reply
+  the report shows, and the reasoning around it kept.
+
 ## 0.52.0
 
 - **Every outstanding checklist item can be verified at once.** "Verify All Checklist

@@ -47,6 +47,8 @@ import {
   splitStageHandoff,
   parseDeferrals,
   stripDeferrals,
+  parseBlocked,
+  stripBlocked,
 } from "../agents/stagePrompts";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
@@ -783,6 +785,11 @@ export class PipelineRunner {
     const deferred = parseDeferrals(reply.text);
     reply = { ...reply, text: stripDeferrals(reply.text) };
 
+    // Read from the report half too, and for the same reason: a handoff saying "I was
+    // blocked on UAT" describes the refusal rather than making a second one.
+    const blocked = parseBlocked(reply.text);
+    reply = { ...reply, text: stripBlocked(reply.text) };
+
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks
     // a question that reads like a briefing problem, and nothing anywhere says a
@@ -970,6 +977,27 @@ export class PipelineRunner {
         `Harness [${task.name}] ${stage.name} deferred ${deferred.length} item(s): ` +
           deferred.join(" | "),
       );
+    }
+
+    // A stage that says it did not do its work must not pass, whatever its kind. The
+    // review path above covers a *judgement* about someone else's work; this covers a
+    // stage reporting that its own objective went undone -- which was previously
+    // indistinguishable from success, because a session ending tidily is all
+    // `finishSubtask(..., "done")` records.
+    //
+    // Held rather than failed, like a blocking review: the stage did the right thing
+    // by refusing, and what is needed is a human deciding what to do about the missing
+    // prerequisite, not a red mark against the agent that spotted it.
+    if (reply.ok && blocked) {
+      const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+      if (held.ok) {
+        pipeline = held.value;
+        steps.push(`"${stage.name}" could not proceed: ${blocked} — held for you.`);
+        this.logger.warn(
+          `Harness [${task.name}] ${stage.name} did not do its work: ${blocked} ` +
+            "Holding the route rather than passing the stage.",
+        );
+      }
     }
 
     if (reply.ok && (handoffText || reply.text.trim())) {
