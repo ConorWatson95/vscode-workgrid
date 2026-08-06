@@ -12,6 +12,8 @@ import {
   splitStageHandoff,
   parseDeferrals,
   parseBlocked,
+  parseActions,
+  readStageReply,
   stripBlocked,
   stripDeferrals,
 } from "./stagePrompts";
@@ -438,6 +440,75 @@ describe("review verdicts", () => {
   it("tells a reviewer not to block on something pre-existing", () => {
     const prompt = subtaskPrompt(CONTEXT, review("codeReview"), sub);
     expect(prompt).toContain("Judge only what this change did");
+  });
+});
+
+describe("readStageReply — the order the markers come off in", () => {
+  it("does not read a marker mentioned inside the handoff block", () => {
+    // The handoff is written for a later stage, so it restates what happened. A
+    // handoff describing a decline must not create a second one.
+    const reply = [
+      "Done the promotion.",
+      "ACTION: open https://example.com/pr/1 and merge it",
+      "HANDOFF:",
+      "I raised an ACTION: open the PR, and DEFERRED: the retention job.",
+    ].join("\n");
+    const read = readStageReply(reply);
+    expect(read.actions).toEqual(["open https://example.com/pr/1 and merge it"]);
+    expect(read.deferrals).toEqual([]);
+  });
+
+  it("keeps a verdict out of the handoff block", () => {
+    const reply = "Reviewed.\nHANDOFF:\nThe mapping is in Profile.cs.\nVERDICT: block";
+    const read = readStageReply(reply);
+    expect(read.verdict).toBe("block");
+    expect(read.handoff).not.toContain("VERDICT");
+  });
+
+  it("returns a report with every marker removed", () => {
+    const reply = [
+      "Promoted the change.",
+      "ACTION: register the endpoint in the Brevo console",
+      "DEFERRED: the retention job needs a schedule",
+      "BLOCKED: nothing else to do",
+    ].join("\n");
+    const read = readStageReply(reply);
+    expect(read.report).toBe("Promoted the change.");
+    expect(read.actions).toHaveLength(1);
+    expect(read.deferrals).toHaveLength(1);
+    expect(read.blocked).toBe("nothing else to do");
+  });
+});
+
+describe("steps only the operator can take", () => {
+  const sub = { id: "s1-1", title: "t", prompt: "p", status: "pending" as const };
+
+  it("is asked for in every stage's prompt, with the URL kept verbatim", () => {
+    const prompt = subtaskPrompt(CONTEXT, stage({ kind: "deployment" }), sub);
+    expect(prompt).toContain("ACTION:");
+    expect(prompt).toContain("verbatim");
+    expect(prompt).toContain("the route stops");
+  });
+
+  it("reads every line, since one stage can need several", () => {
+    const reply = [
+      "Promoted to UAT.",
+      "ACTION: open https://bitbucket.org/x/pull-requests/9?dest=UAT and merge it",
+      "ACTION: register the webhook URL in the Brevo console for NissanGB",
+    ].join("\n");
+    expect(parseActions(reply)).toEqual([
+      "open https://bitbucket.org/x/pull-requests/9?dest=UAT and merge it",
+      "register the webhook URL in the Brevo console for NissanGB",
+    ]);
+  });
+
+  it("ignores the word in prose", () => {
+    expect(parseActions("No further action is needed here.")).toEqual([]);
+  });
+
+  it("points a question at NEEDS-INFO rather than at itself", () => {
+    const prompt = subtaskPrompt(CONTEXT, stage({ kind: "deployment" }), sub);
+    expect(prompt).toContain("do not use them to ask a question");
   });
 });
 

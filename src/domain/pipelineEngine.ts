@@ -576,6 +576,40 @@ export function setChecklistItem(
 }
 
 /**
+ * Records steps only the operator can take, against the stage that named them.
+ *
+ * Kept as checklist items rather than a parallel list, because the mechanism wanted
+ * already exists: an outstanding item refuses to let a stage's gate pass. What is new
+ * is only that these gate *any* stage, not just a human-verification one.
+ *
+ * Deduplicated on the text per stage, like deferrals: a split stage's subtasks each run
+ * cold, and two of them printing the same pull-request link is one step, not two.
+ */
+export function recordActions(
+  pipeline: TaskPipeline,
+  stageId: string,
+  texts: readonly string[],
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage || texts.length === 0) return pipeline;
+
+  const existing = stage.checklist ?? [];
+  const seen = new Set(existing.map((i) => i.text));
+  const added = texts
+    .filter((text) => !seen.has(text) && text.trim().length > 0)
+    .map((text, at) => ({
+      id: `${stageId}-a${existing.length + at + 1}`,
+      text,
+      kind: "action" as const,
+      checked: false,
+      raisedByStage: stageId,
+    }));
+  if (added.length === 0) return pipeline;
+
+  return replaceStage(pipeline, { ...stage, checklist: [...existing, ...added] });
+}
+
+/**
  * Checks every outstanding checklist item at once.
  *
  * The convenience is real — a supervisor running several tasks ticks the same eight
@@ -609,6 +643,10 @@ export function checkOutstandingChecklist(
 
     const checklist = stage.checklist.map((item) => {
       if (item.checked) return item;
+      // An operator action is excluded from a bulk tick. Ticking a verification in
+      // bulk is a judgement about risk; ticking "I opened the pull request" in bulk is
+      // simply untrue, and the step it stands for is the one this exists to protect.
+      if (item.kind === "action") return item;
       checked += 1;
       return {
         ...item,
@@ -982,14 +1020,22 @@ export function approveStage(
     });
   }
 
+  // Verification items gate the human-verification stage, which is the one place a
+  // route asks "has someone confirmed this behaves". Operator *actions* gate the stage
+  // that raised them, whatever its kind: a pull request nobody opened makes the next
+  // stage wrong, and the point of recording the step was that it must not be skipped.
   const outstanding =
-    stage.kind === "humanVerification" ? outstandingChecklist(pipeline) : [];
+    stage.kind === "humanVerification"
+      ? outstandingChecklist(pipeline)
+      : (stage.checklist ?? []).filter((i) => !i.checked && i.kind === "action");
   if (outstanding.length > 0) {
+    const actionsOnly = outstanding.every((i) => i.kind === "action");
     return err({
       kind: "checklistIncomplete",
       message:
-        `"${stage.name}" has ${outstanding.length} unchecked verification ` +
-        `item(s): ${outstanding.map((i) => i.text).join("; ")}`,
+        `"${stage.name}" has ${outstanding.length} outstanding ` +
+        `${actionsOnly ? "step(s) for you to do" : "verification item(s)"}: ` +
+        outstanding.map((i) => i.text).join("; "),
       outstanding: outstanding.length,
     });
   }

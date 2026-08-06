@@ -2,6 +2,37 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.55.0
+
+- **A step only a human can take now stops the route until it is done.** A stage may
+  end a line with `ACTION: <what to do>`, URL verbatim, one per step. Each is recorded
+  against the stage that named it, the route holds there, and the stage cannot be
+  approved while any remain outstanding.
+
+  The fourth instance of one failure mode. A promote stage prints a pull-request link
+  that must be opened; a publish stage names a registration in a third party's console
+  that is in no cherry-pick. Routes already asked for these — "say for each whether it
+  was done or still needs a human with console access" — and the answer arrived as prose
+  in a reply nothing parsed, so the step was skipped and the promotion was quietly
+  incomplete. `producesChecklist` allowed only `behaviourReview` and `humanVerification`
+  to raise an item, so a deployment stage had nowhere to put one.
+
+  It holds at the stage that raised it rather than at the next human gate, because
+  several routes have no gate between a promote and what follows, and a pull request
+  nobody merged makes the next stage wrong. **"Verify All" deliberately skips these**:
+  ticking a verification in bulk is a judgement about risk, and ticking "I opened the
+  pull request" in bulk is simply untrue. The tree says "for you to DO" rather than "for
+  you to verify", since those invite different behaviour. `ChecklistItem.kind` is
+  optional and absent means `"verify"`, so existing items keep their meaning with no
+  migration.
+
+- **`readStageReply` owns the order the markers come off in.** Six markers — NEEDS-INFO,
+  VERDICT, HANDOFF, DEFERRED, BLOCKED, ACTION — were read and stripped by six adjacent
+  statements, with the ordering between them expressed only as comments: the verdict must
+  come off before the handoff split, and deferrals, refusals and actions must be read
+  from the report half only, or a handoff *describing* a decline is counted as a second
+  one. That order is now one pure function with a test per rule.
+
 ## 0.54.0
 
 Quality pass over the three features added in 0.51–0.53. Two of these are visible.

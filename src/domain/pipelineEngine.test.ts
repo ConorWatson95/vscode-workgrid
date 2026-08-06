@@ -11,6 +11,7 @@ import {
   recordHandoff,
   handoffsBefore,
   recordDeferrals,
+  recordActions,
   outstandingDeferrals,
   resolveDeferral,
   holdStageForFindings,
@@ -549,6 +550,54 @@ describe("checklists", () => {
     );
     return pipeline;
   }
+
+  describe("recordActions", () => {
+    it("blocks the raising stage's approval, whatever kind it is", () => {
+      // The point of the whole mechanism: a deployment stage is not a
+      // humanVerification stage, and its pull request still must not be skipped.
+      let pipeline = atGate([]);
+      pipeline = recordActions(pipeline, "human-verification", [
+        "open https://example.com/pr/1 and merge it",
+      ]);
+      const result = approveStage(pipeline, "human-verification", T);
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.kind).toBe("checklistIncomplete");
+      expect(result.ok === false && result.error.message).toContain("for you to do");
+    });
+
+    it("lets the stage pass once the step is ticked", () => {
+      let pipeline = atGate([]);
+      pipeline = recordActions(pipeline, "human-verification", ["open the PR"]);
+      const item = pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .find((i) => i.kind === "action")!;
+      pipeline = must(setChecklistItem(pipeline, item.id, { checked: true, at: T }));
+      expect(approveStage(pipeline, "human-verification", T).ok).toBe(true);
+    });
+
+    it("deduplicates on the text, since a split stage's subtasks each run cold", () => {
+      let pipeline = atGate([]);
+      pipeline = recordActions(pipeline, "human-verification", ["open the PR"]);
+      pipeline = recordActions(pipeline, "human-verification", ["open the PR"]);
+      const actions = pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .filter((i) => i.kind === "action");
+      expect(actions).toHaveLength(1);
+    });
+
+    it("is not swept up by a bulk verify", () => {
+      // Ticking a verification in bulk is a judgement; ticking "I opened the pull
+      // request" in bulk is untrue.
+      let pipeline = atGate(["Check exports"]);
+      pipeline = recordActions(pipeline, "mapping-behaviour-review", ["open the PR"]);
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      expect(result.checked).toBe(1);
+      const action = result.pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .find((i) => i.kind === "action");
+      expect(action?.checked).toBe(false);
+    });
+  });
 
   describe("checkOutstandingChecklist", () => {
     it("ticks every outstanding item and reports how many", () => {

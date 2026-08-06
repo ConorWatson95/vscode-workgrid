@@ -325,6 +325,113 @@ export const DEFERRED_MARKER = "DEFERRED:";
 export const BLOCKED_MARKER = "BLOCKED:";
 
 /**
+ * How a stage names something only a human can do.
+ *
+ * The fourth instance of one failure mode. A promote stage prints a pull-request link
+ * that must be opened; a publish stage names a registration in a third party's console
+ * that is in no cherry-pick. Routes already ask for these — "say for each whether it
+ * was done or still needs a human with console access" — and the answer arrived as
+ * prose in a reply nothing parsed, so the step was skipped and the promotion was
+ * quietly incomplete.
+ *
+ * Distinct from the three neighbours it sits with. `DEFERRED` is work for another
+ * *stage*; `BLOCKED` is this stage unable to start; `NEEDS-INFO` is a question whose
+ * answer lets the stage continue. This is work for the *operator*, where the stage did
+ * its part and the remaining step is not the harness's to take.
+ */
+export const ACTION_MARKER = "ACTION:";
+
+/**
+ * Everything a reply asks the operator to do, in the stage's own words.
+ *
+ * All occurrences, like `DEFERRED` and unlike `BLOCKED`: one stage can legitimately
+ * produce several — a PR to merge and a console registration per tenant.
+ */
+export function parseActions(reply: string): string[] {
+  const items: string[] = [];
+  for (const match of reply.matchAll(/^[ \t]*ACTION:[ \t]*(.+)$/gim)) {
+    const text = match[1].trim();
+    if (text) items.push(text);
+  }
+  return items;
+}
+
+/** The reply without its action lines. See `stripBlocked` on the newline collapse. */
+export function stripActions(reply: string): string {
+  return reply
+    .replace(/^[ \t]*ACTION:[ \t]*.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+/** Asks a stage to name the steps it cannot take itself. */
+function actionInstruction(): string {
+  return `
+
+If completing this work needs a step only a person can take — a pull request to
+open or merge, a registration in a third party's console, a firewall rule, a
+credential provisioned — put each one on its own line starting exactly
+"${ACTION_MARKER}" followed by what to do, including any URL verbatim. One line per
+step. These are recorded and the route stops until they are dealt with, so a step
+named here is not lost; a step described only in your prose is. Do not use these
+lines for work you did yourself, and do not use them to ask a question — say
+"${NEEDS_INFO_MARKER}" for that.`;
+}
+
+/**
+ * Everything the harness reads out of a stage's reply, in the one order that is
+ * correct, plus the report half that a human and every later stage should see.
+ *
+ * The order is the whole reason this exists, and it was previously expressed only as
+ * adjacency and comments inside `runSubtask`:
+ *
+ *   1. The verdict comes off first, so a reply ending "HANDOFF: <block> VERDICT: block"
+ *      does not carry the protocol line into the block.
+ *   2. The handoff split comes next, and defines the scope for everything after it.
+ *      Everything downstream — findings, checklist, report — should see only the report
+ *      half.
+ *   3. Deferrals, refusals and actions are read from the report half *only*. A handoff
+ *      saying "I deferred the export structure" is describing a decline, not making a
+ *      second one, and counting it twice holds a route on an item with no separate
+ *      existence.
+ *
+ * Pure, so each ordering rule can be pinned by a test rather than rediscovered.
+ */
+export interface StageReply {
+  /** A review's judgement, when it gave one. */
+  verdict: "pass" | "block" | undefined;
+  /** The distillable block a handoff stage wrote, before distillation. */
+  handoff: string | undefined;
+  /** Work this stage says belongs to another. */
+  deferrals: string[];
+  /** Why this stage did not do its own work, when it says so. */
+  blocked: string | undefined;
+  /** Steps only the operator can take. */
+  actions: string[];
+  /** What a human and every later stage should read: markers removed. */
+  report: string;
+}
+
+export function readStageReply(text: string): StageReply {
+  const verdict = parseVerdict(text);
+  const withoutVerdict = stripVerdict(text);
+
+  const split = splitStageHandoff(withoutVerdict);
+  let report = split.report;
+
+  const deferrals = parseDeferrals(report);
+  report = stripDeferrals(report);
+
+  const blocked = parseBlocked(report);
+  report = stripBlocked(report);
+
+  const actions = parseActions(report);
+  report = stripActions(report);
+
+  return { verdict, handoff: split.handoff, deferrals, blocked, actions, report };
+}
+
+/**
  * The reason a reply gives for not doing its work, if it gives one.
  *
  * Anchored to the start of a line, like `DEFERRED`, so the word in prose — "the
@@ -492,7 +599,7 @@ Stay within this objective. If you discover work that belongs to a different
 stage of the workflow, do not do it — instead write it on its own line as
 "${DEFERRED_MARKER} <what needs doing, and where you think it belongs>". Use one
 line per item. Something declined this way is followed up by the workflow, so it
-is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${handoffInstruction(stage)}${verdictInstruction(stage)}`;
+is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${actionInstruction()}${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

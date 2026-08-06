@@ -201,6 +201,16 @@ export interface ChecklistItem {
   id: string;
   /** What to exercise, and what would indicate a regression. */
   text: string;
+  /**
+   * What kind of item this is. Absent means `"verify"`, so items recorded before this
+   * existed keep their meaning without a migration.
+   *
+   * `"action"` is a step only the operator can take — a pull request to open, a
+   * registration in a third party's console. It differs from a verification in two
+   * ways that matter: it gates the stage that raised it whatever that stage's kind,
+   * and bulk-ticking it would be a false statement rather than a judgement call.
+   */
+  kind?: "verify" | "action";
   checked: boolean;
   /** Stage that raised it, so the gate can explain where each item came from. */
   raisedByStage: string;

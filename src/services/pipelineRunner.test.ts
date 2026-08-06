@@ -464,6 +464,74 @@ describe("work every stage declined", () => {
   });
 });
 
+describe("steps only the operator can take", () => {
+  const shippingRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "promote",
+        label: "Promote to UAT",
+        kind: "deployment",
+        intent: "Promote.",
+        splittable: false,
+        gate: "auto",
+      },
+      { ...ROUTE.stages[1] },
+    ],
+  });
+
+  const shippingTask = (): TaskWorkspace => ({
+    ...task(),
+    pipeline: createPipeline(shippingRoute()),
+  });
+
+  const REPLY =
+    "Cherry-picked 4aba94e onto UAT.\n" +
+    "ACTION: open https://bitbucket.org/x/pull-requests/9?dest=UAT and merge it";
+
+  it("holds the stage rather than advancing past the step", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "promote:": { text: REPLY } }));
+    await repo.save(shippingTask());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    expect(stage.status).toBe("awaiting-approval");
+  });
+
+  it("records the step against the stage, with its URL intact", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "promote:": { text: REPLY } }));
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const items = (await repo.get("t1"))!.pipeline!.stages[0].checklist ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("action");
+    expect(items[0].text).toContain("pull-requests/9?dest=UAT");
+    expect(items[0].checked).toBe(false);
+  });
+
+  it("keeps the marker out of the reply the report shows", async () => {
+    const { repo, runner } = makeRunner(fakeSessions({ "promote:": { text: REPLY } }));
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    const subtask = (await repo.get("t1"))!.pipeline!.stages[0].subtasks[0];
+    expect(subtask.reply).toContain("Cherry-picked");
+    expect(subtask.reply).not.toContain("ACTION:");
+  });
+
+  it("does not hold a stage that named no steps", async () => {
+    const { repo, runner } = makeRunner(
+      fakeSessions({ "promote:": { text: "Cherry-picked and pushed." } }),
+    );
+    await repo.save(shippingTask());
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});
+
 describe("a stage that says it did not do its work", () => {
   /**
    * The exact shape that let a live publish pass having published nothing: a

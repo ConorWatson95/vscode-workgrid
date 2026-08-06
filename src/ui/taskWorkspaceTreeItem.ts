@@ -245,7 +245,13 @@ export class ChecklistTreeItem extends vscode.TreeItem {
     // it is a planner and not a judge, so nothing here is waiting on the agent —
     // but an unchecked item with no description read as the agent having left
     // something undone, rather than as a job for the person reading it.
-    this.description = item.checked ? "verified" : "for you to verify";
+    // An operator action is not a verification and must not read as one: "for you to
+    // verify" invites a judgement about risk, where this is a step that either happened
+    // or did not.
+    this.description =
+      item.kind === "action"
+        ? item.checked ? "done" : "for you to DO"
+        : item.checked ? "verified" : "for you to verify";
     this.tooltip = new vscode.MarkdownString(
       [
         item.text,

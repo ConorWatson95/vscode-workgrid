@@ -14,6 +14,7 @@ import {
   recordQuestion,
   recordHandoff,
   recordDeferrals,
+  recordActions,
   handoffsBefore,
   holdStageForFindings,
   recordStageVerdict,
@@ -39,16 +40,10 @@ import {
   behaviourReviewPrompt,
   parseChecklistReply,
   parseNeedsInfo,
+  readStageReply,
   parseSubtaskPlan,
   splitPrompt,
   subtaskPrompt,
-  parseVerdict,
-  stripVerdict,
-  splitStageHandoff,
-  parseDeferrals,
-  stripDeferrals,
-  parseBlocked,
-  stripBlocked,
 } from "../agents/stagePrompts";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
@@ -765,30 +760,18 @@ export class PipelineRunner {
       this.liveActivities.delete(taskId);
     }
 
-    // Read before the marker is removed, and removed before anything keeps the
-    // reply: it is a protocol line between the harness and the agent, and it was
-    // reaching the report, the handoff and every later stage's prompt verbatim.
-    const verdict = parseVerdict(reply.text);
-    reply = { ...reply, text: stripVerdict(reply.text) };
-
-    // After the verdict is stripped, so a review that ends "…HANDOFF: <block>
-    // VERDICT: block" does not carry the protocol line into the block. Split here
-    // rather than at the point of recording, because everything downstream —
-    // findings, the checklist, the report — should see the report half only.
-    const split = splitStageHandoff(reply.text);
-    const handoffText = split.handoff;
-    reply = { ...reply, text: split.report };
-
-    // Read from the report half only. A handoff that says "I deferred the export
-    // structure" is describing the decline, not making a second one, and counting
-    // it twice would hold the deployment on an item with no separate existence.
-    const deferred = parseDeferrals(reply.text);
-    reply = { ...reply, text: stripDeferrals(reply.text) };
-
-    // Read from the report half too, and for the same reason: a handoff saying "I was
-    // blocked on UAT" describes the refusal rather than making a second one.
-    const blocked = parseBlocked(reply.text);
-    reply = { ...reply, text: stripBlocked(reply.text) };
+    // One ordered read of every protocol marker. The order between them is
+    // load-bearing and now lives in `readStageReply`, with a test per rule, rather
+    // than in the adjacency of six statements here.
+    const {
+      verdict,
+      handoff: handoffText,
+      deferrals: deferred,
+      blocked,
+      actions,
+      report: reportText,
+    } = readStageReply(reply.text);
+    reply = { ...reply, text: reportText };
 
     // Surface refusals whatever the outcome. A denied tool call is otherwise
     // silent: the agent rewords it, retries, eventually works around it or asks
@@ -988,6 +971,22 @@ export class PipelineRunner {
     // Held rather than failed, like a blocking review: the stage did the right thing
     // by refusing, and what is needed is a human deciding what to do about the missing
     // prerequisite, not a red mark against the agent that spotted it.
+    // Recorded before the hold below, so a stage that both named steps and refused
+    // still carries the steps. Held whatever the stage's kind: a pull request nobody
+    // opened makes the next stage wrong, and several routes have no human gate between
+    // a promote and what follows, so waiting for one would lose it.
+    if (reply.ok && actions.length > 0) {
+      pipeline = recordActions(pipeline, stage.id, actions);
+      const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+      if (held.ok) pipeline = held.value;
+      steps.push(
+        `"${stage.name}" needs ${actions.length} step(s) from you — held for you.`,
+      );
+      this.logger.warn(
+        `Harness [${task.name}] ${stage.name} needs you to: ${actions.join(" | ")}`,
+      );
+    }
+
     if (reply.ok && blocked) {
       const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
       if (held.ok) {
