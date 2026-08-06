@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   applyRules as applyRuleSet,
   approveStage,
+  checkOutstandingChecklist,
   createPipeline,
   finishSubtask,
   nextAction,
@@ -548,6 +549,89 @@ describe("checklists", () => {
     );
     return pipeline;
   }
+
+  describe("checkOutstandingChecklist", () => {
+    it("ticks every outstanding item and reports how many", () => {
+      const pipeline = atGate(["Edit an existing customer", "Run a dealer report"]);
+      const result = checkOutstandingChecklist(pipeline, { note: "Smoke-tested", at: T });
+      expect(result.checked).toBe(2);
+      expect(outstandingChecklist(result.pipeline)).toHaveLength(0);
+      expect(approveStage(result.pipeline, "human-verification", T).ok).toBe(true);
+    });
+
+    it("records the note against every item it ticks", () => {
+      // The whole point: an item ticked in bulk must not be indistinguishable in the
+      // report from one ticked after actually exercising the behaviour.
+      const pipeline = atGate(["Check exports"]);
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk: low risk", at: T });
+      const item = result.pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .find((i) => i.id === "mapping-behaviour-review-c1");
+      expect(item?.note).toBe("Bulk: low risk");
+      expect(item?.checkedAt).toBe(T);
+    });
+
+    it("keeps a note written before the tick and appends the bulk note", () => {
+      let pipeline = atGate(["Check exports"]);
+      pipeline = must(
+        setChecklistItem(pipeline, "mapping-behaviour-review-c1", {
+          checked: false,
+          note: "Only affects Nissan",
+          at: T,
+        }),
+      );
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      const item = result.pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .find((i) => i.id === "mapping-behaviour-review-c1");
+      expect(item?.note).toBe("Only affects Nissan — Bulk");
+    });
+
+    it("leaves an already-verified item's own note untouched", () => {
+      let pipeline = atGate(["Edit an existing customer", "Run a dealer report"]);
+      pipeline = must(
+        setChecklistItem(pipeline, "mapping-behaviour-review-c1", {
+          checked: true,
+          note: "Verified on staging",
+          at: "2026-08-01T00:00:00.000Z",
+        }),
+      );
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      // Only the second item was outstanding.
+      expect(result.checked).toBe(1);
+      const first = result.pipeline.stages
+        .flatMap((s) => s.checklist ?? [])
+        .find((i) => i.id === "mapping-behaviour-review-c1");
+      expect(first?.note).toBe("Verified on staging");
+      expect(first?.checkedAt).toBe("2026-08-01T00:00:00.000Z");
+    });
+
+    it("can be scoped to one stage", () => {
+      const pipeline = atGate(["Check exports"]);
+      const result = checkOutstandingChecklist(pipeline, {
+        stageId: "human-verification",
+        note: "Bulk",
+        at: T,
+      });
+      // The items belong to the review that raised them, not to the gate.
+      expect(result.checked).toBe(0);
+      expect(outstandingChecklist(result.pipeline)).toHaveLength(1);
+    });
+
+    it("returns the same pipeline when there is nothing outstanding", () => {
+      const pipeline = atGate([]);
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      expect(result.checked).toBe(0);
+      expect(result.pipeline).toBe(pipeline);
+    });
+
+    it("does not mutate its input", () => {
+      const pipeline = atGate(["Check exports"]);
+      const before = JSON.parse(JSON.stringify(pipeline));
+      checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      expect(pipeline).toEqual(before);
+    });
+  });
 
   it("records items against the stage that raised them", () => {
     const pipeline = must(recordChecklist(createPipeline(GATED), "build", ["Check exports"]));

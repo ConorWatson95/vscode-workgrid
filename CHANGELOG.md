@@ -2,6 +2,27 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.52.0
+
+- **Every outstanding checklist item can be verified at once.** "Verify All Checklist
+  Items…" on a task's context menu, shown only while something is actually outstanding.
+  For the supervisor case the harness is now aimed at — several tasks in flight, the
+  same handful of boxes on each — ticking them one at a time was friction with no
+  corresponding safety.
+
+  It asks for one sentence describing what was done, and records that against every
+  item it ticks. That is the whole design: the human-verification gate's only value is
+  that somebody confirmed each behaviour, and a bulk tick is the obvious way to make
+  the gate ceremonial. An item ticked in bulk and one ticked after actually exercising
+  the behaviour would otherwise be indistinguishable in the report — which is the only
+  lasting evidence the gate meant anything. Cancelling the note cancels the tick.
+
+  A note written before the tick is kept and the bulk note appended, since the earlier
+  one is the more specific. An already-verified item is left entirely alone, notes and
+  timestamp included: a bulk tick must never overwrite the record of an individual
+  verification. Scoped to the task rather than a stage, because the gate is blocked by
+  every outstanding item whichever stage raised it.
+
 ## 0.51.0
 
 - **A task can take in a branch it was cut before.** "Merge Branch Into Task…" on the

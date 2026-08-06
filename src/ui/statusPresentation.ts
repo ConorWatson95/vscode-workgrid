@@ -109,6 +109,7 @@ export function buildContextValue(
   harnessed = false,
   hasQuestions = false,
   hasDenials = false,
+  hasChecklist = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -128,5 +129,9 @@ export function buildContextValue(
   if (hasQuestions) tokens.push("hasQuestions");
   // A refused tool call blocks the route just as an unanswered question does.
   if (hasDenials) tokens.push("hasDenials");
+  // Offered only when something is actually outstanding. A "Verify All" on a task with
+  // nothing to verify is not merely useless: the gate's meaning rests on the button
+  // being a deliberate act, and one that is always present invites reflexive use.
+  if (hasChecklist) tokens.push("hasChecklist");
   return tokens.join(" ");
 }

@@ -40,6 +40,7 @@ import {
   clearQuestion,
   grantDenial,
   outstandingChecklist,
+  checkOutstandingChecklist,
   outstandingDeferrals,
   resolveDeferral,
   setChecklistItem,
@@ -133,6 +134,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.toggleChecklistItem", (arg) =>
       toggleChecklistItemCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.verifyAllChecklist", (arg) =>
+      verifyAllChecklistCommand(ctx, arg),
     ),
     register("taskWorkspaces.noteChecklistItem", (arg) =>
       noteChecklistItemCommand(ctx, arg),
@@ -939,6 +943,75 @@ async function approveStageCommand(
  * than the notes it collected were worth. Recording an observation is now its own
  * button, for the items where there is actually something to say.
  */
+/**
+ * Ticks every outstanding checklist item on a task in one go.
+ *
+ * Built for the supervisor case — several tasks in flight, the same handful of boxes
+ * on each — but deliberately not frictionless. The human-verification gate's only
+ * value is that somebody confirmed each behaviour, so this asks what was done and
+ * records that answer against every item it touches. One sentence for N items is
+ * still far quicker than N clicks, and it leaves a report that says what actually
+ * happened rather than implying N individual verifications.
+ *
+ * The items are listed in the confirmation rather than counted, because "verify 8
+ * items?" is a question nobody can answer and "these 8 behaviours?" is.
+ */
+async function verifyAllChecklistCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task?.pipeline) return;
+
+  const outstanding = outstandingChecklist(task.pipeline);
+  if (outstanding.length === 0) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" has nothing outstanding to verify.`,
+    );
+    return;
+  }
+
+  const shown = outstanding.slice(0, 10).map((item) => `• ${item.text}`);
+  if (outstanding.length > shown.length) {
+    shown.push(`• …and ${outstanding.length - shown.length} more`);
+  }
+  const confirm = "Verify All";
+  const choice = await vscode.window.showWarningMessage(
+    `Mark all ${outstanding.length} outstanding item(s) on "${task.name}" as verified?`,
+    { modal: true, detail: shown.join("\n") },
+    confirm,
+  );
+  if (choice !== confirm) return;
+
+  const note = await vscode.window.showInputBox({
+    title: `Verifying ${outstanding.length} item(s) on "${task.name}"`,
+    prompt: "What did you do to verify these? Recorded against every item.",
+    placeHolder: "e.g. ran the overnight job on dev and checked the scorecard totals",
+    ignoreFocusOut: true,
+  });
+  // Escape cancels the whole thing rather than ticking without a note: the note is the
+  // only thing distinguishing this from switching the gate off.
+  if (note === undefined) return;
+  if (!note.trim()) {
+    void vscode.window.showWarningMessage(
+      "Nothing was ticked — a note is required, since it is the only record that these were verified at all.",
+    );
+    return;
+  }
+
+  const at = new Date().toISOString();
+  const result = checkOutstandingChecklist(task.pipeline, { note: note.trim(), at });
+  await ctx.repository.save({ ...task, pipeline: result.pipeline, updatedAt: at });
+  ctx.tree.refresh();
+
+  ctx.logger.info(
+    `Harness [${task.name}] ${result.checked} checklist item(s) verified in bulk: ${note.trim()}`,
+  );
+  void vscode.window.showInformationMessage(
+    `Verified ${result.checked} item(s) on "${task.name}". Advance the route to pass the gate.`,
+  );
+}
+
 async function toggleChecklistItemCommand(
   ctx: CommandContext,
   arg: unknown,

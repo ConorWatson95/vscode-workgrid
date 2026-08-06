@@ -576,6 +576,55 @@ export function setChecklistItem(
 }
 
 /**
+ * Checks every outstanding checklist item at once.
+ *
+ * The convenience is real — a supervisor running several tasks ticks the same eight
+ * boxes per task — but so is the cost: the human-verification gate's entire value is
+ * that somebody confirmed each behaviour, and a bulk tick is the obvious way to make
+ * that gate ceremonial.
+ *
+ * So the note is mandatory at the caller, and recorded against every item this
+ * touches. An item ticked in bulk and one ticked after actually exercising the
+ * behaviour would otherwise be indistinguishable in the report, and the report is
+ * the only lasting evidence that the gate meant anything. An existing note is kept
+ * and the bulk note appended, because a note written before the tick is the more
+ * specific of the two.
+ *
+ * Already-checked items are left completely alone, including their notes: a bulk
+ * tick must not overwrite the record of an individual verification.
+ */
+export function checkOutstandingChecklist(
+  pipeline: TaskPipeline,
+  options: { stageId?: string; note: string; at: string },
+): { pipeline: TaskPipeline; checked: number } {
+  let checked = 0;
+
+  const stages = pipeline.stages.map((stage) => {
+    // Skipped stages are excluded for the same reason `outstandingChecklist` excludes
+    // them: their items gate nothing, so ticking them would inflate the count with
+    // work that is not owed.
+    if (stage.status === "skipped") return stage;
+    if (options.stageId && stage.id !== options.stageId) return stage;
+    if (!stage.checklist?.some((item) => !item.checked)) return stage;
+
+    const checklist = stage.checklist.map((item) => {
+      if (item.checked) return item;
+      checked += 1;
+      return {
+        ...item,
+        checked: true,
+        checkedAt: options.at,
+        note: item.note ? `${item.note} — ${options.note}` : options.note,
+      };
+    });
+    return { ...stage, checklist };
+  });
+
+  if (checked === 0) return { pipeline, checked: 0 };
+  return { pipeline: { ...pipeline, stages }, checked };
+}
+
+/**
  * Records work a stage declined as belonging to a different stage.
  *
  * Deduplicated on the text, per stage: a split stage's subtasks each run cold and

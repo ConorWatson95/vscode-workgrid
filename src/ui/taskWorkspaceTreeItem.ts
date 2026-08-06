@@ -88,12 +88,19 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     const denied = (task.pipeline?.pendingDenials?.items ?? []).filter(
       (i) => !i.granted,
     ).length;
+    // Counted across the whole pipeline, not the current stage: the gate is blocked by
+    // every outstanding item whichever stage raised it, so that is the set "Verify All"
+    // acts on and the condition under which offering it makes sense.
+    const outstanding = (task.pipeline?.stages ?? [])
+      .filter((s) => s.status !== "skipped")
+      .reduce((total, s) => total + (s.checklist ?? []).filter((i) => !i.checked).length, 0);
     this.contextValue = buildContextValue(
       task.status,
       task.agent?.status,
       harnessed,
       questions > 0,
       denied > 0,
+      outstanding > 0,
     );
 
     const descriptionParts = [statusLabel];

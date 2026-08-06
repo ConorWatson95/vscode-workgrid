@@ -72,6 +72,22 @@ describe("buildContextValue harness token", () => {
   it("defaults to ad-hoc when not specified", () => {
     expect(buildContextValue("ready", undefined)).toContain("adhoc");
   });
+
+  it("marks a task with outstanding checklist items", () => {
+    expect(
+      buildContextValue("ready", undefined, true, false, false, true),
+    ).toContain("hasChecklist");
+  });
+
+  it("omits the checklist token when nothing is outstanding", () => {
+    // "Verify All" must not be a permanently available button: the gate's meaning
+    // rests on it being a deliberate act, and one that is always there invites
+    // reflexive use.
+    expect(
+      buildContextValue("ready", undefined, true, false, false, false),
+    ).not.toContain("hasChecklist");
+    expect(buildContextValue("ready", undefined, true)).not.toContain("hasChecklist");
+  });
 });
 
 describe("buildContextValue", () => {
