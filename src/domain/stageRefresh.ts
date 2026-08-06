@@ -1,6 +1,7 @@
 import { ReviewRule } from "./reviewRules";
 import { RouteDefinition, sendBackEntryKind, StageKind } from "./taskRoute";
 import { TaskPipeline, TaskStage, truncateHandoff } from "./taskPipeline";
+import { stageFromDefinition } from "./pipelineEngine";
 
 /**
  * Reloads stage definitions from current project config, and re-opens a stage
@@ -38,6 +39,75 @@ export interface StageDefinitionSource {
  * `workflow` is absent because it is a *subtask* field, not a stage one.
  */
 const REFRESHABLE = ["intent", "model", "verify"] as const;
+
+/**
+ * Adds stages a route gained after this pipeline was created.
+ *
+ * The gap this closes: a route is instantiated once, at task creation, so correcting a
+ * route that was missing a step left every task already in flight without it — and the
+ * only remedies were to do the step by hand or throw the task away. The argument for
+ * doing this is the one that already justifies `refreshPendingStages`: correcting a
+ * route should not require a new task.
+ *
+ * Two rules keep it safe, and both matter:
+ *
+ * - **Only ahead of the frontier.** A stage is inserted only at a position after every
+ *   stage that has started, passed, failed, been skipped or is awaiting approval.
+ *   Inserting behind one would mean a route claims to have run a step it never ran,
+ *   which is the failure this whole area exists to prevent. A stage whose route
+ *   position falls behind the frontier is reported as `tooLate` rather than dropped
+ *   silently or forced in.
+ * - **Nothing is ever removed.** A stage the route no longer defines stays, because it
+ *   may already have run and the pipeline is the record of what happened.
+ *
+ * Positioned by route order relative to the stages already present, so a stage lands
+ * where the route says rather than at the end.
+ */
+export function addMissingStages(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; added: string[]; tooLate: string[] } {
+  const route = source.routes.find((r) => r.id === pipeline.routeId);
+  if (!route) return { pipeline, added: [], tooLate: [] };
+
+  const present = new Set(pipeline.stages.map((s) => s.id));
+  const missing = route.stages.filter((definition) => !present.has(definition.id));
+  if (missing.length === 0) return { pipeline, added: [], tooLate: [] };
+
+  // Everything at or before this index has a history to protect.
+  const lastSettled = pipeline.stages.reduce(
+    (last, stage, at) => (stage.status === "pending" ? last : at),
+    -1,
+  );
+  const frontier = lastSettled + 1;
+
+  const stages = [...pipeline.stages];
+  const added: string[] = [];
+  const tooLate: string[] = [];
+
+  for (const definition of missing) {
+    // Where the route puts it: after the nearest earlier route stage that the pipeline
+    // already has. Recomputed each time, so two new adjacent stages keep their order.
+    const routeIndex = route.stages.findIndex((s) => s.id === definition.id);
+    let at = 0;
+    for (let before = routeIndex - 1; before >= 0; before--) {
+      const found = stages.findIndex((s) => s.id === route.stages[before].id);
+      if (found !== -1) {
+        at = found + 1;
+        break;
+      }
+    }
+    if (at < frontier) {
+      tooLate.push(definition.id);
+      continue;
+    }
+    stages.splice(at, 0, stageFromDefinition(definition));
+    added.push(definition.id);
+  }
+
+  if (added.length === 0) return { pipeline, added: [], tooLate };
+  return { pipeline: { ...pipeline, stages }, added, tooLate };
+}
 
 /**
  * Brings every not-yet-started stage into line with current config.

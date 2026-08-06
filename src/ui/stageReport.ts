@@ -150,6 +150,12 @@ export function formatStageReport(
       `**The review's verdict:** ${stage.verdict === "block" ? "block" : "pass"}  `,
     );
   }
+  // Same reasoning as the verdict, one line up: this stage is held, and the reader
+  // opened the report to find out why. The marker is stripped from the reply, so
+  // without this the reply reads as an ordinary account of work that did not happen.
+  if (stage.blocked) {
+    lines.push(`**This stage did not do its work:** ${stage.blocked}  `);
+  }
   // In the header rather than down with the mechanics: the stage total is the
   // figure a route is tuned on, and burying it under the output of the commands
   // that produced it is how it went unrecorded for this long.

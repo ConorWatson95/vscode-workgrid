@@ -2,6 +2,41 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.56.0
+
+- **A route fix now reaches tasks already in flight.** `addMissingStages` adds stages a
+  route gained since a task was created, positioned by route order, run at the top of
+  every advance. Correcting a route that was missing a step previously left every
+  in-flight task without it, and the only remedies were to do the step by hand or throw
+  the task away — the same argument that already justifies refreshing a pending stage's
+  intent.
+
+  Safe by two rules. A stage is inserted only **ahead of the frontier** — after
+  everything that has started, passed, failed, been skipped or is awaiting approval —
+  because inserting behind one would let a route claim to have run a step it never ran.
+  A stage that belongs behind the frontier is reported as too late and named in the log,
+  rather than dropped silently or forced in. And nothing is ever removed: a stage the
+  route no longer defines may already have run, and the pipeline is the record of what
+  happened.
+
+- **A held stage now says why, permanently.** The `BLOCKED:` reason lived only in a step
+  line and a log entry, so reopening the window left a stage awaiting approval with no
+  account of what was missing. It is persisted on the stage and shown in the report —
+  the same lesson `verdict` already learned, when a blocking review came to look like a
+  clean one.
+
+- **`routeComparison` compares two sets of route runs on cost and on outcome.** The
+  numbers were all being recorded per subtask; what was missing was a way to read them
+  together to answer whether carrying a stage's conclusion forward costs less than
+  letting the next stage rediscover it.
+
+  It leads on **fresh input tokens** rather than a total, because `cacheRead` is nearly
+  free and a total would hide the effect being measured. And it **refuses to name a
+  winner** when it cannot honestly do so: fewer than two runs an arm, any subtask that
+  reported no usage, or an arm that failed, was held, or left deferrals outstanding —
+  since spending less by doing less is not a saving. The deltas are still reported when
+  the verdict is withheld.
+
 ## 0.55.0
 
 - **A step only a human can take now stops the route until it is done.** A stage may

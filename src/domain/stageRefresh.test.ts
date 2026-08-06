@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   refreshPendingStages,
+  addMissingStages,
   revertToStage,
   sendBackTargets,
   sendBackToStage,
@@ -57,6 +58,107 @@ const source = (
   stages: Array<{ id: string; intent: string; model?: string }>,
   rules: ReviewRule[] = [],
 ) => ({ routes: [route(stages)], rules });
+
+describe("addMissingStages", () => {
+  const DEV_PROMOTE = {
+    id: "dev-promote",
+    label: "Land on DEV",
+    kind: "implement",
+    intent: "Commit, push and merge.",
+    splittable: false,
+    gate: "auto",
+    verify: "git merge-base --is-ancestor HEAD origin/DEV",
+  } as unknown as RouteDefinition["stages"][number];
+
+  /** A route whose stage list has DEV_PROMOTE spliced in at `at`. */
+  const grownRoute = (at: number): RouteDefinition => {
+    const base = route([
+      { id: "deploy", intent: "Run the deployment." },
+      { id: "signoff", intent: "Sign it off." },
+    ]);
+    const stages = [...base.stages];
+    stages.splice(at, 0, DEV_PROMOTE);
+    return { ...base, stages };
+  };
+
+  const twoStagePipeline = (firstStatus: TaskStage["status"] = "pending") =>
+    pipeline([
+      stage({ id: "deploy", status: firstStatus }),
+      stage({ id: "signoff", name: "Signoff" }),
+    ]);
+
+  it("adds a stage the route gained, in the route's position", () => {
+    const result = addMissingStages(twoStagePipeline(), {
+      routes: [grownRoute(1)],
+      rules: [],
+    });
+    expect(result.added).toEqual(["dev-promote"]);
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "deploy",
+      "dev-promote",
+      "signoff",
+    ]);
+  });
+
+  it("carries the definition's verify onto the new stage", () => {
+    // The whole reason for adding it: an unverified stage is the thing being fixed.
+    const result = addMissingStages(twoStagePipeline(), {
+      routes: [grownRoute(1)],
+      rules: [],
+    });
+    const added = result.pipeline.stages.find((s) => s.id === "dev-promote");
+    expect(added?.verify).toBe("git merge-base --is-ancestor HEAD origin/DEV");
+    expect(added?.status).toBe("pending");
+  });
+
+  it("refuses to insert behind a stage that already ran", () => {
+    // Otherwise the route would claim to have run a step it never ran, which is the
+    // failure this whole area exists to prevent.
+    const before = twoStagePipeline("passed");
+    const result = addMissingStages(before, { routes: [grownRoute(0)], rules: [] });
+    expect(result.added).toEqual([]);
+    expect(result.tooLate).toEqual(["dev-promote"]);
+    expect(result.pipeline).toBe(before);
+  });
+
+  it("still adds a stage that belongs ahead of the frontier", () => {
+    const result = addMissingStages(twoStagePipeline("passed"), {
+      routes: [grownRoute(1)],
+      rules: [],
+    });
+    expect(result.added).toEqual(["dev-promote"]);
+    expect(result.tooLate).toEqual([]);
+  });
+
+  it("never removes a stage the route no longer defines", () => {
+    const result = addMissingStages(twoStagePipeline(), {
+      routes: [route([{ id: "deploy", intent: "Run the deployment." }])],
+      rules: [],
+    });
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual(["deploy", "signoff"]);
+  });
+
+  it("returns the same pipeline when the route matches", () => {
+    const before = twoStagePipeline();
+    const result = addMissingStages(before, {
+      routes: [
+        route([
+          { id: "deploy", intent: "Run the deployment." },
+          { id: "signoff", intent: "Sign it off." },
+        ]),
+      ],
+      rules: [],
+    });
+    expect(result.pipeline).toBe(before);
+    expect(result.added).toEqual([]);
+  });
+
+  it("does nothing when the route is not in config at all", () => {
+    const before = twoStagePipeline();
+    const result = addMissingStages(before, { routes: [], rules: [] });
+    expect(result.pipeline).toBe(before);
+  });
+});
 
 describe("refreshPendingStages", () => {
   it("brings a not-yet-started stage's intent up to date", () => {

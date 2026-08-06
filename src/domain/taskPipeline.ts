@@ -272,6 +272,15 @@ export interface TaskStage {
    */
   verdict?: "pass" | "block";
   /**
+   * Why this stage did not do its work, when it said so with `BLOCKED:`.
+   *
+   * Persisted for the reason `verdict` is: a stage held for approval with nothing on
+   * screen explaining why is how a blocking review came to look like a clean one. The
+   * reason previously lived in a transient step line and a log entry, so reopening the
+   * window left a held stage and no account of what was missing.
+   */
+  blocked?: string;
+  /**
    * Empty on a splittable stage means "not yet planned". Non-splittable stages
    * are created with exactly one synthesized subtask, so every runnable stage
    * has a uniform shape.

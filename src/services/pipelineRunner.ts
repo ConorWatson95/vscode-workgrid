@@ -15,6 +15,7 @@ import {
   recordHandoff,
   recordDeferrals,
   recordActions,
+  recordStageBlocked,
   handoffsBefore,
   holdStageForFindings,
   recordStageVerdict,
@@ -988,6 +989,10 @@ export class PipelineRunner {
     }
 
     if (reply.ok && blocked) {
+      // Recorded before the hold, and independently of whether the hold takes effect:
+      // the reason is the only account of what was missing, and a step line and a log
+      // entry both vanish when the window closes.
+      pipeline = recordStageBlocked(pipeline, stage.id, blocked);
       const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
       if (held.ok) {
         pipeline = held.value;

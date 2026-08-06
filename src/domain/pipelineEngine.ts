@@ -73,6 +73,19 @@ export function createPipeline(route: RouteDefinition): TaskPipeline {
   };
 }
 
+/**
+ * A pending stage from a route definition.
+ *
+ * Exported so `stageRefresh` can add a stage a route gained after a task was created,
+ * building it exactly as `createPipeline` would rather than a near-copy that drifts.
+ */
+export function stageFromDefinition(
+  definition: RouteStageDefinition,
+  addedByRule?: string,
+): TaskStage {
+  return createStage(definition, addedByRule);
+}
+
 function createStage(
   definition: RouteStageDefinition,
   addedByRule?: string,
@@ -585,6 +598,23 @@ export function setChecklistItem(
  * Deduplicated on the text per stage, like deferrals: a split stage's subtasks each run
  * cold, and two of them printing the same pull-request link is one step, not two.
  */
+/**
+ * Records why a stage did not do its work, alongside holding it.
+ *
+ * Separate from the hold so the reason survives independently: a hold that cannot take
+ * effect (the stage had not settled) must not silently discard the explanation, which
+ * is the only account of what was missing.
+ */
+export function recordStageBlocked(
+  pipeline: TaskPipeline,
+  stageId: string,
+  reason: string,
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage || !reason.trim()) return pipeline;
+  return replaceStage(pipeline, { ...stage, blocked: reason.trim() });
+}
+
 export function recordActions(
   pipeline: TaskPipeline,
   stageId: string,

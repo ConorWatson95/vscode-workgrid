@@ -5,6 +5,7 @@ import { ok } from "../utilities/result";
 import { ruleInsertionIndex } from "../domain/pipelineEngine";
 import {
   refreshPendingStages,
+  addMissingStages,
   revertToStage,
   sendBackTargets,
   sendBackToStage,
@@ -1199,11 +1200,39 @@ async function advanceRouteCommand(
   // intent, so a wrong instruction could only be fixed by recreating the task.
   // Stages that have already run keep what they ran with, so history stays true.
   let advancing = task;
+
+  // Stages the route gained since this task was created, before the intent refresh so
+  // a newly added stage gets the current wording too. The remedy for a route that was
+  // missing a step used to be doing it by hand or throwing the task away.
   if (ctx.stageDefinitions && task.pipeline) {
-    const refreshed = refreshPendingStages(task.pipeline, ctx.stageDefinitions());
-    if (refreshed.changed.length > 0) {
+    const grown = addMissingStages(task.pipeline, ctx.stageDefinitions());
+    if (grown.added.length > 0) {
       advancing = {
         ...task,
+        pipeline: grown.pipeline,
+        updatedAt: new Date().toISOString(),
+      };
+      await ctx.repository.save(advancing);
+      ctx.logger.info(
+        `Harness [${task.name}] added ${grown.added.join(", ")} from harness.json.`,
+      );
+    }
+    if (grown.tooLate.length > 0) {
+      // Said out loud rather than dropped: the route now has a step this task will
+      // never run, and the only way to know is to be told.
+      ctx.logger.warn(
+        `Harness [${task.name}] cannot add ${grown.tooLate.join(", ")} — the route has ` +
+          "moved past where they belong. Do those steps by hand, or revert to an " +
+          "earlier stage first.",
+      );
+    }
+  }
+
+  if (ctx.stageDefinitions && advancing.pipeline) {
+    const refreshed = refreshPendingStages(advancing.pipeline, ctx.stageDefinitions());
+    if (refreshed.changed.length > 0) {
+      advancing = {
+        ...advancing,
         pipeline: refreshed.pipeline,
         updatedAt: new Date().toISOString(),
       };
