@@ -1,6 +1,7 @@
 import { AgentSession } from "./agentSession";
 import { TaskPipeline } from "./taskPipeline";
 import { WorkspaceEnvironment } from "./workspaceEnvironment";
+import { WorktreeClaim } from "./worktreeLease";
 
 export type TaskWorkspaceStatus =
   | "creating"
@@ -52,6 +53,16 @@ export interface TaskWorkspace {
   agent?: AgentSession;
   pipeline?: TaskPipeline;
   environment?: WorkspaceEnvironment;
+
+  /**
+   * Worktrees this task has claimed beyond its own — a promotion tree, a publish tree.
+   *
+   * Recorded because stages create worktrees and nothing knew about them: they were never
+   * cleaned up, and overlap between two tasks could only be noticed by an agent reading
+   * `git worktree list` and mentioning it in prose. See `domain/worktreeLease.ts`.
+   * Optional, so tasks created before this existed stay valid.
+   */
+  worktreeClaims?: WorktreeClaim[];
 }
 
 /**

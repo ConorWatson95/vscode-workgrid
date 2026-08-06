@@ -356,6 +356,11 @@
           "group": "inline@1"
         },
         {
+          "command": "taskWorkspaces.verifyAllChecklist",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /hasChecklist/",
+          "group": "inline@2"
+        },
+        {
           "command": "taskWorkspaces.checkoutTaskBranch",
           "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
           "group": "3_lifecycle@3"
