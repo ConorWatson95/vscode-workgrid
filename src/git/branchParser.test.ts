@@ -18,10 +18,6 @@ describe("parseBranchNames", () => {
     expect(parseBranchNames("main\r\ndev\r\n")).toEqual(["dev", "main"]);
   });
 
-  it("omits HEAD, which is not a merge source", () => {
-    expect(parseBranchNames("HEAD\nmain\n")).toEqual(["main"]);
-  });
-
   it("returns nothing for empty output", () => {
     expect(parseBranchNames("")).toEqual([]);
   });

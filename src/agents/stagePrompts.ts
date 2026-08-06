@@ -338,9 +338,19 @@ export function parseBlocked(reply: string): string | undefined {
   return text ? text : undefined;
 }
 
-/** The reply without its blocked line, which is protocol rather than report. */
+/**
+ * The reply without its blocked line, which is protocol rather than report.
+ *
+ * The newline collapse matters as much as the removal, for the reason `stripVerdict`
+ * and `stripDeferrals` already carry it: the marker usually has prose after it, so
+ * removing the line leaves a gap wide enough to read as a section break — in the one
+ * report a human opens precisely because the route was held.
+ */
 export function stripBlocked(reply: string): string {
-  return reply.replace(/^[ \t]*BLOCKED:[ \t]*.*$/gim, "").trimEnd();
+  return reply
+    .replace(/^[ \t]*BLOCKED:[ \t]*.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 }
 
 /**

@@ -486,6 +486,12 @@ describe("reporting that a stage's own work went undone", () => {
     const reply = "UAT's tip is the RU-547 promotion.\nBLOCKED: nothing has reached UAT";
     expect(stripBlocked(reply)).toBe("UAT's tip is the RU-547 promotion.");
   });
+
+  it("does not leave a gap that reads as a section break", () => {
+    // The marker normally has prose after it, so the removed line is mid-reply.
+    const reply = "Nothing is committed.\nBLOCKED: no SHA to cherry-pick\nI changed nothing.";
+    expect(stripBlocked(reply)).toBe("Nothing is committed.\n\nI changed nothing.");
+  });
 });
 
 describe("declining work that belongs to another stage", () => {

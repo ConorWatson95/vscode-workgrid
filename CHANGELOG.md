@@ -2,6 +2,38 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.54.0
+
+Quality pass over the three features added in 0.51–0.53. Two of these are visible.
+
+- **A held stage's report no longer has a gap where the marker was.** `stripBlocked`
+  removed the `BLOCKED:` line without the newline collapse that `stripVerdict` and
+  `stripDeferrals` both carry. The marker normally has prose after it, so the removal
+  left a triple newline — which renders as a section break in the one report a human
+  opens *because* the route was held.
+
+- **A refused merge now names the files in the way.** `MergeOutcome.blocked` was
+  already collecting the paths git reported and then showing only "commit or stash
+  them first", which left the reader to go and find out which files it meant.
+
+- **One definition of "outstanding checklist item", not three.** The task row counted
+  them one way, the stage row another — the first excluded skipped stages and the
+  second did not — while the command that ticks them used the engine's
+  `outstandingChecklist`. Both rows now call the engine too. The tree decides whether
+  "Verify All" is offered and the command decides what it acts on, so a disagreement
+  meant the button could appear with nothing to tick, or an outstanding gate with no
+  button.
+
+- **`resolveTask` is shared rather than copied.** The merge command had its own
+  byte-for-byte duplicate, so the next accepted argument shape would have been added to
+  one and silently not the other — and an unresolved task means the command returns
+  having done nothing, which is indistinguishable from its legitimate no-ops.
+
+- **`firstBlocker` now matches its own comment** and does the free in-memory checks
+  before the git call, instead of spawning git twice to discover that a session was
+  running. Plus a dead `HEAD` filter in the branch parser that its only caller can
+  never produce, and a doc comment that had ended up above the wrong function.
+
 ## 0.53.0
 
 - **A stage that says it did not do its work no longer passes.** A stage may end its

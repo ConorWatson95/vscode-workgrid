@@ -7,6 +7,7 @@ import {
   AgentActivity,
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
+import { outstandingChecklist } from "../domain/pipelineEngine";
 import {
   ChecklistItem,
   DenialItem,
@@ -88,12 +89,9 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     const denied = (task.pipeline?.pendingDenials?.items ?? []).filter(
       (i) => !i.granted,
     ).length;
-    // Counted across the whole pipeline, not the current stage: the gate is blocked by
-    // every outstanding item whichever stage raised it, so that is the set "Verify All"
-    // acts on and the condition under which offering it makes sense.
-    const outstanding = (task.pipeline?.stages ?? [])
-      .filter((s) => s.status !== "skipped")
-      .reduce((total, s) => total + (s.checklist ?? []).filter((i) => !i.checked).length, 0);
+    // The engine's own definition, so the menu item and the command that acts on it
+    // cannot disagree about which items count.
+    const outstanding = task.pipeline ? outstandingChecklist(task.pipeline).length : 0;
     this.contextValue = buildContextValue(
       task.status,
       task.agent?.status,
@@ -192,10 +190,12 @@ export class StageTreeItem extends vscode.TreeItem {
     // menu actions that resolve the block.
     // The gate is blocked by every outstanding item in the pipeline, including the
     // ones another stage raised — which is all of them, since a gate raises none.
-    const outstandingInPipeline = (task.pipeline?.stages ?? []).reduce(
-      (total, s) => total + (s.checklist ?? []).filter((i) => !i.checked).length,
-      0,
-    );
+    // Derived by the engine, not re-counted here. Two hand-rolled copies had already
+    // drifted: this one counted a skipped stage's items and the task row's did not, so
+    // the badge and the button that acts on them could disagree.
+    const outstandingInPipeline = task.pipeline
+      ? outstandingChecklist(task.pipeline).length
+      : 0;
     const base = stagePresentation(stage, outstandingInPipeline);
     const block = stageBlock(task.pipeline, stage);
     const visual = block ? { ...base, ...blockedStageVisual(block) } : base;

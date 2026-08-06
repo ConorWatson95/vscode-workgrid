@@ -935,15 +935,6 @@ async function approveStageCommand(
 }
 
 /**
- * Ticks or un-ticks one verification item.
- *
- * Just the tick. It used to ask what was observed on every check, which put an
- * input box between the tester and the next item on a list that is routinely a
- * dozen long — and the answer was almost always Enter, so the prompt cost more
- * than the notes it collected were worth. Recording an observation is now its own
- * button, for the items where there is actually something to say.
- */
-/**
  * Ticks every outstanding checklist item on a task in one go.
  *
  * Built for the supervisor case — several tasks in flight, the same handful of boxes
@@ -1012,6 +1003,15 @@ async function verifyAllChecklistCommand(
   );
 }
 
+/**
+ * Ticks or un-ticks one verification item.
+ *
+ * Just the tick. It used to ask what was observed on every check, which put an
+ * input box between the tester and the next item on a list that is routinely a
+ * dozen long — and the answer was almost always Enter, so the prompt cost more
+ * than the notes it collected were worth. Recording an observation is now its own
+ * button, for the items where there is actually something to say.
+ */
 async function toggleChecklistItemCommand(
   ctx: CommandContext,
   arg: unknown,
@@ -1883,7 +1883,15 @@ function contextOptions(ctx: CommandContext, task: TaskWorkspace) {
 }
 
 /** Resolves the target task from a tree item, a task id, or undefined. */
-async function resolveTask(
+/**
+ * The task a command was invoked on, from a tree item or a bare id.
+ *
+ * Exported because every task command must accept the same argument shapes. A second
+ * copy in another module would silently miss the next shape added here, and the
+ * failure is invisible: an unresolved task means the command returns having done
+ * nothing, which several of them do legitimately.
+ */
+export async function resolveTask(
   ctx: CommandContext,
   arg: unknown,
 ): Promise<TaskWorkspace | undefined> {

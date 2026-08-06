@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
+import { resolveTask } from "./registerCommands";
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { TaskWorkspaceTreeItem } from "../ui/taskWorkspaceTreeItem";
 import { MergeOutcome } from "../git/mergeOutcome";
 import { withStatus } from "../ui/statusProgress";
 
@@ -21,7 +21,7 @@ export async function mergeIntoTaskCommand(
   ctx: CommandContext,
   arg: unknown,
 ): Promise<void> {
-  const task = await resolve(ctx, arg);
+  const task = await resolveTask(ctx, arg);
   if (!task) return;
 
   const blocker = await firstBlocker(ctx, task);
@@ -61,22 +61,7 @@ async function firstBlocker(
   ctx: CommandContext,
   task: TaskWorkspace,
 ): Promise<string | undefined> {
-  const live = await ctx.service.getLiveState(task);
-
-  if (!live.worktreeExists) {
-    return `"${task.name}" has no worktree on disk, so there is nothing to merge into.`;
-  }
-
-  // A merge over uncommitted work cannot be cleanly undone: `--abort` restores the
-  // merge's changes, not the ones that were never committed. git would usually
-  // refuse anyway, but refusing here says why in terms of the task.
-  if (live.isDirty) {
-    return (
-      `"${task.name}" has ${live.changedFileCount} uncommitted change(s). ` +
-      "Commit or stash them first — a merge over them could not be undone."
-    );
-  }
-
+  // The in-memory checks come first, so the common blocked cases cost no git at all.
   // Files changing under a running agent is its own class of bug: the session read
   // the tree at one revision and is still editing against what it remembers.
   const session = ctx.sessions.get(task.id);
@@ -97,6 +82,23 @@ async function firstBlocker(
     return (
       `"${task.name}" is on "${task.branchName}" but the task is about ` +
       `"${task.intendedBranch}". Check it out first, then merge.`
+    );
+  }
+
+  // Only now the git call, which is the one expensive thing here.
+  const live = await ctx.service.getLiveState(task);
+
+  if (!live.worktreeExists) {
+    return `"${task.name}" has no worktree on disk, so there is nothing to merge into.`;
+  }
+
+  // A merge over uncommitted work cannot be cleanly undone: `--abort` restores the
+  // merge's changes, not the ones that were never committed. git would usually
+  // refuse anyway, but refusing here says why in terms of the task.
+  if (live.isDirty) {
+    return (
+      `"${task.name}" has ${live.changedFileCount} uncommitted change(s). ` +
+      "Commit or stash them first — a merge over them could not be undone."
     );
   }
 
@@ -201,10 +203,21 @@ function report(
       return;
     }
 
-    case "blocked":
-      ctx.logger.warn(`Harness [${task.name}] merge refused: ${outcome.message}`);
-      void vscode.window.showWarningMessage(outcome.message);
+    case "blocked": {
+      // The paths are the actionable half — "commit or stash" without saying what is
+      // in the way leaves the reader to go and find out.
+      const named = outcome.paths.slice(0, 5).join(", ");
+      const more =
+        outcome.paths.length > 5 ? ` and ${outcome.paths.length - 5} more` : "";
+      ctx.logger.warn(
+        `Harness [${task.name}] merge refused: ${outcome.message} ` +
+          (outcome.paths.join(", ") || "paths not reported"),
+      );
+      void vscode.window.showWarningMessage(
+        outcome.message + (named ? ` In the way: ${named}${more}.` : ""),
+      );
       return;
+    }
 
     case "failed":
       ctx.logger.error(
@@ -217,11 +230,3 @@ function report(
   }
 }
 
-async function resolve(
-  ctx: CommandContext,
-  arg: unknown,
-): Promise<TaskWorkspace | undefined> {
-  if (arg instanceof TaskWorkspaceTreeItem) return arg.task;
-  if (typeof arg === "string") return ctx.repository.get(arg);
-  return undefined;
-}
