@@ -24,6 +24,7 @@ import {
   CLAUDE_EXTENSION_ID,
 } from "./commandContext";
 import { createTaskWorkspaceCommand } from "./createTaskWorkspaceCommand";
+import { mergeIntoTaskCommand } from "./mergeIntoTaskCommand";
 import {
   TaskWorkspaceTreeItem,
   OrphanWorktreeTreeItem,
@@ -111,6 +112,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.checkoutTaskBranch", (arg) =>
       checkoutTaskBranchCommand(ctx, arg),
     ),
+    register("taskWorkspaces.mergeIntoTask", (arg) => mergeIntoTaskCommand(ctx, arg)),
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),

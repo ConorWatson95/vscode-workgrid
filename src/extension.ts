@@ -3,6 +3,7 @@ import { OutputChannelLogger } from "./logging/outputChannelLogger";
 import { GitClient } from "./git/gitClient";
 import { GitStatusService } from "./git/gitStatusService";
 import { GitWorktreeService } from "./git/gitWorktreeService";
+import { GitMergeService } from "./git/gitMergeService";
 import { ExtensionStateTaskRepository } from "./persistence/extensionStateTaskRepository";
 import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
 import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
@@ -62,6 +63,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const gitClient = new GitClient(logger);
   const statusService = new GitStatusService(gitClient);
   const worktreeService = new GitWorktreeService(gitClient, statusService);
+  const mergeService = new GitMergeService(gitClient);
   // Resolved below, but declared here because the task store reads it on every
   // call: the active repository decides which state file is in play.
   let repositoryRoot: string | undefined;
@@ -718,6 +720,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     service,
     worktrees: worktreeService,
     status: statusService,
+    merges: mergeService,
     repository,
     configuration,
     terminals,

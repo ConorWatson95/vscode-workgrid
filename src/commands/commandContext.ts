@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { TaskWorkspaceService } from "../services/taskWorkspaceService";
 import { GitWorktreeService } from "../git/gitWorktreeService";
 import { GitStatusService } from "../git/gitStatusService";
+import { GitMergeService } from "../git/gitMergeService";
 import { TaskRepository } from "../persistence/taskRepository";
 import { ExtensionConfiguration } from "../configuration/extensionConfiguration";
 import { TerminalManager } from "../processes/terminalManager";
@@ -29,6 +30,8 @@ export interface CommandContext {
   service: TaskWorkspaceService;
   worktrees: GitWorktreeService;
   status: GitStatusService;
+  /** Brings a branch into a task's worktree; see `mergeIntoTaskCommand`. */
+  merges: GitMergeService;
   repository: TaskRepository;
   configuration: ExtensionConfiguration;
   terminals: TerminalManager;

@@ -8,6 +8,15 @@ export class GitError extends Error {
     readonly exitCode: number | null,
     readonly stderr: string,
     readonly args: string[],
+    /**
+     * What the command printed before failing.
+     *
+     * Kept because a non-zero exit is not always empty-handed: `git merge` reports
+     * every conflicting path on *stdout* and then exits 1, so a failure carrying
+     * only stderr loses the one thing a caller needs to say what conflicted.
+     * Optional, since most callers of most commands have no use for it.
+     */
+    readonly stdout: string = "",
   ) {
     super(message);
     this.name = "GitError";
@@ -75,7 +84,7 @@ export class GitClient {
               ? (text: string) => this.logger.debug(text)
               : (text: string) => this.logger.error(text);
             report(`git ${args.join(" ")} failed: ${message}`);
-            resolve(err(new GitError(message, exitCode, stderr, args)));
+            resolve(err(new GitError(message, exitCode, stderr, args, stdout)));
             return;
           }
 
