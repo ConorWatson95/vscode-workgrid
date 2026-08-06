@@ -203,6 +203,7 @@ function parseStage(
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
+    ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
   };
 }

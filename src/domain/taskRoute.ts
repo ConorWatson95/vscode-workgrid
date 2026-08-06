@@ -189,8 +189,33 @@ export interface RouteStageDefinition {
    *
    * Read from the repository root like the rest of the harness config, never from a
    * worktree — a branch must not be able to choose the command that certifies it.
+   *
+   * May name `${taskName}`, `${branch}`, `${baseBranch}` and `${worktreePath}`, which
+   * are substituted before the command runs; anything else in `${...}` reaches the
+   * shell as written. See `domain/commandPlaceholders.ts` — without them a check
+   * cannot tell which ticket it is certifying, which is how one degraded into an
+   * existence check.
    */
   verify?: string;
+  /**
+   * A plan document, relative to the worktree, whose numbered steps this stage must
+   * account for one by one.
+   *
+   * The gap it closes is `verify`'s blind spot. A `verify` command certifies a
+   * post-condition somebody wrote in advance, so it can prove the build compiles and
+   * the object deployed — but not that step 4 of *this ticket's* plan happened, since
+   * that would need a check written per ticket. A stage executing a plan self-reported
+   * one outcome for the whole document, and a step it skipped in silence was
+   * indistinguishable from one it completed. One reached production.
+   *
+   * Path only: the steps are read from the file, so the plan an earlier stage wrote
+   * is the authority on what the numbers mean. See `domain/planSteps.ts`.
+   *
+   * Read from the worktree, unlike `verify`, because the plan is this task's work
+   * product rather than project config — the point is to hold a stage to the plan
+   * written for the ticket it is running.
+   */
+  planFile?: string;
 }
 
 export interface RouteDefinition {

@@ -2,6 +2,64 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.57.0
+
+- **A stage that executes a written plan must now account for every numbered step.** The
+  fifth instance of the harness's one recurring failure, and the most expensive: a
+  deployment stage shipped a migration, a flag and the procedures, silently did not do
+  step 4 of its plan — a post-deploy data rebuild — and **passed**. It surfaced in
+  production as a scorecard tile reading 0.0%, found by hand.
+
+  Nothing already here could catch it. `verify` would need a post-condition query written
+  per ticket. `DEFERRED` catches work a stage *declines*, and this stage declined nothing;
+  it simply did not do it and said nothing. The stage self-reported one outcome for the
+  whole document, so a skipped step was indistinguishable from a completed one.
+
+  A stage with `planFile` set is now given the plan's numbered steps and must answer for
+  each — `STEP 4: done — …` or `STEP 4: not done — …`. **Step identity comes from the
+  file**, because the plan is written by one cold session and executed by another, so
+  nothing held in a session can identify a step. A step reported not done is a correct
+  answer and becomes a deferral, holding the next stage that ships until someone owns it.
+  A step nobody mentions holds the stage itself: `approveStage` refuses it, so silence
+  cannot pass. A stage whose plan file is missing is not run at all, since improvising
+  from the brief is the state this exists to make impossible.
+
+- **`verify` commands can name the task they are certifying.** `${taskName}`, `${branch}`,
+  `${baseBranch}` and `${worktreePath}` are substituted before the command runs. Without
+  them a check written once for a route could not tell which ticket it was running for, so
+  a script meant to reject a worktree parked on *another* ticket's promotion degraded into
+  an existence check — one that passes in exactly the case that matters. Anything else in
+  `${...}` reaches the shell as written, because that is real syntax in both shells and
+  corrupting working commands to catch typos is the wrong trade. The **substituted** form
+  is what the failure reason and the stage's activity report, since the declared form
+  would send a reader to run something different by hand.
+
+- **The worktrees a stage creates are now recorded, and tidied up.** Stages make worktrees
+  the extension never made — a `promote/<ticket>-uat` tree, a publish tree — so nothing
+  cleaned them up and nothing could tell that two tasks were promoting through the same
+  one. Nine accumulated in a week, two holding a commit that had never reached DEV: the
+  directories were the visible symptom, the stranded commits the actual loss.
+
+  Claims are **detected, not requested**: the worktree list is compared before and after a
+  stage the route lets move the tree, so anything that appeared was created by this task
+  and anything already there was borrowed. That distinction is what makes cleanup safe —
+  a created `promote/*` tree may be removed, while the standing `qube-publish-*` trees
+  must be left where they were found or the next publish has nowhere to run. A worktree
+  another task holds now **holds the stage** instead of being noticed by an agent reading
+  `git worktree list` and mentioned in prose. On completion the task offers to remove only
+  what it created, clean, and fully merged — and never deletes a branch, which may hold
+  the only copy of its commits.
+
+- **Fixed: reloading the window switched the holds off.** `normalizePipeline` runs on every
+  read of the state file and rebuilt each stage field by field, so every field added since
+  it was written — `verify`, `verdict`, `blocked`, `mayChangeBranch` — plus the whole
+  `deferrals` list was silently dropped. A route held on deferred work resumed as though
+  there were none.
+
+- **Verify All** is now on the task row rather than only in its right-click menu
+  (`inline@2`, matching the denial action). The command had been correct since 0.54.0 and
+  invisible.
+
 ## 0.56.0
 
 - **A route fix now reaches tasks already in flight.** `addMissingStages` adds stages a

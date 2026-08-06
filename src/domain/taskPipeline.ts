@@ -193,6 +193,26 @@ export interface DeferralItem {
 export const MAX_DEFERRAL_CHARS = 400;
 
 /**
+ * One numbered step of a plan a stage executes, and the stage's account of it.
+ *
+ * `"unaccounted"` is the state that matters and the reason this exists: a stage
+ * that executed a written plan self-reported one outcome for the whole document,
+ * so a step it silently skipped looked exactly like a step it completed. One such
+ * step — a post-deploy data rebuild — reached production as a scorecard reading
+ * 0.0%. See `domain/planSteps.ts`.
+ */
+export interface PlanStepRecord {
+  /** As the plan file numbers it; step identity comes from the document. */
+  number: number;
+  title: string;
+  status: "unaccounted" | "done" | "not-done";
+  /** What the stage did, or why it did not. Its own words. */
+  note?: string;
+  /** When the stage accounted for it. */
+  at?: string;
+}
+
+/**
  * One thing a human must verify. Produced by behaviour-review stages and
  * consumed at the human-verification gate — this is the evidence a task must
  * present before it can be called complete.
@@ -255,6 +275,19 @@ export interface TaskStage {
    * Snapshotted at creation, so a stage that ran keeps the permission it ran with.
    */
   mayChangeBranch?: boolean;
+  /**
+   * Plan document this stage executes, relative to the worktree; see the route
+   * definition. Refreshed for a stage that has not started, like `verify`.
+   */
+  planFile?: string;
+  /**
+   * Every numbered step of `planFile`, and what this stage said about each.
+   *
+   * Held on the stage rather than the pipeline because the steps belong to the run:
+   * re-opening the stage discards its accounts along with everything else that run
+   * produced, which is right — the next run has to account for them again.
+   */
+  planSteps?: PlanStepRecord[];
   /**
    * Command whose exit code decides this stage's outcome; see the route definition.
    * Refreshed for a stage that has not started, like `intent`, so correcting a check
@@ -434,6 +467,12 @@ export function normalizePipeline(
     const stage = (entry ?? {}) as Partial<TaskStage> & { name?: string };
     const name = stage.name ?? `Stage ${index + 1}`;
     return {
+      // Spread first, then default. Listing the fields exhaustively is what this
+      // used to do, and every field added since — verify, verdict, blocked,
+      // mayChangeBranch, and now the plan-step accounts — was silently dropped on
+      // the next read, because this runs on every load of the state file. That
+      // turned each hold into one that a window reload switched off.
+      ...stage,
       id: stage.id ?? `stage-${index + 1}`,
       name,
       // Records predating stage kinds described implementation work.
@@ -456,6 +495,9 @@ export function normalizePipeline(
   });
 
   return {
+    // Spread for the same reason the stages are: `deferrals` was absent from this
+    // list, so the items holding a deployment vanished on reload.
+    ...raw,
     routeId: raw.routeId ?? "ad-hoc",
     routeLabel: raw.routeLabel,
     stages,

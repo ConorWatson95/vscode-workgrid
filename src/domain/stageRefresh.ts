@@ -38,7 +38,7 @@ export interface StageDefinitionSource {
  *
  * `workflow` is absent because it is a *subtask* field, not a stage one.
  */
-const REFRESHABLE = ["intent", "model", "verify"] as const;
+const REFRESHABLE = ["intent", "model", "verify", "planFile"] as const;
 
 /**
  * Adds stages a route gained after this pipeline was created.
@@ -189,6 +189,10 @@ export function revertToStage(
       // Checklist items were raised by a run that is being discarded, so keeping
       // them would gate the task on evidence about work that no longer exists.
       checklist: undefined,
+      // Same reasoning: a step marked done by the run being discarded would let the
+      // re-run inherit credit for work that no longer exists, which is the exact
+      // confusion per-step accounting exists to remove.
+      planSteps: undefined,
       subtasks: stage.subtasks.map((subtask) => ({
         ...subtask,
         status: "pending" as const,
@@ -379,7 +383,9 @@ function findDefinition(
   source: StageDefinitionSource,
   routeId: string,
   stage: Pick<TaskStage, "id" | "addedByRule">,
-): { intent?: string; model?: string; handoff?: boolean; verify?: string } | undefined {
+):
+  | { intent?: string; model?: string; handoff?: boolean; verify?: string; planFile?: string }
+  | undefined {
   if (stage.addedByRule) {
     return source.rules.find((rule) => rule.stage.id === stage.id)?.stage;
   }

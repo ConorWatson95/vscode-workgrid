@@ -23,6 +23,7 @@ import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { PermissionRulesService } from "../services/permissionRulesService";
 import { PermissionGateService } from "../services/permissionGateService";
 import { AskUserService } from "../services/askUserService";
+import { WorktreeClaimService } from "../services/worktreeClaimService";
 import { StageDefinitionSource } from "../domain/stageRefresh";
 
 /** Shared dependencies handed to every command handler. */
@@ -48,6 +49,11 @@ export interface CommandContext {
   visualStudio: VisualStudioService;
   reviewPlans: ReviewPlanService;
   runner: PipelineRunner;
+  /**
+   * Who holds which worktree, and which of a finished task's may be tidied away.
+   * Optional so the harness commands work without it, as they did before.
+   */
+  worktreeClaims?: WorktreeClaimService;
   provisioner: WorktreeProvisioner;
   tree: TaskWorkspaceTreeProvider;
   logger: Logger;

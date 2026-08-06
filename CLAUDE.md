@@ -92,6 +92,10 @@ list rather than discovering the breakage later.
   written; and a linked worktree's common dir is the main repo's, so every
   worktree shares one store. Resolve it with `--git-common-dir`, never by joining
   `.git` — that is a file in a linked worktree.
+- **`normalizePipeline` must spread, never re-list fields.** It runs on every read of the
+  state file, so a field it forgets is dropped on the next load — which is how `verify`,
+  `verdict`, `blocked` and the whole `deferrals` list came to vanish on a window reload,
+  turning each hold into one a reload switched off.
 - **Writes to the state file are read-modify-write, atomically renamed**
   (`nodeStateFileIo.ts`). The extension and a headless run both write it, so a
   cached view or an in-place write would lose or truncate tasks.
@@ -261,6 +265,43 @@ noticed it was missing.
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as
   that stage's checklist items are discarded.
 
+### Work a stage was told to do and didn't
+
+The same disease as deferrals, one step further in: a stage executing a written plan
+self-reported one outcome for the whole document, so a numbered step it skipped in
+silence was indistinguishable from one it completed. One such step — a post-deploy data
+rebuild — reached production as a scorecard reading 0.0%.
+
+- `domain/planSteps.ts` — parses a plan's numbered steps and the `STEP <n>: done|not
+  done — …` lines a stage answers with. **Step identity comes from the file**: the plan
+  is written by one cold session and executed by another, so nothing held in a session
+  can identify a step. Headings win over list items when a document has both, or a plan
+  whose steps each contain a numbered sub-list would demand an account per sub-bullet.
+- A route stage declares `planFile` (relative to the **worktree** — unlike `verify`,
+  the plan is this task's work product, not project config). The runner reads it before
+  the session, and a stage whose plan is missing is **not run**: improvising from the
+  brief and reporting done is the state this exists to prevent.
+- A step reported *not done* becomes a **deferral**, reusing the hold in front of a
+  shipping stage and the settlement that requires a sentence. It is the same fact by a
+  different route. A step **nobody mentions** holds the stage, and `approveStage`
+  refuses it — silence is the failure mode, so silence is what cannot pass.
+- `${taskName}`/`${branch}`/`${baseBranch}`/`${worktreePath}` in a `verify` command are
+  substituted (`domain/commandPlaceholders.ts`); anything else in `${...}` reaches the
+  shell verbatim, because that is real syntax in both shells. A check that cannot name
+  its own ticket degrades into an existence check, which passes in the one case that
+  matters.
+
+### Who holds which worktree
+
+`domain/worktreeLease.ts` + `services/worktreeClaimService.ts`. Stages create worktrees
+the extension never made, so nothing was cleaned up and nothing detected two tasks
+overlapping on one. **Claims are detected, not requested** — the worktree list before and
+after a `mayChangeBranch` stage — because the agent makes them, not the harness. The
+load-bearing distinction is **created versus borrowed**: a created `promote/*` tree may be
+removed, the standing `qube-publish-*` trees must not be, or the next publish has nowhere
+to run. Conflicts hold the stage and are never forced. **Branches are never deleted**: a
+worktree is a checkout that can be remade, a branch may hold the only copy of its commits.
+
 ### What a stage carries forward, and what it cost
 
 - **Handoffs** (`TaskPipeline.handoffs`) — a stage the route marks `handoff: true`
@@ -290,7 +331,7 @@ noticed it was missing.
 drives split/run/checklist → approve gate, with outcomes for a stage that declares
 `verify` coming from a process exit code rather than the agent's own account.
 
-Remaining gap: a stage without `verify` is still **self-reported** —
+Remaining gap: a stage without `verify` and without `planFile` is still **self-reported** —
 `finishSubtask(..., "done")` records that the session ended without error. And the
 handoff-versus-rediscovery question is now measurable but **not yet measured**: the
 next real step is a route run both ways, compared on the recorded cost.

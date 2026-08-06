@@ -37,7 +37,9 @@ import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import { filterMcpConfig } from "./agents/mcpConfigFilter";
 import * as fs from "node:fs";
+import * as nodePath from "node:path";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
+import { WorktreeClaimService } from "./services/worktreeClaimService";
 import { PermissionRulesService } from "./services/permissionRulesService";
 import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials";
 import { PendingGate, PermissionGateService } from "./services/permissionGateService";
@@ -613,6 +615,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Shared: also used when granting a rule, to refresh an existing worktree's copy.
   const provisioner = new WorktreeProvisioner(logger);
 
+  /**
+   * Keeps the record of which worktrees each task holds.
+   *
+   * Stages create worktrees the extension never made — a `promote/<ticket>-uat` tree, a
+   * publish tree — so nothing cleaned them up and nothing could tell that two tasks
+   * were promoting through the same one. The port is narrow on purpose: every decision
+   * is in `domain/worktreeLease.ts`, and this is the git it needs.
+   */
+  const worktreeClaims = new WorktreeClaimService(
+    {
+      async list(repositoryRoot) {
+        const listed = await worktreeService.listWorktrees(repositoryRoot);
+        return listed.ok
+          ? listed.value.map((tree) => ({ path: tree.path, branch: tree.branch }))
+          : undefined;
+      },
+      async isDirty(worktreePath) {
+        const status = await statusService.getStatus(worktreePath);
+        // Undefined, not false: unreadable must not read as clean, or cleanup would
+        // remove a worktree nobody could inspect.
+        return status.ok ? status.value.isDirty : undefined;
+      },
+      async countUnmerged(worktreePath, baseBranch) {
+        const ahead = await statusService.getCommitsAhead(worktreePath, baseBranch);
+        return ahead.ok ? ahead.value : undefined;
+      },
+      async remove(repositoryRoot, worktreePath) {
+        const removed = await worktreeService.removeWorktree(repositoryRoot, worktreePath);
+        if (removed.ok) return undefined;
+        return removed.error.kind === "git"
+          ? removed.error.error.message
+          : removed.error.message;
+      },
+    },
+    repository,
+    logger,
+  );
+
   const runner = new PipelineRunner(
     stageRunner,
     repository,
@@ -701,6 +741,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Turns a stage's declared check into its outcome, so "done" stops meaning
     // "the session ended without error".
     new NodeVerificationRunner(),
+    // Reads a stage's plan out of the worktree, so its numbered steps can be held
+    // against it one by one. Absent file and unreadable file are the same answer
+    // here: either way there is no plan to account for, and the runner refuses to
+    // run the stage rather than letting it improvise.
+    async (worktreePath, relativePath) => {
+      try {
+        return await fs.promises.readFile(nodePath.join(worktreePath, relativePath), "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+    worktreeClaims,
   );
 
   // Lets an open report show a stage's commands as they run, rather than nothing
@@ -735,6 +787,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     visualStudio,
     reviewPlans,
     runner,
+    worktreeClaims,
     provisioner,
     tree,
     logger,

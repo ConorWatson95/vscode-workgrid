@@ -1328,9 +1328,11 @@ async function advanceRouteCommand(
       ctx.logger.info(`Harness [${task.name}] stopped; the route can be resumed.`);
       return;
     case "done":
-      void vscode.window.showInformationMessage(
-        `"${task.name}" completed its route.`,
-      );
+      // Offered here because this is the moment a task's extra worktrees stop being
+      // needed. Nine of them accumulated over one week of routes, two holding a commit
+      // that had never reached DEV — the directories were the visible symptom, the
+      // stranded commits the actual loss.
+      await offerWorktreeCleanupCommand(ctx, task.id);
       return;
     case "needsInput":
       // The questions are already persisted on the pipeline by the runner, so
@@ -1417,6 +1419,71 @@ async function advanceRouteCommand(
     case "unharnessed":
       return;
   }
+}
+
+/**
+ * Says the route finished, and offers to tidy away the worktrees it created.
+ *
+ * Asked rather than done. `planCleanup` is deliberately conservative — created by this
+ * task, clean including untracked files, nothing unmerged — but conservative is not the
+ * same as agreed, and a worktree is where uncommitted work lives. Branches are never
+ * touched either way: a worktree is a checkout that can be remade, while a branch may
+ * hold the only copy of its commits.
+ *
+ * What is retained is said out loud, with its reason. A silent skip reads as "there was
+ * nothing to do", and the interesting case here is the opposite: a tree kept back
+ * *because* it holds commits nobody has merged.
+ */
+async function offerWorktreeCleanupCommand(
+  ctx: CommandContext,
+  taskId: string,
+): Promise<void> {
+  const task = await ctx.repository.get(taskId);
+  const claims = ctx.worktreeClaims;
+  if (!task || !claims || (task.worktreeClaims ?? []).length === 0) {
+    if (task) {
+      void vscode.window.showInformationMessage(`"${task.name}" completed its route.`);
+    }
+    return;
+  }
+
+  const plan = await claims.planFor(task);
+  for (const kept of plan.retain) {
+    ctx.logger.info(
+      `Harness [${task.name}] keeping "${kept.claim.path}": ${kept.reason}.`,
+    );
+  }
+
+  if (plan.remove.length === 0) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" completed its route.` +
+        (plan.retain.length > 0
+          ? ` ${plan.retain.length} worktree(s) left in place — the log says why.`
+          : ""),
+    );
+    return;
+  }
+
+  const choice = await vscode.window.showInformationMessage(
+    `"${task.name}" completed its route. It created ${plan.remove.length} worktree(s) ` +
+      `that are clean and fully merged: ${plan.remove.map((c) => c.path).join(", ")}.`,
+    "Remove Them",
+    "Leave Them",
+  );
+  if (choice !== "Remove Them") return;
+
+  const applied = await claims.apply(task, plan, new Date().toISOString());
+  ctx.tree.refresh();
+  if (applied.failed.length > 0) {
+    void vscode.window.showWarningMessage(
+      `Removed ${applied.removed.length}; ${applied.failed.length} refused — ` +
+        applied.failed.map((f) => `${f.path}: ${f.reason}`).join("; "),
+    );
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    `Removed ${applied.removed.length} worktree(s). Their branches were left alone.`,
+  );
 }
 
 /**

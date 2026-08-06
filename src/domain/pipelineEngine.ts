@@ -2,6 +2,7 @@ import { Result, ok, err } from "../utilities/result";
 import {
   ChecklistItem,
   DenialItem,
+  PlanStepRecord,
   QuestionItem,
   Subtask,
   DeferralItem,
@@ -12,6 +13,7 @@ import {
   truncateHandoff,
 } from "./taskPipeline";
 import { RouteDefinition, RouteStageDefinition } from "./taskRoute";
+import { PlanStep, StepAccount } from "./planSteps";
 import {
   ReviewRule,
   RuleMatch,
@@ -40,6 +42,12 @@ export type PipelineError =
   | { kind: "checklistIncomplete"; message: string; outstanding: number }
   | { kind: "unknownChecklistItem"; message: string }
   | { kind: "unknownDeferral"; message: string }
+  | {
+      kind: "planStepsUnaccounted";
+      message: string;
+      /** The step numbers nobody has said anything about. */
+      steps: number[];
+    }
   | { kind: "noPendingQuestion"; message: string }
   | { kind: "unknownQuestion"; message: string };
 
@@ -106,6 +114,7 @@ function createStage(
     ...(definition.handoff ? { handoff: true } : {}),
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     ...(definition.verify ? { verify: definition.verify } : {}),
+    ...(definition.planFile ? { planFile: definition.planFile } : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.
@@ -693,6 +702,107 @@ export function checkOutstandingChecklist(
 }
 
 /**
+ * Registers the numbered steps of the plan a stage is about to execute.
+ *
+ * Idempotent, and deliberately preserving: a step already accounted for keeps its
+ * account when the steps are re-read, so a stage re-run after a refused tool call
+ * does not lose what its earlier attempt reported. Only the title is refreshed,
+ * since the plan file may have been edited between runs.
+ *
+ * A step the plan no longer contains is dropped. The plan document is the authority
+ * on what the steps are — that is the whole reason identity comes from the file —
+ * so holding a stage on a step its plan no longer has would be unaccountable.
+ */
+export function recordPlanSteps(
+  pipeline: TaskPipeline,
+  stageId: string,
+  steps: readonly PlanStep[],
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage) return pipeline;
+
+  const existing = new Map((stage.planSteps ?? []).map((record) => [record.number, record]));
+  const planSteps: PlanStepRecord[] = steps.map((step) => {
+    const previous = existing.get(step.number);
+    return previous
+      ? { ...previous, title: step.title }
+      : { number: step.number, title: step.title, status: "unaccounted" as const };
+  });
+
+  return replaceStage(pipeline, {
+    ...stage,
+    planSteps: planSteps.length > 0 ? planSteps : undefined,
+  });
+}
+
+/**
+ * Records what a stage said about each step of its plan.
+ *
+ * An account for a number the plan does not have is ignored rather than added. The
+ * steps come from the document; a reply that invents a step 9 is describing its own
+ * reading, and adding it would let a stage account for work nobody asked about while
+ * a real step stayed unmentioned.
+ */
+export function recordStepAccounts(
+  pipeline: TaskPipeline,
+  stageId: string,
+  accounts: readonly StepAccount[],
+  at: string,
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage?.planSteps || accounts.length === 0) return pipeline;
+
+  const byNumber = new Map(accounts.map((account) => [account.number, account]));
+  const planSteps = stage.planSteps.map((record) => {
+    const account = byNumber.get(record.number);
+    if (!account) return record;
+    return {
+      ...record,
+      status: account.state,
+      note: account.note?.trim() || record.note,
+      at,
+    };
+  });
+
+  return replaceStage(pipeline, { ...stage, planSteps });
+}
+
+/**
+ * Steps of a stage's plan that the stage said nothing about.
+ *
+ * The one query the whole mechanism turns on. A stage with any of these has not
+ * accounted for the plan it was given, and cannot be passed — see `approveStage`.
+ */
+export function unaccountedPlanSteps(
+  pipeline: TaskPipeline,
+  stageId: string,
+): PlanStepRecord[] {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage || stage.status === "skipped") return [];
+  return (stage.planSteps ?? []).filter((record) => record.status === "unaccounted");
+}
+
+/**
+ * Steps a stage reported it did not do, across the whole pipeline.
+ *
+ * Reported rather than held here: the runner turns each into a deferral, so the
+ * existing hold in front of a stage that ships, and the settlement that requires a
+ * sentence, apply to a step nobody executed exactly as they do to work a stage
+ * declined. The two are the same fact arriving by different routes.
+ */
+export function unexecutedPlanSteps(
+  pipeline: TaskPipeline,
+): { stage: TaskStage; step: PlanStepRecord }[] {
+  return pipeline.stages
+    .filter((stage) => stage.status !== "skipped")
+    .flatMap((stage) =>
+      (stage.planSteps ?? [])
+        .filter((step) => step.status === "not-done")
+        .map((step) => ({ stage, step })),
+    );
+}
+
+/**
  * Records work a stage declined as belonging to a different stage.
  *
  * Deduplicated on the text, per stage: a split stage's subtasks each run cold and
@@ -1067,6 +1177,25 @@ export function approveStage(
         `${actionsOnly ? "step(s) for you to do" : "verification item(s)"}: ` +
         outstanding.map((i) => i.text).join("; "),
       outstanding: outstanding.length,
+    });
+  }
+
+  // A stage that executed a written plan must have said something about every
+  // numbered step. Enforced here rather than only in the runner because approval is
+  // the other way a stage passes, and the failure this closes is precisely a stage
+  // passing with a step nobody had accounted for. Note what it does *not* require: a
+  // step reported as not done passes fine — it becomes a deferral, which holds the
+  // next stage that ships. What cannot pass is silence.
+  const unaccounted = unaccountedPlanSteps(pipeline, stageId);
+  if (unaccounted.length > 0) {
+    return err({
+      kind: "planStepsUnaccounted",
+      message:
+        `"${stage.name}" has not accounted for ${unaccounted.length} step(s) of ` +
+        `${stage.planFile ?? "its plan"}: ` +
+        unaccounted.map((step) => `${step.number}. ${step.title}`).join("; ") +
+        ". Re-run the stage, or record what happened to each.",
+      steps: unaccounted.map((step) => step.number),
     });
   }
 

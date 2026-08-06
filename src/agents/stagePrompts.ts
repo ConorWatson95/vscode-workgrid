@@ -1,5 +1,12 @@
 import { Subtask, TaskStage } from "../domain/taskPipeline";
 import { SubtaskSpec } from "../domain/pipelineEngine";
+import {
+  PlanStep,
+  StepAccount,
+  parseStepAccounts,
+  planStepInstruction,
+  stripStepAccounts,
+} from "../domain/planSteps";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -408,6 +415,8 @@ export interface StageReply {
   blocked: string | undefined;
   /** Steps only the operator can take. */
   actions: string[];
+  /** What the stage said about each numbered step of the plan it was given. */
+  stepAccounts: StepAccount[];
   /** What a human and every later stage should read: markers removed. */
   report: string;
 }
@@ -428,7 +437,21 @@ export function readStageReply(text: string): StageReply {
   const actions = parseActions(report);
   report = stripActions(report);
 
-  return { verdict, handoff: split.handoff, deferrals, blocked, actions, report };
+  // Read from the report half like the three above, and for the same reason: a
+  // handoff that says "step 4 is still outstanding" is telling the next stage about
+  // an account, not making a second one.
+  const stepAccounts = parseStepAccounts(report);
+  report = stripStepAccounts(report);
+
+  return {
+    verdict,
+    handoff: split.handoff,
+    deferrals,
+    blocked,
+    actions,
+    stepAccounts,
+    report,
+  };
 }
 
 /**
@@ -588,6 +611,14 @@ export function subtaskPrompt(
   context: StageContext,
   stage: TaskStage,
   subtask: Subtask,
+  /**
+   * The numbered steps of this stage's plan, when it has one.
+   *
+   * Passed in rather than read here: the file lives in the worktree, and these
+   * prompts are pure. The engine holds the stage to these numbers, so they are the
+   * ones the stage is asked about — not whatever it makes of the document itself.
+   */
+  planSteps?: readonly PlanStep[],
 ): string {
   const body = `${preamble(context, stage)}
 
@@ -599,7 +630,11 @@ Stay within this objective. If you discover work that belongs to a different
 stage of the workflow, do not do it — instead write it on its own line as
 "${DEFERRED_MARKER} <what needs doing, and where you think it belongs>". Use one
 line per item. Something declined this way is followed up by the workflow, so it
-is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${actionInstruction()}${handoffInstruction(stage)}${verdictInstruction(stage)}`;
+is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${actionInstruction()}${
+    stage.planFile && planSteps && planSteps.length > 0
+      ? planStepInstruction(stage.planFile, planSteps)
+      : ""
+  }${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

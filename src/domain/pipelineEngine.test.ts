@@ -24,6 +24,10 @@ import {
   recordDenials,
   ungrantedDenials,
   recordChecklist,
+  recordPlanSteps,
+  recordStepAccounts,
+  unaccountedPlanSteps,
+  unexecutedPlanSteps,
   recordQuestion,
   retryStage,
   unansweredQuestions,
@@ -1368,5 +1372,151 @@ describe("mayChangeBranch", () => {
     const pipeline = createPipeline(route);
     expect(pipeline.stages[0].mayChangeBranch).toBe(true);
     expect(pipeline.stages[1].mayChangeBranch).toBeUndefined();
+  });
+});
+
+describe("plan-step accounting", () => {
+  const ROUTE_WITH_PLAN: RouteDefinition = {
+    id: "planned",
+    label: "Planned",
+    description: "d",
+    stages: [
+      {
+        id: "deploy",
+        label: "Deploy",
+        kind: "deployment",
+        intent: "Execute the plan.",
+        splittable: false,
+        gate: "approval",
+        planFile: "docs/plan.md",
+      },
+    ],
+  };
+
+  const STEPS = [
+    { number: 1, title: "Ship the migration" },
+    { number: 2, title: "Rebuild the KPI elements" },
+  ];
+
+  /** A pipeline whose only stage has run and is at its gate. */
+  function held(): TaskPipeline {
+    let pipeline = createPipeline(ROUTE_WITH_PLAN);
+    pipeline = recordPlanSteps(pipeline, "deploy", STEPS);
+    const started = startSubtask(pipeline, "deploy-1", { at: T });
+    if (started.ok) pipeline = started.value;
+    const finished = finishSubtask(pipeline, "deploy-1", { status: "done", at: T });
+    if (finished.ok) pipeline = finished.value;
+    return pipeline;
+  }
+
+  it("snapshots the plan file onto the stage", () => {
+    expect(createPipeline(ROUTE_WITH_PLAN).stages[0].planFile).toBe("docs/plan.md");
+  });
+
+  it("registers every step as unaccounted for", () => {
+    const pipeline = recordPlanSteps(createPipeline(ROUTE_WITH_PLAN), "deploy", STEPS);
+    expect(pipeline.stages[0].planSteps).toEqual([
+      { number: 1, title: "Ship the migration", status: "unaccounted" },
+      { number: 2, title: "Rebuild the KPI elements", status: "unaccounted" },
+    ]);
+  });
+
+  it("keeps an account when the steps are re-read, and refreshes the title", () => {
+    // A stage re-run after a refused tool call must not lose what its first attempt
+    // reported, and the plan file may have been edited in between.
+    let pipeline = recordPlanSteps(createPipeline(ROUTE_WITH_PLAN), "deploy", STEPS);
+    pipeline = recordStepAccounts(pipeline, "deploy", [{ number: 1, state: "done", note: "ran it" }], T);
+    pipeline = recordPlanSteps(pipeline, "deploy", [
+      { number: 1, title: "Ship the migration (renamed)" },
+      { number: 2, title: "Rebuild the KPI elements" },
+    ]);
+
+    expect(pipeline.stages[0].planSteps?.[0]).toEqual({
+      number: 1,
+      title: "Ship the migration (renamed)",
+      status: "done",
+      note: "ran it",
+      at: T,
+    });
+  });
+
+  it("drops a step the plan no longer contains", () => {
+    let pipeline = recordPlanSteps(createPipeline(ROUTE_WITH_PLAN), "deploy", STEPS);
+    pipeline = recordPlanSteps(pipeline, "deploy", [STEPS[0]]);
+    expect(pipeline.stages[0].planSteps?.map((s) => s.number)).toEqual([1]);
+  });
+
+  it("ignores an account for a step the plan does not have", () => {
+    let pipeline = recordPlanSteps(createPipeline(ROUTE_WITH_PLAN), "deploy", STEPS);
+    pipeline = recordStepAccounts(pipeline, "deploy", [{ number: 9, state: "done" }], T);
+    expect(unaccountedPlanSteps(pipeline, "deploy")).toHaveLength(2);
+    expect(pipeline.stages[0].planSteps?.map((s) => s.number)).toEqual([1, 2]);
+  });
+
+  it("refuses to approve a stage with a step nobody accounted for", () => {
+    const result = approveStage(held(), "deploy", T);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("planStepsUnaccounted");
+    expect(result.error.message).toContain("docs/plan.md");
+    expect(result.error.message).toContain("Rebuild the KPI elements");
+  });
+
+  it("approves once every step has an account, including ones reported not done", () => {
+    // A step reported not done is a correct answer: it becomes a deferral, which holds
+    // the next stage that ships. What cannot pass is silence.
+    const pipeline = recordStepAccounts(
+      held(),
+      "deploy",
+      [
+        { number: 1, state: "done", note: "ran it" },
+        { number: 2, state: "not-done", note: "needs live authorisation" },
+      ],
+      T,
+    );
+    const result = approveStage(pipeline, "deploy", T);
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports the steps a stage said it did not do", () => {
+    const pipeline = recordStepAccounts(
+      held(),
+      "deploy",
+      [{ number: 2, state: "not-done", note: "needs live authorisation" }],
+      T,
+    );
+    expect(unexecutedPlanSteps(pipeline).map((e) => e.step.number)).toEqual([2]);
+  });
+
+  it("counts nothing outstanding for a skipped stage", () => {
+    const skipped = skipStage(held(), "deploy", T);
+    expect(skipped.ok).toBe(true);
+    if (!skipped.ok) return;
+    expect(unaccountedPlanSteps(skipped.value, "deploy")).toEqual([]);
+    expect(unexecutedPlanSteps(skipped.value)).toEqual([]);
+  });
+
+  it("survives a round trip through the store", () => {
+    // normalizePipeline used to rebuild each stage field by field, so every field added
+    // since — verify, verdict, blocked, and these — was dropped on the next read, which
+    // turned each hold into one a window reload switched off.
+    const pipeline = recordStepAccounts(held(), "deploy", [{ number: 1, state: "done" }], T);
+    const restored = normalizePipeline(JSON.parse(JSON.stringify(pipeline)));
+    expect(restored?.stages[0].planFile).toBe("docs/plan.md");
+    expect(restored?.stages[0].planSteps?.[0].status).toBe("done");
+    expect(unaccountedPlanSteps(restored!, "deploy")).toHaveLength(1);
+  });
+
+  it("keeps a stage's verify command and its deferrals across a round trip", () => {
+    const pipeline = recordDeferrals(
+      { ...held(), stages: [{ ...held().stages[0], verify: "dotnet build", verdict: "block" }] },
+      "deploy",
+      ["the export structure nobody owns"],
+      T,
+    );
+    const restored = normalizePipeline(JSON.parse(JSON.stringify(pipeline)));
+    expect(restored?.stages[0].verify).toBe("dotnet build");
+    expect(restored?.stages[0].verdict).toBe("block");
+    expect(restored?.deferrals).toHaveLength(1);
   });
 });

@@ -15,6 +15,9 @@ import {
   recordHandoff,
   recordDeferrals,
   recordActions,
+  recordPlanSteps,
+  recordStepAccounts,
+  unaccountedPlanSteps,
   recordStageBlocked,
   handoffsBefore,
   holdStageForFindings,
@@ -25,6 +28,7 @@ import {
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
+import { substitutePlaceholders } from "../domain/commandPlaceholders";
 import {
   CommandOutcome,
   VerificationCommandRunner,
@@ -46,11 +50,13 @@ import {
   splitPrompt,
   subtaskPrompt,
 } from "../agents/stagePrompts";
+import { PlanStep, parsePlanSteps } from "../domain/planSteps";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
 import { ReviewPlanService } from "./reviewPlanService";
+import { WorktreeClaimService } from "./worktreeClaimService";
 import {
   PermissionDenial,
   formatDenialReport,
@@ -243,6 +249,24 @@ export class PipelineRunner {
      * execution a prerequisite for driving a route at all.
      */
     private readonly verifier?: VerificationCommandRunner,
+    /**
+     * Reads a file from a task's worktree, for a stage that executes a plan.
+     *
+     * Injected and optional for the reason the verifier is: the runner's tests need no
+     * filesystem, and a route with no `planFile` never calls it. Narrow on purpose —
+     * a path relative to the worktree, in, text or nothing out.
+     */
+    private readonly readWorktreeFile?: (
+      worktreePath: string,
+      relativePath: string,
+    ) => Promise<string | undefined>,
+    /**
+     * Records the worktrees a stage creates, and reports overlap with another task.
+     *
+     * Optional like the rest: a route whose stages never leave their own worktree has
+     * nothing to claim, and a runner built without this behaves exactly as before.
+     */
+    private readonly claims?: WorktreeClaimService,
   ) {}
 
   /**
@@ -266,11 +290,31 @@ export class PipelineRunner {
   private async runVerification(
     task: TaskWorkspace,
     stage: TaskStage,
-    command: string,
+    declared: string,
     signal?: AbortSignal,
-  ): Promise<CommandOutcome | undefined> {
+  ): Promise<{ command: string; outcome: CommandOutcome } | undefined> {
+    // A check written once for a route could not name the task it was certifying, so a
+    // script that had to reject a worktree parked on *another* ticket degraded into an
+    // existence check — one that passes in exactly the case that matters.
+    const { command, used, unknown } = substitutePlaceholders(declared, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      worktreePath: task.worktreePath,
+    });
+    if (unknown.length > 0) {
+      // Not an error: `${...}` is shell syntax, so most of these are deliberate. Said
+      // out loud because the other cause is a misspelled placeholder, and that reaches
+      // the script as a literal `${taskname}` and fails somewhere far less obvious.
+      this.logger.warn(
+        `Harness [${task.name}] "${stage.name}" verification names ` +
+          `${unknown.map((name) => `\${${name}}`).join(", ")}, which the harness does not ` +
+          "substitute — passed through to the shell as written.",
+      );
+    }
     this.logger.info(
-      `Harness [${task.name}] verifying "${stage.name}": ${redactSecrets(command)}`,
+      `Harness [${task.name}] verifying "${stage.name}": ${redactSecrets(command)}` +
+        (used.length > 0 ? ` (substituted ${used.join(", ")})` : ""),
     );
     const outcome = await this.verifier!.run(command, task.worktreePath, signal);
     if (outcome.exitCode === 0) {
@@ -280,7 +324,10 @@ export class PipelineRunner {
         `Harness [${task.name}] ${describeVerification(command, outcome)}`,
       );
     }
-    return outcome;
+    // The substituted command travels with the outcome: it is what actually ran, so it
+    // is what the failure reason and the stage's activity must show. Reporting the
+    // declared form would send a reader to run something different by hand.
+    return { command, outcome };
   }
 
   private async branchState(
@@ -725,14 +772,55 @@ export class PipelineRunner {
   }> {
     const { stage, subtask } = action;
 
+    // Read before anything starts, because a stage whose plan is missing must not run
+    // at all: it would improvise from the brief, report done, and leave nobody able to
+    // say which steps happened — the state this whole mechanism exists to prevent.
+    let planSteps: PlanStep[] | undefined;
+    if (stage.planFile && this.readWorktreeFile) {
+      const document = await this.readWorktreeFile(task.worktreePath, stage.planFile);
+      const parsed = document ? parsePlanSteps(document) : [];
+      if (!document || parsed.length === 0) {
+        const reason = document
+          ? `${stage.planFile} has no numbered steps to account for`
+          : `${stage.planFile} does not exist in the worktree`;
+        this.logger.error(
+          `Harness [${task.name}] "${stage.name}" not run: ${reason}. ` +
+            "The stage executes that plan, so running it would leave its steps unaccounted for.",
+        );
+        steps.push(`"${stage.name}" was not run: ${reason}.`);
+        return {
+          task: await this.save(task, recordStageBlocked(task.pipeline!, stage.id, reason)),
+          failed: true,
+          reason,
+        };
+      }
+      planSteps = parsed;
+      steps.push(
+        `"${stage.name}" must account for ${parsed.length} step(s) of ${stage.planFile}.`,
+      );
+    }
+
+    // Taken before the session, so worktrees it creates can be told from ones it
+    // borrowed. Only for a stage the route lets move the tree — that is the stage kind
+    // that makes promotion and publish worktrees, and asking git for its list on every
+    // subtask of every stage would be a process launch to learn nothing.
+    const claimsBefore =
+      stage.mayChangeBranch && this.claims
+        ? await this.claims.snapshot(task.repositoryRoot)
+        : undefined;
+
     const context = this.contextFor(task, stage.id);
 
     // A behaviour review is asked for a checklist; everything else does the work.
     const prompt = producesChecklist(stage.kind)
       ? behaviourReviewPrompt(context, stage)
-      : subtaskPrompt(context, stage, subtask);
+      : subtaskPrompt(context, stage, subtask, planSteps);
 
     let pipeline = task.pipeline!;
+    // Registered before the session runs, so the steps exist to be unaccounted for
+    // even if it dies mid-turn. A stage whose session vanished has accounted for
+    // nothing, and that has to be visible rather than inferred from an absence.
+    if (planSteps) pipeline = recordPlanSteps(pipeline, stage.id, planSteps);
     const started = startSubtask(pipeline, subtask.id, {
       at: new Date().toISOString(),
     });
@@ -770,6 +858,7 @@ export class PipelineRunner {
       deferrals: deferred,
       blocked,
       actions,
+      stepAccounts,
       report: reportText,
     } = readStageReply(reply.text);
     reply = { ...reply, text: reportText };
@@ -868,15 +957,15 @@ export class PipelineRunner {
       reply.ok && stage.verify && this.verifier && isLastUnresolved(stage, subtask.id)
         ? await this.runVerification(task, stage, stage.verify, signal)
         : undefined;
-    if (verification && verification.exitCode !== 0) {
+    if (verification && verification.outcome.exitCode !== 0) {
       // Overrides the reply: the session ended cleanly and the work is not proven.
       reply = {
         ...reply,
         ok: false,
-        error: describeVerification(stage.verify!, verification),
+        error: describeVerification(verification.command, verification.outcome),
       };
       steps.push(
-        `"${stage.name}" failed verification (exit ${verification.exitCode}).`,
+        `"${stage.name}" failed verification (exit ${verification.outcome.exitCode}).`,
       );
     } else if (verification) {
       steps.push(`"${stage.name}" passed verification.`);
@@ -909,7 +998,7 @@ export class PipelineRunner {
       // in the same worktree for the same purpose, and a reader asking "what proves
       // this?" is reading this section.
       activity: verification
-        ? withVerification(reply.activity, stage.verify!, verification)
+        ? withVerification(reply.activity, verification.command, verification.outcome)
         : reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
@@ -988,6 +1077,59 @@ export class PipelineRunner {
       );
     }
 
+    // Per-step accounting for a stage executing a written plan. Recorded whatever the
+    // outcome — a stage that got three steps in and then failed has told you which
+    // three, and losing that would make the re-run start from nothing.
+    if (planSteps) {
+      const now = new Date().toISOString();
+      pipeline = recordStepAccounts(pipeline, stage.id, stepAccounts, now);
+
+      // A step the stage says it did not do becomes a deferral, rather than a second
+      // parallel mechanism. It is the same fact arriving by a different route — work
+      // that needs doing and has no owner — so it gets the machinery that already
+      // exists for one: the hold in front of the next stage that ships, and a
+      // settlement that requires a sentence rather than a tick.
+      const notDone = stepAccounts.filter((account) => account.state === "not-done");
+      if (notDone.length > 0) {
+        pipeline = recordDeferrals(
+          pipeline,
+          stage.id,
+          notDone.map((account) => {
+            const step = planSteps!.find((s) => s.number === account.number);
+            return (
+              `Plan step ${account.number}${step ? ` (${step.title})` : ""} was not done: ` +
+              `${account.note ?? "no reason given"}`
+            );
+          }),
+          now,
+        );
+        steps.push(
+          `"${stage.name}" reported ${notDone.length} plan step(s) not done: ` +
+            notDone.map((a) => a.number).join(", ") + ".",
+        );
+      }
+
+      // Only once the stage has settled. A split stage's subtasks each account for the
+      // steps they did, and holding on the first one's silence about the rest would
+      // stop the stage before the subtask that does them has run.
+      const missing = isLastUnresolved(stage, subtask.id)
+        ? unaccountedPlanSteps(pipeline, stage.id)
+        : [];
+      if (missing.length > 0) {
+        const held = holdStageForFindings(pipeline, stage.id, now);
+        if (held.ok) pipeline = held.value;
+        const listed = missing.map((step) => `${step.number}. ${step.title}`).join("; ");
+        steps.push(
+          `"${stage.name}" left ${missing.length} plan step(s) unaccounted for — held for you: ${listed}.`,
+        );
+        this.logger.warn(
+          `Harness [${task.name}] ${stage.name} said nothing about ${missing.length} step(s) of ` +
+            `${stage.planFile}: ${listed}. Holding the route: a step nobody accounted for reads ` +
+            "exactly like a step that was done.",
+        );
+      }
+    }
+
     if (reply.ok && blocked) {
       // Recorded before the hold, and independently of whether the hold takes effect:
       // the reason is the only account of what was missing, and a step line and a log
@@ -1018,11 +1160,45 @@ export class PipelineRunner {
       );
     }
 
-    return {
-      task: await this.save(task, pipeline),
-      failed: !reply.ok,
-      reason,
-    };
+    let saved = await this.save(task, pipeline);
+
+    // After the save, because the claim record is written through the repository: the
+    // state file is read-modify-write, so a second in-memory copy of the task would
+    // overwrite whichever of the two was written first.
+    if (claimsBefore) {
+      const outcome = await this.claims!.recordAppeared(saved.id, claimsBefore, {
+        stageId: stage.id,
+        at: new Date().toISOString(),
+      });
+      if (outcome.claimed.length > 0) {
+        saved = (await this.repository.get(saved.id)) ?? saved;
+        steps.push(
+          `"${stage.name}" created ${outcome.claimed.length} worktree(s), now recorded ` +
+            `against this task: ${outcome.claimed.map((c) => c.path).join(", ")}.`,
+        );
+      }
+      // Held rather than reported in passing. Two tasks promoting through one worktree
+      // interleave their cherry-picks, and the previous warning was an agent noticing it
+      // in `git worktree list` and mentioning it in prose that nothing read.
+      if (outcome.conflicts.length > 0) {
+        const listed = outcome.conflicts
+          .map((conflict) => `${conflict.path} (${conflict.reason})`)
+          .join("; ");
+        const held = holdStageForFindings(
+          recordStageBlocked(
+            saved.pipeline!,
+            stage.id,
+            `worktree conflict: ${listed}`,
+          ),
+          stage.id,
+          new Date().toISOString(),
+        );
+        if (held.ok) saved = await this.save(saved, held.value);
+        steps.push(`"${stage.name}" overlaps another task's worktree — held for you: ${listed}.`);
+      }
+    }
+
+    return { task: saved, failed: !reply.ok, reason };
   }
 
   private async save(

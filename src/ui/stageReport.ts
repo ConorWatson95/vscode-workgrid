@@ -208,6 +208,23 @@ export function formatStageReport(
     lines.push("", "---", "", ...formatSubtaskReply(subtask, stage.subtasks.length > 1));
   }
 
+  // Ahead of the checklist and the declined work, because for a stage that executes a
+  // plan this *is* the report: the question a reader has is which of the numbered
+  // steps actually happened, and the answer used to be nowhere at all.
+  const planSteps = stage.planSteps ?? [];
+  if (planSteps.length > 0) {
+    lines.push("", `## Plan steps — ${stage.planFile ?? "its plan"}`, "");
+    for (const step of planSteps) {
+      const state =
+        step.status === "done"
+          ? "**done**"
+          : step.status === "not-done"
+            ? "**not done**"
+            : "**unaccounted for** — this stage cannot pass until it says what happened";
+      lines.push(`- ${step.number}. ${step.title} — ${state}${step.note ? `: ${step.note}` : ""}`);
+    }
+  }
+
   const checklist = stage.checklist ?? [];
   if (checklist.length > 0) {
     lines.push("", "## Verification items raised", "");

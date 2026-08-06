@@ -10,6 +10,7 @@ import { Logger } from "../logging/logger";
 import { LoadedReviewRules } from "./reviewRulesService";
 import { ok } from "../utilities/result";
 import { PermissionDenial } from "../agents/permissionDenials";
+import { WorktreeClaimService } from "./worktreeClaimService";
 
 const logger: Logger = {
   info: () => {},
@@ -104,6 +105,8 @@ function makeRunner(
     currentBranch?: string;
     /** Canned verification outcomes, keyed by the command run. */
     verify?: Record<string, { exitCode: number; output?: string; spawnError?: string }>;
+    /** Canned worktree files, keyed by path relative to the worktree. */
+    files?: Record<string, string>;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -137,6 +140,9 @@ function makeRunner(
               return { exitCode: canned.exitCode, output: canned.output ?? "", spawnError: canned.spawnError };
             },
           },
+      options.files === undefined
+        ? undefined
+        : async (_worktreePath, relativePath) => options.files?.[relativePath],
     ),
     verified,
   };
@@ -1384,5 +1390,405 @@ describe("declared verification", () => {
 
     await runner.advance(subject);
     expect(verified).toEqual([]);
+  });
+});
+
+/**
+ * A stage that executes a written plan must account for every numbered step.
+ *
+ * The failure being closed: a deployment stage shipped a migration, a flag and the
+ * procedures, silently did not do step 4 — a post-deploy data rebuild — and passed.
+ * It surfaced in production as a scorecard tile reading 0.0%.
+ */
+describe("plan-step accounting", () => {
+  const PLANNED: RouteDefinition = {
+    id: "planned",
+    label: "Planned",
+    description: "d",
+    stages: [
+      {
+        id: "deploy",
+        label: "Deploy",
+        kind: "deployment",
+        intent: "Execute the plan.",
+        splittable: false,
+        gate: "auto",
+        planFile: "docs/plan.md",
+      },
+      {
+        id: "ship",
+        label: "Ship to live",
+        kind: "deployment",
+        intent: "Publish.",
+        splittable: false,
+        gate: "auto",
+      },
+      {
+        id: "human-verification",
+        label: "Sign off",
+        kind: "humanVerification",
+        intent: "Check it.",
+        splittable: false,
+        gate: "approval",
+      },
+    ],
+  };
+
+  const PLAN = ["## 1. Ship the migration", "## 2. Flip the flag", "## 3. Rebuild the KPI elements"].join(
+    "\n",
+  );
+
+  const plannedTask = () => ({ ...task(), pipeline: createPipeline(PLANNED) });
+
+  it("tells the stage which steps it must account for", async () => {
+    const sessions = fakeSessions({
+      "deploy:": { text: "STEP 1: done — ran it\nSTEP 2: done — on\nSTEP 3: done — rebuilt" },
+    });
+    const { runner, repo } = makeRunner(sessions, { files: { "docs/plan.md": PLAN } });
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const prompt = sessions.calls.find((c) => c.label.startsWith("deploy:"))!.prompt;
+    expect(prompt).toContain("docs/plan.md");
+    expect(prompt).toContain("3. Rebuild the KPI elements");
+  });
+
+  it("records each step's account and passes a stage that accounted for all of them", async () => {
+    const sessions = fakeSessions({
+      "deploy:": {
+        text: "Deployed.\nSTEP 1: done — ran it\nSTEP 2: done — flag on\nSTEP 3: done — rebuilt 29/30",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, { files: { "docs/plan.md": PLAN } });
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "deploy");
+    expect(stage?.status).toBe("passed");
+    expect(stage?.planSteps?.map((s) => s.status)).toEqual(["done", "done", "done"]);
+    expect(stage?.planSteps?.[2].note).toBe("rebuilt 29/30");
+  });
+
+  it("holds the stage when it says nothing about a step", async () => {
+    // The whole mechanism: silence about step 3 is what reached production, and it
+    // reads identically to having done it.
+    const sessions = fakeSessions({
+      "deploy:": { text: "Deployed.\nSTEP 1: done — ran it\nSTEP 2: done — flag on" },
+    });
+    const { runner, repo } = makeRunner(sessions, { files: { "docs/plan.md": PLAN } });
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    expect(report.outcome).toMatchObject({ kind: "awaitingApproval", stageId: "deploy" });
+    const stage = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "deploy");
+    expect(stage?.status).toBe("awaiting-approval");
+    expect(stage?.planSteps?.find((s) => s.number === 3)?.status).toBe("unaccounted");
+    expect(report.steps.join(" ")).toContain("unaccounted for");
+  });
+
+  it("turns a step reported not done into a deferral, so a stage that ships holds", async () => {
+    const sessions = fakeSessions({
+      "deploy:": {
+        text: [
+          "Deployed.",
+          "STEP 1: done — ran it",
+          "STEP 2: done — flag on",
+          "STEP 3: not done — changes live data and needs a human to authorise it",
+        ].join("\n"),
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, { files: { "docs/plan.md": PLAN } });
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    // The stage itself passes — a step reported not done is a correct answer — and the
+    // route then holds in front of the next stage that ships.
+    expect(report.outcome).toMatchObject({ kind: "deferredWork", stageId: "ship" });
+    const saved = await repo.get(subject.id);
+    expect(saved?.pipeline?.stages.find((s) => s.id === "deploy")?.status).toBe("passed");
+    const deferral = saved?.pipeline?.deferrals?.[0];
+    expect(deferral?.text).toContain("Plan step 3");
+    expect(deferral?.text).toContain("needs a human to authorise it");
+  });
+
+  it("will not run a stage whose plan file is missing", async () => {
+    // Running it anyway means improvising from the brief and reporting done, which is
+    // the state per-step accounting exists to make impossible.
+    const sessions = fakeSessions({ "deploy:": { text: "Deployed everything." } });
+    const { runner, repo } = makeRunner(sessions, { files: {} });
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    expect(report.outcome).toMatchObject({ kind: "blocked", stageId: "deploy" });
+    expect(sessions.calls).toEqual([]);
+    const stage = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "deploy");
+    expect(stage?.blocked).toContain("does not exist");
+  });
+
+  it("runs a stage with a plan file normally when no file reader is wired", async () => {
+    // A headless run built without the reader must behave exactly as it did before.
+    const sessions = fakeSessions({ "deploy:": { text: "Deployed." } });
+    const { runner, repo } = makeRunner(sessions);
+    const subject = plannedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+    const stage = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "deploy");
+    expect(stage?.status).toBe("passed");
+    expect(stage?.planSteps).toBeUndefined();
+  });
+});
+
+describe("verification command substitution", () => {
+  const SUBSTITUTED: RouteDefinition = {
+    id: "sub",
+    label: "Sub",
+    description: "d",
+    stages: [
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Build it.",
+        splittable: false,
+        gate: "auto",
+        verify: 'check.ps1 -Ticket "${taskName}" -Branch ${branch} -Base ${baseBranch}',
+      },
+    ],
+  };
+
+  it("substitutes the task's own facts into the command that runs", async () => {
+    // Without this a check written once for a route cannot know which ticket it is
+    // certifying, and a script meant to reject another ticket's worktree degrades into
+    // an existence check that passes in exactly the case that matters.
+    const command =
+      'check.ps1 -Ticket "Fix dealer mapping" -Branch bug/dealer-mapping -Base main';
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo, verified } = makeRunner(sessions, {
+      verify: { [command]: { exitCode: 0 } },
+    });
+    const subject = { ...task(), pipeline: createPipeline(SUBSTITUTED) };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(verified).toEqual([command]);
+    const stage = (await repo.get(subject.id))?.pipeline?.stages[0];
+    expect(stage?.status).toBe("passed");
+  });
+
+  it("reports the substituted command in the failure, not the declared one", async () => {
+    // The declared form would send a reader to run something different by hand.
+    const command =
+      'check.ps1 -Ticket "Fix dealer mapping" -Branch bug/dealer-mapping -Base main';
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { [command]: { exitCode: 3, output: "worktree is on another ticket" } },
+    });
+    const subject = { ...task(), pipeline: createPipeline(SUBSTITUTED) };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))?.pipeline?.stages[0];
+    expect(stage?.status).toBe("failed");
+    expect(stage?.subtasks[0].failureReason).toContain("Fix dealer mapping");
+    expect(stage?.subtasks[0].activity?.commands).toEqual([command]);
+  });
+});
+
+describe("worktree claims", () => {
+  const MOVER: RouteDefinition = {
+    id: "mover",
+    label: "Mover",
+    description: "d",
+    stages: [
+      {
+        id: "promote",
+        label: "Promote to UAT",
+        kind: "deployment",
+        intent: "Cherry-pick into the promotion tree.",
+        splittable: false,
+        gate: "auto",
+        mayChangeBranch: true,
+      },
+    ],
+  };
+
+  /** A claim service whose git reports one extra worktree after the stage runs. */
+  function claimService(
+    repo: InMemoryTaskRepository,
+    lists: { path: string; branch?: string }[][],
+  ) {
+    const queue = [...lists];
+    return new WorktreeClaimService(
+      {
+        async list() {
+          return queue.length > 1 ? queue.shift() : queue[0];
+        },
+        async isDirty() {
+          return false;
+        },
+        async countUnmerged() {
+          return 0;
+        },
+        async remove() {
+          return undefined;
+        },
+      },
+      repo,
+      logger,
+    );
+  }
+
+  function moverRunner(
+    sessions: StageSessionRunner,
+    lists: { path: string; branch?: string }[][],
+  ) {
+    const repo = new InMemoryTaskRepository();
+    const changed: ChangedPathsSource = { getChangedPaths: async () => ok([]) };
+    const plans = new ReviewPlanService(changed, repo, logger, () => ({
+      rules: [],
+      problems: [],
+      noRulesConfigured: true,
+    }));
+    return {
+      repo,
+      runner: new PipelineRunner(
+        sessions,
+        repo,
+        plans,
+        logger,
+        () => undefined,
+        undefined,
+        () => true,
+        () => undefined,
+        undefined,
+        undefined,
+        undefined,
+        claimService(repo, lists),
+      ),
+    };
+  }
+
+  it("records a worktree the stage created against the task", async () => {
+    // The stage makes it with `git worktree add`, not the extension, so the only way to
+    // know is that it was not in the list before the stage ran.
+    const sessions = fakeSessions({ "": { text: "Cherry-picked and pushed." } });
+    const { runner, repo } = moverRunner(sessions, [
+      [{ path: "C:/repos/app-t1", branch: "bug/dealer-mapping" }],
+      [
+        { path: "C:/repos/app-t1", branch: "bug/dealer-mapping" },
+        { path: "C:/repos/promote-uat", branch: "promote/t1-uat" },
+      ],
+    ]);
+    const subject = { ...task(), pipeline: createPipeline(MOVER) };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    expect(saved?.worktreeClaims).toEqual([
+      {
+        path: "C:/repos/promote-uat",
+        branch: "promote/t1-uat",
+        claimedAt: expect.any(String),
+        created: true,
+        stageId: "promote",
+      },
+    ]);
+    // The pipeline outcome must survive the claim being written: both are saved through
+    // the same read-modify-write state file.
+    expect(saved?.pipeline?.stages[0].status).toBe("passed");
+  });
+
+  it("holds the stage when the worktree belongs to another task", async () => {
+    // Two tasks promoting through one tree interleave their cherry-picks. The previous
+    // warning was an agent noticing it in `git worktree list` and saying so in prose.
+    const sessions = fakeSessions({ "": { text: "Cherry-picked." } });
+    const { runner, repo } = moverRunner(sessions, [
+      [{ path: "C:/repos/app-t1" }],
+      [{ path: "C:/repos/app-t1" }, { path: "C:/repos/qube-publish-sm", branch: "live" }],
+    ]);
+    const subject = { ...task(), pipeline: createPipeline(MOVER) };
+    await repo.save(subject);
+    await repo.save({
+      ...task(),
+      id: "t2",
+      name: "NMGB-2801",
+      worktreePath: "C:/repos/app-t2",
+      pipeline: undefined,
+      worktreeClaims: [
+        { path: "C:/repos/qube-publish-sm", branch: "live", claimedAt: "t", created: false },
+      ],
+    });
+
+    const report = await runner.advance(subject);
+
+    expect(report.outcome).toMatchObject({ kind: "awaitingApproval", stageId: "promote" });
+    const stage = (await repo.get(subject.id))?.pipeline?.stages[0];
+    expect(stage?.status).toBe("awaiting-approval");
+    expect(stage?.blocked).toContain("NMGB-2801");
+    expect((await repo.get(subject.id))?.worktreeClaims ?? []).toEqual([]);
+  });
+
+  it("does not ask git about a stage that cannot move the worktree", async () => {
+    // A list per subtask of every stage is a process launch to learn nothing.
+    let listed = 0;
+    const repo = new InMemoryTaskRepository();
+    const changed: ChangedPathsSource = { getChangedPaths: async () => ok([]) };
+    const plans = new ReviewPlanService(changed, repo, logger, () => ({
+      rules: [],
+      problems: [],
+      noRulesConfigured: true,
+    }));
+    const claims = new WorktreeClaimService(
+      {
+        async list() {
+          listed += 1;
+          return [];
+        },
+        async isDirty() {
+          return false;
+        },
+        async countUnmerged() {
+          return 0;
+        },
+        async remove() {
+          return undefined;
+        },
+      },
+      repo,
+      logger,
+    );
+    const runner = new PipelineRunner(
+      fakeSessions({ "plan:": { text: PLAN_REPLY } }),
+      repo,
+      plans,
+      logger,
+      () => undefined,
+      undefined,
+      () => true,
+      () => undefined,
+      undefined,
+      undefined,
+      undefined,
+      claims,
+    );
+    const subject = task();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+    expect(listed).toBe(0);
   });
 });
