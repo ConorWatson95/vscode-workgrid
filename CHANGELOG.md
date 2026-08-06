@@ -2,6 +2,31 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.51.0
+
+- **A task can take in a branch it was cut before.** "Merge Branch Into Task…" on the
+  task's context menu, offering the task's base branch first and any other local
+  branch below it. A worktree is a checkout of its base branch *as that branch was
+  when the task was created*, so tooling committed to the base afterwards is simply
+  absent — which surfaced as a stage failing its `verify` command because the script
+  did not exist. From the symptom that is indistinguishable from a check that ran and
+  found something, so the fix was invisible.
+
+  Most of the feature is what it declines to do. It refuses over uncommitted changes,
+  because `--abort` restores the merge and not work that was never committed; while an
+  agent session is running or a stage is active, because files moving under a live
+  session leave it editing a tree it no longer has; and when the worktree's branch has
+  drifted from the task's `intendedBranch`, since that worktree is on a branch nobody
+  asked about and merging into it compounds the problem rather than revealing it.
+
+  Conflicts are aborted rather than left in place, and the conflicting paths reported.
+  A worktree mid-merge has markers in its files and unmerged entries in its index, and
+  both feed the changed paths the rules engine reads — so a stalled merge would get to
+  decide which reviews a task owes. A merge and not a rebase, because a rebase
+  rewrites the commits a stage report already cites. Either way the review plan is
+  unaffected: changed paths diff `baseBranch...HEAD`, against the merge base, so
+  taking the base in does not add the base's own changes to the task's diff.
+
 ## 0.47.0
 
 - **The branch guard offers a button rather than a command to type.** When a route
