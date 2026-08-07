@@ -45,6 +45,15 @@ export interface CliArgsInput {
    */
   settingsPath?: string;
   /**
+   * Plugin directories to load (`--plugin-dir`), each an absolute path.
+   *
+   * How the harness's protocol skill reaches a stage session. It lives under the git
+   * common dir rather than in the worktree, so nothing in the worktree can find it —
+   * verified on CLI 2.1.223 that an absolute path outside the cwd loads, and that
+   * without the flag the skill is simply absent.
+   */
+  pluginDirs?: string[];
+  /**
    * Load **only** `mcpConfigPath`, ignoring every other source of MCP servers.
    *
    * Needed because `--mcp-config` on its own *adds* servers: the worktree
@@ -141,6 +150,14 @@ export function buildCliArgs(input: CliArgsInput): string[] {
   // Before --mcp-config, which must stay last.
   if (input.settingsPath && input.settingsPath.trim().length > 0) {
     args.push("--settings", quoteForShell(input.settingsPath.trim(), input.useShell));
+  }
+
+  // Repeatable rather than variadic — one flag per directory — so unlike
+  // --mcp-config this is safe anywhere in the list.
+  for (const dir of input.pluginDirs ?? []) {
+    const trimmed = dir.trim();
+    if (trimmed.length === 0) continue;
+    args.push("--plugin-dir", quoteForShell(trimmed, input.useShell));
   }
 
   // Only when the caller has narrowed the server set on purpose. Without it

@@ -26,6 +26,8 @@
  * Anything that varies belongs after this block, in `stagePrompts.ts`.
  */
 
+import { PROTOCOL_SKILL_NAME } from "./protocolSkill";
+
 /** Markers the adapter must name, owned by the parsers that read them. */
 export interface ProtocolMarkers {
   needsInfo: string;
@@ -38,49 +40,44 @@ export interface ProtocolMarkers {
  * *declares* the contract, it does not define it. Passing them in keeps the
  * dependency pointing at the parser, which is the side that enforces it.
  */
-export function invariantProtocolBlock(markers: ProtocolMarkers): string[] {
+export function invariantProtocolBlock(
+  markers: ProtocolMarkers,
+  skillName = PROTOCOL_SKILL_NAME,
+): string[] {
   return [
     "You are one stage of a defined workflow and have no memory of earlier stages.",
     "",
-    // Without this a re-run redoes the whole stage. A stage is the unit of re-run —
-    // sending findings back, reverting, retrying after a refused tool all re-open
-    // one — and a cold session reading "write the migration and a paired rollback"
-    // duly writes them again, when the actual defect was a missing folder. Minutes
-    // of model time to change one thing, and the correct work churned on the way.
+    // Named explicitly rather than left to the model to notice. Skill loading is the
+    // model's choice, so a skill nobody mentions is a skill that loads sometimes —
+    // and "sometimes" is the worst of the three possibilities, because the runs where
+    // it did not load look exactly like the runs where it did until the reply is
+    // parsed. It carries the judgement half only; nothing below depends on it.
+    // Kept here rather than moved to the skill, unlike the rest of the judgement
+    // guidance. Its failure is both silent and expensive: a cold session re-reading
+    // "write the migration and a paired rollback" writes them again when the actual
+    // defect was a missing folder, and nothing in the reply reveals that it did.
     `This stage may have run before, and its earlier output may already be in the`,
-    `worktree. Look at what is there before creating anything. Change only what is`,
-    `actually wrong or missing; do not rewrite work that is already correct, and say`,
-    `what you found already in place and what you changed.`,
+    `worktree. Look before creating; do not rewrite work that is already correct.`,
     "",
+    `A "${skillName}" skill describes how to work inside this runtime — asking,`,
+    `declining work, handing conclusions forward, accounting for a plan. Read it`,
+    `before you start. If it is not available, carry on: everything you are actually`,
+    `held to is stated here.`,
+    "",
+    // The contract, and only the contract. Every marker below is read by a parser,
+    // and a reply missing one parses as silence rather than as an error — which for
+    // deferrals and plan steps is the exact failure they exist to catch. This is why
+    // none of it may move into the skill.
     `If the brief does not tell you enough to do this properly — it may be only a`,
-    `ticket reference — do NOT guess and do NOT proceed. First check whether the`,
-    `answer is already available to you: read the code, and use any ticket tooling`,
-    `this repository provides. Only ask for what you genuinely cannot find.`,
-    "",
-    // Two ways to ask, and the difference is what a question costs. The tool keeps
-    // the session alive, so the answer arrives mid-turn and everything worked out
-    // so far survives. The marker ends the session, so answering it re-runs the
-    // whole subtask from scratch. The tool is preferred whenever it is there.
-    `To ask, prefer the "ask_user" tool if you have it: it pauses you until a human`,
-    `answers, then you carry on with everything you have already worked out. Put`,
-    `every question you have into one call, each self-contained.`,
+    `ticket reference — do NOT guess and do NOT proceed. Prefer the "ask_user" tool`,
+    `if you have it: it pauses you until a human answers, then you carry on with`,
+    `everything you have already worked out.`,
     "",
     `If you do not have that tool, reply with exactly "${markers.needsInfo}" followed`,
     `by your questions as a numbered list, one question per line, and nothing else.`,
-    `Each line is answered separately, so ask one thing per line rather than`,
-    `combining several into a paragraph. The work will pause and a human will answer,`,
+    `Each line is answered separately. The work will pause and a human will answer,`,
     `but this stage will then start again from the beginning — so use the tool when`,
     `you can.`,
-    "",
-    // Each shell call is a process launch, and on a Windows host with on-access
-    // scanning that costs of the order of a second — per process, so a four-stage
-    // pipeline pays four times before doing any work. Measured on a real route,
-    // shell calls averaged over ten seconds each while the file tools averaged
-    // zero. Same information, two orders of magnitude apart.
-    `Use the file search and file read tools to explore, not shell commands: they`,
-    `run in-process, while every shell call pays a process launch. Reserve the shell`,
-    `for work that genuinely needs it, and when you do use it, combine the steps`,
-    `into one command rather than issuing several.`,
     "",
     // Here because it applies to every stage of every task and because the failure
     // it prevents is silent: a stage that switched branches to look for something

@@ -73,11 +73,13 @@ describe("the ask-for-information escape hatch", () => {
     }
   });
 
-  it("tells the agent to look before asking", () => {
-    // Otherwise every thin brief becomes a question, which is just as useless.
+  it("tells the agent not to guess, and names the tool that costs least", () => {
+    // The elaboration — read the code, use the ticket tooling — now lives in the
+    // protocol skill. What stays here is the part a parser depends on and the
+    // instruction not to invent the requirement.
     const prompt = splitPrompt(CONTEXT, stage());
-    expect(prompt).toContain("already available to you");
-    expect(prompt).toContain("ticket tooling");
+    expect(prompt).toContain("do NOT guess");
+    expect(prompt).toContain("ask_user");
   });
 });
 
@@ -169,16 +171,18 @@ describe("project documentation guidance", () => {
 });
 
 describe("exploration guidance", () => {
-  it("steers every stage towards in-process tools over shell calls", () => {
-    // On a measured route, shell calls averaged over ten seconds each — a process
-    // launch apiece — while the file tools averaged zero for the same work.
+  it("points every stage at the protocol skill", () => {
+    // Tool-efficiency guidance moved into the skill: its failure is cost, not
+    // correctness, so it degrades rather than breaks if the skill does not load.
+    // What must be here is the pointer, because skill loading is the model's choice
+    // and a skill nobody mentions loads only sometimes.
     for (const prompt of [
       splitPrompt(CONTEXT, stage()),
       subtaskPrompt(CONTEXT, stage(), { id: "fix-1", title: "T", prompt: "P", status: "pending" }),
       behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" })),
     ]) {
-      expect(prompt).toContain("not shell commands");
-      expect(prompt).toContain("combine the steps");
+      expect(prompt).toContain("harness-protocol");
+      expect(prompt).toContain("Read it");
     }
   });
 });
@@ -380,6 +384,8 @@ describe("re-run awareness", () => {
     );
     expect(prompt).toContain("may have run before");
     expect(prompt).toContain("do not rewrite work that is already correct");
+    // Deliberately not moved to the skill with the rest of the guidance: this one
+    // fails silently and expensively, so it must be present whether it loads or not.
   });
 
   it("says it in a behaviour review too, since those are re-opened as well", () => {

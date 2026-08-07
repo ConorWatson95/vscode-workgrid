@@ -270,3 +270,35 @@ describe("resolveMcpConfigPath", () => {
     ).toBeUndefined();
   });
 });
+
+describe("--plugin-dir", () => {
+  it("emits one flag per directory", () => {
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      pluginDirs: ["C:/repo/.git/task-workspaces/runtime-plugin", "C:/other"],
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    expect(args.filter((a) => a === "--plugin-dir")).toHaveLength(2);
+    expect(args).toContain("C:/repo/.git/task-workspaces/runtime-plugin");
+  });
+
+  // Unlike --mcp-config, which is variadic and must stay last, this is repeatable —
+  // so it is safe ahead of it. Getting that wrong makes the CLI read the next flag
+  // as a config path and die.
+  it("does not disturb the trailing --mcp-config", () => {
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      pluginDirs: ["C:/plugins"],
+      mcpConfigPath: "C:/repo/.mcp.json",
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    expect(args[args.length - 2]).toBe("--mcp-config");
+  });
+
+  it("emits nothing when no plugin directory is given", () => {
+    const args = buildCliArgs({ permissionMode: "acceptEdits" } as Parameters<
+      typeof buildCliArgs
+    >[0]);
+    expect(args).not.toContain("--plugin-dir");
+  });
+});

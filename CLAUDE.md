@@ -172,6 +172,18 @@ Note where the line falls: preamble *and* skill both belong to the engine adapte
 only the parser is the harness's. Swapping in another engine replaces the first two and
 touches nothing else.
 
+**Built 7 Aug 2026.** `agents/protocolSkill.ts` (content, shipped as a string like the
+gate hook), `services/protocolSkillInstaller.ts` (writes it, overwrite-only),
+`--plugin-dir` in `claudeCliArgs.ts`, installed once per resolved repository in
+`extension.ts` and passed to **stage sessions only** — a hand-driven chat is not a
+stage. What moved out of `preamble()`: how to ask well, what makes a handoff worth
+carrying, how specific a checklist item must be, shell-versus-file-tool cost. What
+stayed: every parsed marker, and re-run awareness — its failure is silent *and*
+expensive, so it must hold whether the skill loads or not. The preamble names the skill
+and says to read it, because loading is the model's choice and a skill nobody mentions
+loads only sometimes. Verified end to end against CLI 2.1.223: a session given the real
+plugin directory quoted the ask/NEEDS-INFO trade-off and the plan-step rule back.
+
 **Where the skill lives — probed 7 Aug 2026, CLI 2.1.223.** A skills directory *can* be
 sourced from outside the worktree, via `--plugin-dir <abs path>` pointing at a directory
 holding `.claude-plugin/plugin.json` and `skills/<name>/SKILL.md`. Verified both ways

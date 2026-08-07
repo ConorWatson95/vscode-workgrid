@@ -64,6 +64,11 @@ export interface StreamSessionOptions {
    * open while the user decides instead of letting it be refused outright.
    */
   settingsPath?: string;
+  /**
+   * Plugin directories loaded with `--plugin-dir`, absolute. Carries the harness's
+   * protocol skill, which lives under the git common dir rather than in the worktree.
+   */
+  pluginDirs?: string[];
   /** Further MCP configs, e.g. the extension's own ask_user server. */
   extraMcpConfigPaths?: string[];
   /**
@@ -218,6 +223,7 @@ export class ClaudeStreamSession {
       mcpConfigPath: this.options.mcpConfigPath,
       strictMcpConfig: this.options.strictMcpConfig,
       settingsPath: this.options.settingsPath,
+      pluginDirs: this.options.pluginDirs,
       extraMcpConfigPaths: this.options.extraMcpConfigPaths,
       useShell,
     });

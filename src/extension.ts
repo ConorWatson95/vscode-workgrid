@@ -35,6 +35,8 @@ import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { subagentLimitEnv } from "./domain/subagentLimits";
+import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
+import { taskStateDir } from "./persistence/taskStateFile";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import { filterMcpConfig } from "./agents/mcpConfigFilter";
 import * as fs from "node:fs";
@@ -114,6 +116,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   );
 
+  const skillInstaller = new ProtocolSkillInstaller(logger);
+  /** Where the harness's protocol skill lives, once a repository is resolved. */
+  let protocolPluginDir: string | undefined;
+
   // --- Active repository resolution -------------------------------------
   const resolveRepository = async (): Promise<void> => {
     repositoryRoot = undefined;
@@ -132,6 +138,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       repositoryRoot !== undefined,
     );
     logger.info(`Active repository: ${repositoryRoot ?? "(none)"}`);
+
+    // Installed once per resolved repository, not per stage: it goes under the git
+    // common dir, so every worktree of this repository shares the one copy. Resolved
+    // here because `optionsFor` below is synchronous and the git call is not.
+    protocolPluginDir = undefined;
+    if (repositoryRoot) {
+      const commonDir = await worktreeService.getGitCommonDir(repositoryRoot);
+      if (commonDir.ok) {
+        protocolPluginDir = skillInstaller.install(taskStateDir(commonDir.value))?.pluginDir;
+      }
+    }
   };
 
   await resolveRepository();
@@ -570,6 +587,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // Stage sessions only. A chat session the user is driving keeps the CLI's
       // own defaults: this cap protects concurrent tasks from each other, and a
       // hand-driven session has no concurrent tasks to protect.
+      // Stage sessions only. A chat session the user drives keeps whatever skills
+      // they have configured; the protocol skill describes how to behave as a stage,
+      // which a hand-driven session is not.
+      pluginDirs: protocolPluginDir ? [protocolPluginDir] : undefined,
       env: subagentLimitEnv({
         concurrency: configuration.stageSubagentConcurrency(repositoryUri),
         depth: configuration.stageSubagentDepth(repositoryUri),
