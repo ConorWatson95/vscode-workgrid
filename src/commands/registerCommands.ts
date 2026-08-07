@@ -1375,6 +1375,10 @@ async function advanceRouteCommand(
 
       const choice = await vscode.window.showInformationMessage(
         `"${task.name}" is waiting at "${outcome.stageName}" — ` +
+          // Four words, because a notification truncates and the detail belongs in
+          // the report. What it has to carry is that approving here ratifies the
+          // agent's own account rather than a check.
+          (advice.evidence.selfReported ? "⚠ self-reported. " : "") +
           `${advice.headline} ${advice.suggestion}`,
         ...buttons,
       );

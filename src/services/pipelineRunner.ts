@@ -23,6 +23,7 @@ import {
   handoffsBefore,
   holdStageForFindings,
   recordStageVerdict,
+  recordVerification,
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
@@ -1004,6 +1005,17 @@ export class PipelineRunner {
       reply.ok && stage.verify && this.verifier && isLastUnresolved(stage, subtask.id)
         ? await this.runVerification(task, stage, stage.verify, signal)
         : undefined;
+    // Recorded whichever way it went, and before the outcome is decided: absence has
+    // to mean "no check ran", or a stage that declared one and never executed it is
+    // indistinguishable from one whose build went green. See `stageEvidence`.
+    if (verification) {
+      const noted = recordVerification(pipeline, stage.id, {
+        command: verification.command,
+        exitCode: verification.outcome.exitCode,
+        at: new Date().toISOString(),
+      });
+      if (noted.ok) pipeline = noted.value;
+    }
     if (verification && verification.outcome.exitCode !== 0) {
       // Overrides the reply: the session ended cleanly and the work is not proven.
       reply = {

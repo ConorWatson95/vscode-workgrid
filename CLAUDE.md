@@ -574,10 +574,34 @@ remove worktrees they never asked for by name.
 drives split/run/checklist → approve gate, with outcomes for a stage that declares
 `verify` coming from a process exit code rather than the agent's own account.
 
-Remaining gap: a stage without `verify` and without `planFile` is still **self-reported** —
-`finishSubtask(..., "done")` records that the session ended without error. And the
-handoff-versus-rediscovery question is now measurable but **not yet measured**: the
-next real step is a route run both ways, compared on the recorded cost.
+### What actually backs a stage
+
+A stage without `verify` and without `planFile` is still **self-reported**:
+`finishSubtask(..., "done")` records that the session ended without an error, which is a
+fact about a process exiting and not about the work. That has not changed, and changing
+it is not the point — most stages legitimately have no check to run.
+
+What changed is that it is no longer *invisible*. `domain/stageEvidence.ts` derives what
+backs a settled stage — `verified` > `planAccounted` > `reviewed` > `assessed` >
+`selfReported` — and it is surfaced in the stage report, in the approval advice, in the
+gate notification, and as a proportion across the whole route (`summariseEvidence`).
+
+Three things make it honest rather than decorative:
+
+- **The check that ran, not the one declared.** `TaskStage.verification`
+  (`recordVerification`) holds the command and its exit code, recorded whichever way it
+  went. `verify` is a declaration: a runner built without a verifier, or a stage that
+  failed before its last subtask, leaves it set with nothing executed — and the report
+  said "verified by" on the strength of that alone. Absence of `verification` must mean
+  "no check ran", which is why the zero exit code is stored rather than implied.
+- **A skipped stage is not self-reported**, it is *assessed*, and that is weaker than
+  either. It made no claim; `skipReason` is where the distinction lives.
+- **Silence when everything is backed.** `summariseEvidence` returns `undefined` rather
+  than "0 of 4 are self-reported" — a reassurance printed on every report is read as
+  decoration and then not read at all.
+
+Remaining gap: the handoff-versus-rediscovery question is measurable but **not yet
+measured**: the next real step is a route run both ways, compared on the recorded cost.
 
 ## Context discipline
 

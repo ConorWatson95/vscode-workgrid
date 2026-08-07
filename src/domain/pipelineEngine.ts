@@ -388,6 +388,26 @@ export function recordStageVerdict(
   return ok({ ...pipeline, stages } as TaskPipeline);
 }
 
+/**
+ * Records that a stage's declared check actually ran, and what it returned.
+ *
+ * The exit code is kept even when it is zero: absence has to mean "no check ran",
+ * or the record cannot distinguish a passing build from one nobody attempted.
+ */
+export function recordVerification(
+  pipeline: TaskPipeline,
+  stageId: string,
+  verification: { command: string; exitCode: number; at: string },
+): Result<TaskPipeline, PipelineError> {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) {
+    return err({ kind: "unknownStage", message: `No stage ${stageId}` });
+  }
+  const stages = [...pipeline.stages];
+  stages[index] = { ...stages[index], verification };
+  return ok({ ...pipeline, stages } as TaskPipeline);
+}
+
 export function holdStageForFindings(
   pipeline: TaskPipeline,
   stageId: string,

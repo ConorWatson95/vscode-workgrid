@@ -1333,6 +1333,24 @@ describe("declared verification", () => {
     expect(saved?.pipeline?.stages.find((s) => s.id === "build")?.status).toBe("passed");
   });
 
+  it("records that the check actually ran, so a declaration is not mistaken for evidence", async () => {
+    // Without this, `verify` set and nothing executed reads exactly like a green
+    // build: the runner may have been built with no verifier at all.
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "dotnet build": { exitCode: 0 } },
+    });
+    const subject = verifiedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const saved = await repo.get(subject.id);
+    const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.verification?.command).toBe("dotnet build");
+    expect(build?.verification?.exitCode).toBe(0);
+  });
+
   it("records the command and its output where the stage's work is recorded", async () => {
     // A stage that failed verification is exactly the one whose output is wanted.
     const sessions = fakeSessions({ "": { text: "Done." } });

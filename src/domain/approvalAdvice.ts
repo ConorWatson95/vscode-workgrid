@@ -1,5 +1,6 @@
 import { parseReviewFindings, summariseFindings } from "./reviewFindings";
 import { sendBackTargets } from "./stageRefresh";
+import { StageEvidence, stageEvidence } from "./stageEvidence";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 
 /**
@@ -45,12 +46,31 @@ export interface ApprovalAdvice {
    * deciding whether to trust the recommendation needs to know which it is.
    */
   stated: boolean;
+  /**
+   * What backs the outcome you are being asked to ratify.
+   *
+   * The gate is the one moment where "nothing checked this but the agent" changes
+   * what a reader should do, and it was the one place that did not say so: a stage
+   * with a green build and a stage that merely exited cleanly both arrived as
+   * "finished and reported nothing outstanding".
+   */
+  evidence: StageEvidence;
 }
 
 export function approvalAdvice(
   pipeline: TaskPipeline,
   stage: TaskStage,
 ): ApprovalAdvice {
+  // Added around the judgement rather than inside it: what backs a stage does not
+  // change which button to suggest — a blocking review is blocking whether or not a
+  // build ran — it changes how much weight to put on the answer.
+  return { ...verdictAdvice(pipeline, stage), evidence: stageEvidence(stage) };
+}
+
+function verdictAdvice(
+  pipeline: TaskPipeline,
+  stage: TaskStage,
+): Omit<ApprovalAdvice, "evidence"> {
   const findings = parseReviewFindings(
     stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
   );
@@ -167,5 +187,14 @@ export function formatApprovalAdvice(advice: ApprovalAdvice): string {
     "",
     `**Suggested:** ${advice.suggestion}`,
   ];
+  // Only when it is self-reported. Naming the basis every time would put a line
+  // about evidence above a green build, where it adds nothing and trains the reader
+  // to skip the paragraph that matters.
+  if (advice.evidence.selfReported) {
+    lines.push(
+      "",
+      `⚠ **Self-reported.** ${advice.evidence.summary}`,
+    );
+  }
   return lines.join("\n");
 }

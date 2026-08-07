@@ -6,6 +6,7 @@ import {
 } from "../domain/reviewFindings";
 import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
+import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
 import {
   UsageTotals,
   hasUsage,
@@ -147,6 +148,16 @@ export function formatStageReport(
   // cannot tell which they are looking at unless the report says.
   if (stage.verify) {
     lines.push(`**Verified by:** \`${redactSecrets(stage.verify)}\`  `);
+  }
+  // The line above says what was *declared*; this says what actually backs the
+  // outcome. For most stages the honest answer is "the session ended without an
+  // error", and that used to be indistinguishable in the report from a green build.
+  const evidence = stageEvidence(stage);
+  if (evidence.basis !== "none") {
+    lines.push(
+      `**What backs this:** ${evidence.selfReported ? "⚠ self-reported — " : ""}` +
+        `${redactSecrets(evidence.summary)}  `,
+    );
   }
   if (stage.verdict) {
     lines.push(
@@ -428,6 +439,11 @@ export function formatTaskReport(
   // got cheaper.
   const total = formatUsageLine(pipelineUsage(pipeline));
   if (total) parts.push("", total);
+  // The proportion, which no per-stage line can give: "how much of this route
+  // actually proved anything?" Omitted entirely when the answer is "all of it",
+  // because a reassurance printed every time stops being read.
+  const weak = summariseEvidence(pipeline);
+  if (weak) parts.push("", `**Evidence:** ${weak}`);
   // Stages that never ran are listed but not expanded: a report mostly made of
   // "pending" hides the part worth reading.
   const ran = pipeline.stages.filter((s) => s.subtasks.some((t) => t.activity || t.reply));

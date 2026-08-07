@@ -328,6 +328,16 @@ export interface TaskStage {
    */
   verify?: string;
   /**
+   * The check that actually ran, and what it returned.
+   *
+   * Separate from `verify` because a declaration is not evidence: a runner built
+   * without a verifier, or a stage that failed before its last subtask, leaves
+   * `verify` set and nothing run. The report said "verified by" on the strength of
+   * the declaration alone, which is precisely the claim this pair exists to make
+   * checkable — see `domain/stageEvidence.ts`.
+   */
+  verification?: { command: string; exitCode: number; at: string };
+  /**
    * What an assessment stage concluded about each stage of the route.
    *
    * Held on the assessing stage, not on the stages assessed, for the same reason
