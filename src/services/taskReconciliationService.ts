@@ -28,6 +28,16 @@ export interface ReconciliationResult {
  * - Worktree with no task: reported as an orphan for optional adoption.
  *
  * The primary/bare worktree is never treated as an orphan.
+ *
+ * Neither is a worktree some task has **claimed**. An orphan is a worktree with no
+ * matching task, and a claim is exactly that match: a stage creating a `promote/*`
+ * tree, or borrowing a standing publish one, is a task accounting for it. Before
+ * claims existed there was nothing to say so, and every tree a route made appeared
+ * in the list as an unadopted stranger — the very thing the list is meant to
+ * surface, produced by the harness itself, which trains a reader to ignore it.
+ *
+ * Borrowed claims are excluded on the same grounds as created ones. A standing
+ * publish worktree is not unaccounted for merely because nobody made it here.
  */
 export function reconcileTasks(
   storedTasks: TaskWorkspace[],
@@ -77,12 +87,22 @@ export function reconcileTasks(
     });
   }
 
+  // Built from every stored task, not only the ones whose own worktree was matched:
+  // a task whose worktree has gone missing is marked failed rather than deleted, and
+  // the trees it claimed are still its responsibility until someone says otherwise.
+  const claimedPaths = new Set<string>();
+  for (const task of storedTasks) {
+    for (const claim of task.worktreeClaims ?? []) {
+      claimedPaths.add(normalizePath(claim.path));
+    }
+  }
+
   const orphans: OrphanWorktree[] = [];
   for (const wt of liveWorktrees) {
     if (wt.bare) continue;
     if (isPrimaryWorktree(wt, repositoryRoot)) continue;
     const key = normalizePath(wt.path);
-    if (!matchedPaths.has(key)) {
+    if (!matchedPaths.has(key) && !claimedPaths.has(key)) {
       orphans.push({ worktree: wt });
     }
   }

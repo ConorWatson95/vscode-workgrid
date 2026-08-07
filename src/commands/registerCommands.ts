@@ -2151,17 +2151,41 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   const keepBranch = "Remove worktree";
   const withBranch = "Remove worktree + branch";
 
+  // Planned before the prompt so the dialog can say what else goes. A route's stages
+  // create worktrees the user never asked for by name — a promote/* tree per
+  // environment — and removing the task without them left the directories behind with
+  // nothing left pointing at them. The plan stays conservative here exactly as it is at
+  // route completion: agreeing to remove a task is not agreeing to discard uncommitted
+  // work in a tree you may not know exists.
+  const claimPlan =
+    ctx.worktreeClaims && (task.worktreeClaims ?? []).length > 0
+      ? await ctx.worktreeClaims.planFor(task)
+      : undefined;
+  const alsoRemoving = claimPlan?.remove.length ?? 0;
+  const alsoKeeping = claimPlan?.retain.length ?? 0;
+  const claimDetail = [
+    alsoRemoving > 0
+      ? `Also removing ${alsoRemoving} worktree(s) this task created.`
+      : "",
+    alsoKeeping > 0
+      ? `Keeping ${alsoKeeping}: ${claimPlan!.retain.map((r) => r.reason).join("; ")}.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const detail = [`Branch: ${task.branchName}`, claimDetail].filter(Boolean).join("\n");
+
   // Offer branch deletion as an extra choice in the confirmation box.
   const choice = live.isDirty
     ? await vscode.window.showWarningMessage(
         `"${task.name}" has ${live.changedFileCount} uncommitted change(s). Removing the worktree will discard them.`,
-        { modal: true, detail: `Branch: ${task.branchName}` },
+        { modal: true, detail },
         keepBranch,
         withBranch,
       )
     : await vscode.window.showWarningMessage(
         `Remove worktree for "${task.name}"?`,
-        { modal: true, detail: `Branch: ${task.branchName}` },
+        { modal: true, detail },
         keepBranch,
         withBranch,
       );
@@ -2194,6 +2218,23 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
     ctx.runner.cancel(task.id);
     ctx.sessions.stop(task.id);
     ctx.terminals.disposeTerminal(task.id);
+
+    // Before the task's own worktree, because `apply` re-reads the task to drop the
+    // claims it cleared — and once `removeTask` has run there is no task to re-read,
+    // so the claims would be dropped into nothing while the directories stayed.
+    if (claimPlan && claimPlan.remove.length > 0 && ctx.worktreeClaims) {
+      step(`removing ${claimPlan.remove.length} worktree(s) this task created`);
+      const outcome = await ctx.worktreeClaims.apply(
+        task,
+        claimPlan,
+        new Date().toISOString(),
+      );
+      for (const failure of outcome.failed) {
+        ctx.logger.warn(
+          `Could not remove "${failure.path}" while removing "${task.name}": ${failure.reason}`,
+        );
+      }
+    }
 
     step("removing the worktree");
     return ctx.service.removeTask(task.id, { force });

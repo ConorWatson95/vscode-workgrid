@@ -438,6 +438,16 @@ removed, the standing `qube-publish-*` trees must not be, or the next publish ha
 to run. Conflicts hold the stage and are never forced. **Branches are never deleted**: a
 worktree is a checkout that can be remade, a branch may hold the only copy of its commits.
 
+A claim is also a *match*, in both directions. **`reconcileTasks` excludes claimed paths
+from orphans** — an orphan is a worktree with no matching task, and a claim is exactly
+that, so without this the harness filled its own orphan list with the trees its routes
+made, which teaches a reader to ignore the list. And **removal cleans up claims before
+removing the task**, using the same conservative plan as route completion: the order
+matters, because `apply` re-reads the task to drop the claims it cleared, and after
+`removeTask` there is no task to re-read — the claims would go and the directories stay.
+What is retained is named in the confirmation dialog, since the user is agreeing to
+remove worktrees they never asked for by name.
+
 ### What a stage carries forward, and what it cost
 
 - **Handoffs** (`TaskPipeline.handoffs`) — a stage the route marks `handoff: true`

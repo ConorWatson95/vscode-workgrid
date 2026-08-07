@@ -104,3 +104,66 @@ describe("reconcileTasks", () => {
     expect(result.orphans[0].worktree.path).toBe("/repos/myrepo-loose");
   });
 });
+
+describe("claimed worktrees", () => {
+  const REPO = "C:/repos/app";
+  const taskAt = (path: string, claims: string[] = []) =>
+    ({
+      id: "t1",
+      name: "Publish",
+      worktreePath: path,
+      branchName: "feature/x",
+      repositoryRoot: REPO,
+      worktreeClaims: claims.map((claim) => ({
+        path: claim,
+        branch: "promote/x",
+        claimedAt: "2026-08-07T09:00:00Z",
+        created: true,
+      })),
+    }) as unknown as TaskWorkspace;
+
+  const wt = (path: string) => ({ path, branch: "promote/x" }) as GitWorktree;
+
+  // A stage creating a promote/* tree is a task accounting for it. Before claims
+  // existed these appeared as unadopted strangers — the harness filling its own
+  // orphan list, which trains a reader to ignore it.
+  it("does not report a worktree a task has claimed as an orphan", () => {
+    const result = reconcileTasks(
+      [taskAt("C:/repos/app-t1", ["C:/repos/promote-uat"])],
+      [wt("C:/repos/app-t1"), wt("C:/repos/promote-uat")],
+      REPO,
+    );
+    expect(result.orphans).toEqual([]);
+  });
+
+  it("still reports a worktree nobody claimed", () => {
+    const result = reconcileTasks(
+      [taskAt("C:/repos/app-t1", ["C:/repos/promote-uat"])],
+      [wt("C:/repos/app-t1"), wt("C:/repos/promote-uat"), wt("C:/repos/stray")],
+      REPO,
+    );
+    expect(result.orphans.map((o) => o.worktree.path)).toEqual(["C:/repos/stray"]);
+  });
+
+  // Windows hands back both spellings of the same directory.
+  it("matches a claim whose path is spelt with other separators or case", () => {
+    const result = reconcileTasks(
+      [taskAt("C:/repos/app-t1", ["C:\\Repos\\Promote-UAT"])],
+      [wt("C:/repos/app-t1"), wt("C:/repos/promote-uat")],
+      REPO,
+    );
+    expect(result.orphans).toEqual([]);
+  });
+
+  // A task whose own worktree vanished is marked failed, not deleted — the trees it
+  // claimed stay its responsibility until someone says otherwise.
+  it("honours claims of a task whose own worktree is missing", () => {
+    const result = reconcileTasks(
+      [taskAt("C:/repos/app-gone", ["C:/repos/promote-uat"])],
+      [wt("C:/repos/promote-uat")],
+      REPO,
+    );
+    expect(result.orphans).toEqual([]);
+    expect(result.tasks[0].worktreeExists).toBe(false);
+  });
+});
