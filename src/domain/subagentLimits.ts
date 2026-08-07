@@ -16,7 +16,20 @@
 export interface SubagentLimits {
   /** Subagents one stage session may run at once. */
   concurrency: number;
-  /** How deep spawning may nest. */
+  /**
+   * How many *levels* of subagent may exist below the stage session.
+   *
+   * Probed on CLI 2.1.223 rather than assumed, because the two readings differ by
+   * exactly one and the wrong one silently switches subagents off. At `1` a stage
+   * spawns subagents normally and those subagents have no Agent tool at all; at
+   * `3` they have it and nesting succeeds. So `1` means "delegation, but no
+   * trees", which is the intent — not "no delegation".
+   *
+   * Enforced by *removing the tool* from the nested session rather than refusing
+   * the call. That is the better failure: an agent offered a tool and denied it
+   * spends turns rewording the request, while one that never had it simply does
+   * the work itself.
+   */
   depth: number;
 }
 

@@ -380,7 +380,13 @@ Two checks that both exist because the failure they prevent is a stage *succeedi
   owns concurrency at the *task* level; left at the CLI's defaults one stage's fan-out
   starves the other tasks of a machine and a rate limit they share, and the loss reads as
   "everything was slow today". Zero is clamped to one — the CLI treats zero as unset,
-  which is the opposite of what setting zero meant.
+  which is the opposite of what setting zero meant. **Depth counts levels of subagent
+  below the stage session, probed on CLI 2.1.223:** at `1` a stage delegates normally
+  and its subagents have no Agent tool; at `3` they do and nesting works. So `1` is
+  "delegation, no trees", not "no delegation" — the two readings differ by one, and the
+  wrong one switches subagents off silently. Enforced by removing the tool rather than
+  refusing the call, which is the better failure: an agent that never had a tool does
+  the work itself instead of spending turns rewording a request it cannot make.
 
 ### Measuring the thing the harness is actually for
 
