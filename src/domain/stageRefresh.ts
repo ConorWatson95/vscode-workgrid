@@ -292,10 +292,26 @@ export function sendBackTargets(
   // Reversed: the stage that produced the work under review is the likely target,
   // and it is the one immediately before, not the start of the route. Only earlier
   // stages are ever considered, which is what keeps a kind entry as safe as an id.
-  return pipeline.stages
+  const nearestFirst = pipeline.stages
     .slice(0, index)
     .filter((stage) => allowed.includes(stage.id) || kinds.includes(stage.kind))
     .reverse();
+
+  // Then: a stage that can change the work outranks one that only decides what
+  // should be done, however near it is. A route that plans a deployment *after*
+  // implementing puts a planning stage immediately before the review, so proximity
+  // recommended sending a critical finding about a stored procedure to a stage that
+  // cannot touch one — and the caller offering the list takes the first as its
+  // recommendation.
+  //
+  // Planning is kept in the list, and ordering is the whole of the fix: sending
+  // findings to planning is a real move — a review that says an object is in the
+  // wrong layer has found a planning error — but it re-opens everything after
+  // planning, so it must be chosen by name rather than arrived at by default.
+  return [
+    ...nearestFirst.filter((stage) => stage.kind !== "planning"),
+    ...nearestFirst.filter((stage) => stage.kind === "planning"),
+  ];
 }
 
 /**

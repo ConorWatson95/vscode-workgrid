@@ -412,6 +412,29 @@ describe("sendBackTargets", () => {
     expect(sendBackTargets(p, "sql-review").map((s) => s.id)).toEqual(["build", "plan"]);
   });
 
+  it("ranks a stage that can change the work above a nearer planning stage", () => {
+    // The real route this came from plans the deployment *after* implementing, so the
+    // nearest earlier match was a planning stage — and a critical finding about a
+    // stored procedure was recommended to a stage that cannot touch one.
+    const p = pipeline([
+      stage({ id: "build", name: "Build", kind: "implementation", status: "passed" }),
+      stage({ id: "plan-dev", name: "Plan the DEV landing", kind: "planning", status: "passed" }),
+      stage({
+        id: "sql-review",
+        name: "SQL review",
+        kind: "domainReview",
+        status: "awaiting-approval",
+        sendBackTo: ["kind:implementation", "kind:planning"],
+      }),
+    ]);
+    // Still offered — sending findings to planning is a real move — but chosen by
+    // name rather than arrived at by default.
+    expect(sendBackTargets(p, "sql-review").map((s) => s.id)).toEqual([
+      "build",
+      "plan-dev",
+    ]);
+  });
+
   it("never offers itself or a later stage, whatever it declares", () => {
     const p = reviewed();
     p.stages[2].sendBackTo = ["sql-review", "signoff", "kind:humanVerification"];
