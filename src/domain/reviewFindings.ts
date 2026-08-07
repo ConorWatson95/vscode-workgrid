@@ -14,6 +14,8 @@
  * the reply verbatim rather than claiming there was nothing to report.
  */
 
+import { isNothingReported } from "./nothingReported";
+
 export type FindingSeverity = "critical" | "important" | "suggestion";
 
 export interface ReviewFinding {
@@ -73,7 +75,11 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     if (asHeading && (!asHeading.rest.trim() || isMarkedHeading(line))) {
       heading = asHeading.severity;
       const summary = asHeading.rest.trim();
-      if (summary) findings.push({ severity: heading, text: summary });
+      // Same guard as the list path below: "**Important**: none" is a section
+      // answered, not a problem found.
+      if (summary && !isNothingReported(summary)) {
+        findings.push({ severity: heading, text: summary });
+      }
       continue;
     }
     // Any other heading *clears* the severity rather than leaving it in force.
@@ -99,10 +105,42 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     if (!severity) continue;
 
     const text = (inline ? inline.rest : item).trim();
-    if (text) findings.push({ severity, text });
+    // A section filled in with "none", or with "resolved", is the review saying it
+    // has nothing outstanding at that severity. Counted, it became one important
+    // finding, and an important finding holds the route — so a clean review blocked
+    // itself. See `isNothingReported` for why the guard is as narrow as it is.
+    if (text && !isNothingReported(text)) {
+      findings.push({ severity: statedNonBlocking(text) ? "suggestion" : severity, text });
+    }
   }
 
   return findings;
+}
+
+/**
+ * Whether the finding's own text says the reviewer is not blocking on it.
+ *
+ * A real review under an **Important** heading, in full: "…I am not blocking on it:
+ * `p_RebateCampaign_Vouchers` already reads the same two columns with the same
+ * absence of an index, so this is the established access shape rather than something
+ * this change introduced." The heading held the route; the sentence said not to.
+ *
+ * The heading is a section the reviewer chose once, at the top; this is the reviewer
+ * ruling on this specific item, having done the work. It is the same principle that
+ * makes a stated `VERDICT` outrank severities read out of prose — the reviewer's own
+ * judgement wins over an inference about it.
+ *
+ * **Downgraded, not dropped.** The finding is real and worth reading; what it is not
+ * is a reason to stop the route. Removing it would lose an observation the reviewer
+ * thought worth writing several sentences about — "watch the execution time on the
+ * first live run" is exactly the kind of thing that should survive to the report.
+ *
+ * Only explicit negations, so "this is blocking" is untouched.
+ */
+function statedNonBlocking(text: string): boolean {
+  return /\b(?:not|non-?|isn'?t|aren'?t|won'?t be|do(?:es)?n'?t)\s*(?:a\s+|the\s+)?block(?:ing|er|s)?\b/i.test(
+    text,
+  );
 }
 
 /** "1 critical, 2 important, 4 suggestions", or undefined when there are none. */

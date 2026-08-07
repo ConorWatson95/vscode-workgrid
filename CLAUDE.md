@@ -438,10 +438,26 @@ noticed it was missing.
   operator was already standing with the report open. `approveStage` now asks for each
   of that stage's own outstanding items; escape leaves one outstanding rather than
   abandoning the approval, which is already decided by then.
-- **A stage answering "nothing" is not a deferral.** `DEFERRED: none — this is Nissan
-  GB only…` was recorded verbatim, became an outstanding item, and held a deployment on
-  the absence of work. `parseDeferrals` drops it, narrowly: "none of the migrations
-  carry a USE statement" is a real decline and still counts.
+- **A stage answering "nothing" is not a report of anything** (`domain/nothingReported.ts`,
+  shared by `parseDeferrals` and `parseReviewFindings`). The same bug appeared three
+  times in one morning: `DEFERRED: none — this is Nissan GB only…` held a deployment;
+  `**Important**` / `- none` and `**Critical**` / `- resolved` each blocked their own
+  review. Every one is a stage saying everything is fine and stopping the route —
+  the worst direction for a false positive, because the correct response looks like
+  the harness malfunctioning and teaches people to click past the stop that matters.
+  Two vocabularies with different guards: *absent* words fail as subjects ("none of the
+  migrations carry a USE statement"), *settled* words fail as adjectives ("fixed width
+  column overflows"). Narrow in both directions — dropping a real finding is worse.
+- **A finding whose author says they are not blocking on it is a suggestion**, whatever
+  heading it was filed under. Same principle as a stated `VERDICT` outranking inferred
+  severities: the heading is chosen once at the top, the sentence is the reviewer ruling
+  on that item having done the work. Downgraded, never dropped — "watch the execution
+  time on the first live run" must survive to the report.
+- **Ask when no stage owns it; decline only when one does.** The prompt used to ask for
+  `DEFERRED` in both cases, which made them indistinguishable to the operator confirming
+  them — and the second is the case that halted a live publish. A stage with `ask_user`
+  now asks at the moment it finds the gap, when it still has the context that found it
+  and is the cheapest point at which the work can just be done.
 - Settling one **requires a sentence**, not a tick. What was missing when every
   stage declined the work was the knowledge of who owns it, so silence would
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as

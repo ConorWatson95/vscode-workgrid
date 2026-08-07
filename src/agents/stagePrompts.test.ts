@@ -585,7 +585,18 @@ describe("declining work that belongs to another stage", () => {
     // and the work surfaced at a live publish.
     const prompt = subtaskPrompt(CONTEXT, stage(), sub);
     expect(prompt).toContain("DEFERRED:");
-    expect(prompt).toContain("followed up by the workflow");
+    expect(prompt).toContain("one line\nper item");
+  });
+
+  it("tells a stage to ask when no stage owns the work, rather than decline it", () => {
+    // The distinction the engine has always defined a deferral by, and the prompt
+    // did not draw: work belonging to a *later stage* is routine to decline, work
+    // belonging to *nobody* is the case that reached a live publish. Declining both
+    // the same way makes them indistinguishable to the reader who confirms them.
+    const prompt = subtaskPrompt(CONTEXT, stage(), sub);
+    expect(prompt).toContain("A later stage clearly owns it");
+    expect(prompt).toContain("No stage owns it");
+    expect(prompt).toMatch(/Ask, now, while you still have the context/);
   });
 
   it("reads one item per line, verbatim", () => {

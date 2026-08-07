@@ -85,6 +85,39 @@ describe("parseReviewFindings", () => {
     expect(parseReviewFindings("   ")).toEqual([]);
   });
 
+  it("does not count a severity section answered with nothing", () => {
+    // A clean review blocking itself: "**Important**" with "none" under it became one
+    // important finding, and an important finding holds the route.
+    expect(parseReviewFindings(["**Important**", "- none"].join("\n"))).toEqual([]);
+    expect(parseReviewFindings(["**Critical**", "- resolved"].join("\n"))).toEqual([]);
+    expect(parseReviewFindings("**Important**: none")).toEqual([]);
+  });
+
+  it("downgrades a finding whose author says they are not blocking on it", () => {
+    // The reviewer's ruling on this item outranks the section they filed it under —
+    // the same principle that makes a stated VERDICT outrank inferred severities.
+    // Kept as a finding, because "watch the execution time on the first live run" is
+    // worth reading; just not a reason to stop the route.
+    const findings = parseReviewFindings(
+      [
+        "**Important**",
+        "- no supporting index on either release table. I am not blocking on it: " +
+          "the same access shape already exists. Watch the execution time on the first live run.",
+      ].join("\n"),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("suggestion");
+    expect(findings[0].text).toMatch(/Watch the execution time/);
+    expect(hasBlockingFindings(findings)).toBe(false);
+  });
+
+  it("leaves a finding that says it IS blocking", () => {
+    const findings = parseReviewFindings(
+      ["**Important**", "- this is blocking until the index exists"].join("\n"),
+    );
+    expect(findings[0].severity).toBe("important");
+  });
+
   it("reads numbered lists", () => {
     const findings = parseReviewFindings(["Important", "1. no rollback", "2) no test"].join("\n"));
     expect(findings.map((f) => f.text)).toEqual(["no rollback", "no test"]);

@@ -8,6 +8,7 @@ import {
   stripStepAccounts,
 } from "../domain/planSteps";
 import { invariantProtocolBlock } from "./claudeAdapter";
+import { isNothingReported } from "../domain/nothingReported";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -365,11 +366,31 @@ export function stripActions(reply: string): string {
 function deferralInstruction(): string {
   return `
 
-If you find work that belongs to a different stage of the workflow and has not been
-done, do not do it and do not fold it into a checklist item. Write it on its own line
-as "${DEFERRED_MARKER} <what needs doing, and where you think it belongs>", one line
-per item. Work declined this way is followed up by the workflow and holds anything
-that ships until it is settled; work merely mentioned in prose is not.`;
+If you find work that has not been done and is not yours, what to do depends entirely
+on whether any stage of the workflow above owns it. Decide that first — the route is
+listed for you, with each stage's objective.
+
+**A later stage clearly owns it.** Do not do it, do not fold it into a checklist item,
+and do not ask about it. Write it on its own line as
+"${DEFERRED_MARKER} <what needs doing, and which stage you think owns it>", one line
+per item. This is routine and costs the operator nothing to confirm.
+
+**No stage owns it.** Ask, now, while you still have the context that found it. Use
+your question tool if you have one; otherwise say so and stop rather than guessing.
+Ask plainly: what you found, what you would do about it, and that no stage of this
+route covers it. Then do what the answer says — including doing the work here, if
+that is the answer.
+
+The difference is the whole point, and getting it wrong the second way is expensive.
+Work that belongs to nobody, written down as declined, reads to the operator exactly
+like work that belongs to the next stage — so it is confirmed and forgotten, and
+surfaces when something fails much later. That has already happened here: a live
+publish halted on a data structure the first stage to notice it had quietly declined.
+You are the cheapest point at which that gets fixed, and you are the only one who
+knows it right now.
+
+If you are unsure which case you are in, ask. A question answered in a sentence costs
+far less than a defect found after it ships.`;
 }
 
 /** Asks a stage to name the steps it cannot take itself. */
@@ -518,32 +539,14 @@ export function parseDeferrals(reply: string): string[] {
   const items: string[] = [];
   for (const match of reply.matchAll(/^[ \t]*DEFERRED:[ \t]*(.+)$/gim)) {
     const text = match[1].trim();
-    if (text && !isNothingDeferred(text)) items.push(text);
+    // A stage answering the question rather than omitting the line. Recorded as
+    // written it became an outstanding item, and an outstanding item holds the route
+    // in front of the next deployment — so a stage saying "nothing" stopped a deploy
+    // on the absence of work. Shared with the review-findings parser, which had the
+    // identical bug: see `domain/nothingReported.ts`.
+    if (text && !isNothingReported(text)) items.push(text);
   }
   return items;
-}
-
-/**
- * Whether a `DEFERRED:` line is a stage saying it has nothing to defer.
- *
- * A stage asked to report declined work sometimes answers the question rather than
- * skipping the line — `DEFERRED: none — this is Nissan GB only, so no
- * second-manufacturer checks are needed`. Recorded as written, that became an
- * outstanding item, and an outstanding item holds the route in front of the next
- * deployment. So a stage saying "nothing" stopped a deploy on the absence of work.
- *
- * Matched on the opening word only, and only when the line either is that word or
- * continues with an explanation. A genuine deferral never opens "none" — and one
- * that mentions "n/a" later in a sentence is untouched, because the anchor is the
- * start of the text.
- */
-function isNothingDeferred(text: string): boolean {
-  return /^(none|nothing|n\/?a|not applicable|no deferrals?)\b[\s.,:;—–-]*/i.test(text)
-    ? // Guarded against a real item that happens to open with the word, e.g.
-      // "none of the migrations carry a USE statement" — that continues into a
-      // subject, where a nothing-answer continues into a justification or stops.
-      !/^(none|nothing)\s+(of|for|in|on)\b/i.test(text)
-    : false;
 }
 
 /**
