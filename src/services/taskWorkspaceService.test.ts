@@ -76,3 +76,74 @@ describe("adoptWorktree", () => {
     expect(again.ok).toBe(false);
   });
 });
+
+describe("createTaskFromBranch", () => {
+  const REPO = "/repos/myrepo";
+
+  function serviceWithGit(repo: InMemoryTaskRepository) {
+    let counter = 0;
+    const clock: ServiceClock = {
+      now: () => "2026-08-07T00:00:00.000Z",
+      newId: () => `id-${++counter}`,
+    };
+    const worktrees = {
+      addWorktreeForBranch: async (
+        _root: string,
+        options: { branchName: string; worktreePath: string },
+      ) => ({
+        ok: true as const,
+        value: { path: options.worktreePath, branch: options.branchName },
+      }),
+    };
+    return new TaskWorkspaceService(
+      repo,
+      worktrees as never,
+      {} as never,
+      noopLogger,
+      clock,
+    );
+  }
+
+  // The remaining way in: work done before this extension existed, or by a chat-only
+  // task, has a branch and nothing else — no task, no worktree — and that is exactly
+  // the work with no record of what was done to it.
+  it("checks out the branch as it stands and records it as a task", async () => {
+    const repo = new InMemoryTaskRepository();
+    const created = await serviceWithGit(repo).createTaskFromBranch({
+      repositoryRoot: REPO,
+      name: "Parts scorecard",
+      branchName: "feature/parts-scorecard",
+      baseBranch: "DEV",
+      configuredParentDir: "",
+    });
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    // The branch is kept exactly as given: nothing is rebased, merged or renamed,
+    // because the work on it is the reason it matters.
+    expect(created.value.branchName).toBe("feature/parts-scorecard");
+    expect(created.value.baseBranch).toBe("DEV");
+    expect(await repo.getByRepository(REPO)).toHaveLength(1);
+  });
+
+  it("refuses a branch another task already uses", async () => {
+    const repo = new InMemoryTaskRepository();
+    const first = await serviceWithGit(repo).createTaskFromBranch({
+      repositoryRoot: REPO,
+      name: "First",
+      branchName: "feature/parts-scorecard",
+      baseBranch: "DEV",
+      configuredParentDir: "",
+    });
+    expect(first.ok).toBe(true);
+
+    const second = await serviceWithGit(repo).createTaskFromBranch({
+      repositoryRoot: REPO,
+      name: "Again",
+      branchName: "feature/parts-scorecard",
+      baseBranch: "DEV",
+      configuredParentDir: "",
+    });
+    expect(second.ok).toBe(false);
+  });
+});

@@ -326,6 +326,24 @@ sessions are invisible":
 
 ### Work that was already under way
 
+Three entry points, because pre-existing work arrives in three shapes and only one of
+them was served:
+
+| What exists | Way in |
+|---|---|
+| A worktree with no task | **Adopt Worktree as Task** (already existed) |
+| A task with no route | **Attach a Route…** |
+| A branch, and nothing else | **Create Task from Existing Branch…** |
+
+The third is the one that had no path at all: `createWorktree` always passes `-b` and
+explicitly refuses an existing branch, which is right for new work and made older work
+unreachable. `addWorktreeForBranch` checks the branch out **as it stands** — nothing
+rebased, merged or moved, since the work on it is the whole reason it matters — and
+`createTaskFromBranch` records it. Base branch is *asked for*, never guessed: it is what
+later stages diff against, so a wrong answer makes every review read the wrong changes.
+It runs the same provisioning as a new task and goes straight into the route picker.
+
+
 `createPipeline` was reachable from exactly one place — task creation — so work already
 started could never enter the runtime, and the fallback was a chat session outside every
 gate the harness provides. **Attach a Route…** (`attachRouteCommand`) fixes the entry

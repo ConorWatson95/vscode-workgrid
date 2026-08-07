@@ -103,6 +103,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.stopAgent", (arg) => stopAgentCommand(ctx, arg)),
     register("taskWorkspaces.adopt", (arg) => adoptCommand(ctx, arg)),
     register("taskWorkspaces.attachRoute", (arg) => attachRouteCommand(ctx, arg)),
+    register("taskWorkspaces.adoptBranch", () => adoptBranchCommand(ctx)),
     register("taskWorkspaces.removeOrphan", (arg) => removeOrphanCommand(ctx, arg)),
     register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
     register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
@@ -2796,4 +2797,117 @@ async function attachRouteCommand(ctx: CommandContext, arg: unknown): Promise<vo
     `"${task.name}" is now on the ${picked.route.label} route.` +
       (started.assess ? " Advance it to assess what is already done." : ""),
   );
+}
+
+/**
+ * Makes a task for a branch that already carries work.
+ *
+ * The remaining way in. `Attach a Route…` needs a task; adoption needs a worktree.
+ * Work done before this extension existed, or by a chat-only task, has neither — just
+ * a branch — and that is exactly the work with no record of what was done to it.
+ *
+ * Nothing is rebased, merged or moved. A worktree is checked out for the branch as it
+ * stands, because the work on it is the whole reason it matters.
+ */
+async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) {
+    void vscode.window.showErrorMessage("No Git repository is open.");
+    return;
+  }
+  const scope = ctx.repositoryUri?.();
+
+  const branches = await ctx.merges.listBranches(repositoryRoot);
+  if (!branches.ok) {
+    void vscode.window.showErrorMessage("Could not list branches.");
+    return;
+  }
+
+  // Branches already spoken for are filtered out rather than shown and rejected: a
+  // branch checked out elsewhere cannot have a second worktree, and one that is
+  // already a task does not need adopting.
+  const tasks = await ctx.repository.getByRepository(repositoryRoot);
+  const taken = new Set(tasks.map((task) => task.branchName));
+  const worktrees = await ctx.worktrees.listWorktrees(repositoryRoot);
+  if (worktrees.ok) {
+    for (const worktree of worktrees.value) {
+      if (worktree.branch) taken.add(worktree.branch);
+    }
+  }
+  const candidates = branches.value.filter((branch) => !taken.has(branch));
+  if (candidates.length === 0) {
+    void vscode.window.showInformationMessage(
+      "Every local branch is already a task or checked out in a worktree.",
+    );
+    return;
+  }
+
+  const branchName = await vscode.window.showQuickPick(candidates, {
+    title: "Create Task from Existing Branch",
+    placeHolder: "Which branch holds the work?",
+  });
+  if (!branchName) return;
+
+  const name = await vscode.window.showInputBox({
+    title: "Create Task from Existing Branch",
+    prompt: "Task name",
+    value: branchName.replace(/^.*\//, "").replace(/[-_]+/g, " ").trim(),
+    validateInput: (value) =>
+      value.trim().length === 0 ? "Task name is required." : undefined,
+  });
+  if (!name) return;
+
+  // Asked, never guessed. This is what later stages diff against, so a wrong answer
+  // makes every review read the wrong set of changes.
+  let defaultBase = ctx.configuration.defaultBaseBranch(scope);
+  if (!defaultBase) {
+    const current = await ctx.worktrees.getCurrentBranch(repositoryRoot);
+    defaultBase = current.ok && current.value ? current.value : "HEAD";
+  }
+  const baseBranch = await vscode.window.showInputBox({
+    title: "Create Task from Existing Branch",
+    prompt: "Base branch — what this work should be compared against",
+    value: defaultBase,
+    validateInput: (value) =>
+      value.trim().length === 0 ? "Base branch is required." : undefined,
+  });
+  if (!baseBranch) return;
+
+  const created = await withStatus(`Adopting ${branchName}`, async (step) => {
+    step("checking out a worktree for the branch");
+    return ctx.service.createTaskFromBranch({
+      repositoryRoot,
+      name,
+      branchName,
+      baseBranch: baseBranch.trim(),
+      configuredParentDir: ctx.configuration.worktreeParentDir(scope),
+    });
+  });
+  if (!created.ok) {
+    void vscode.window.showErrorMessage(
+      "message" in created.error
+        ? created.error.message
+        : "Could not adopt that branch.",
+    );
+    return;
+  }
+
+  // Provisioned exactly as a new task is: a worktree checked out here is as bare of
+  // untracked local config as any other, and an agent in it would behave differently
+  // from one in the main checkout.
+  ctx.provisioner.provision(
+    ctx.configuration.copyIntoWorktree(scope),
+    repositoryRoot,
+    created.value.worktreePath,
+  );
+  ctx.provisioner.linkSiblings(
+    ctx.configuration.linkSiblings(scope),
+    repositoryRoot,
+    created.value.worktreePath,
+  );
+
+  ctx.tree.refresh();
+  // Straight into the route picker, since a task adopted from a branch with work on
+  // it is precisely the case the assessment stage exists for.
+  await attachRouteCommand(ctx, created.value.id);
 }

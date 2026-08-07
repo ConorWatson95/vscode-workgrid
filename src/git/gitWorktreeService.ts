@@ -99,6 +99,70 @@ export class GitWorktreeService {
     return ok(parseWorktreeList(result.value.stdout));
   }
 
+  /**
+   * Checks out a worktree for a branch that **already exists**.
+   *
+   * `createWorktree` always passes `-b` and refuses an existing branch, which is
+   * correct for new work and made older work unreachable: a branch written before
+   * this extension existed, or by a chat-only task, had no way to become a task at
+   * all. That is the work most in need of a route, since nothing recorded what was
+   * done to it.
+   *
+   * No `-b`, and no base branch: the branch carries its own history, and naming a
+   * base here would be a request to move it.
+   */
+  async addWorktreeForBranch(
+    repositoryRoot: string,
+    options: { branchName: string; worktreePath: string },
+    signal?: AbortSignal,
+  ): Promise<Result<GitWorktree, WorktreeError>> {
+    const exists = await this.branchExists(repositoryRoot, options.branchName, signal);
+    if (!exists.ok) return exists;
+    if (!exists.value) {
+      return err({
+        kind: "validation",
+        message: `Branch "${options.branchName}" does not exist.`,
+      });
+    }
+
+    // A branch can only be checked out in one worktree. Caught here with a sentence
+    // naming the branch, because git's own message for this names a path the user
+    // did not choose and reads as an internal error.
+    const listed = await this.listWorktrees(repositoryRoot, signal);
+    if (!listed.ok) return listed;
+    const already = listed.value.find((w) => w.branch === options.branchName);
+    if (already) {
+      return err({
+        kind: "validation",
+        message: `Branch "${options.branchName}" is already checked out at ${already.path}.`,
+      });
+    }
+
+    const result = await this.git.run(
+      ["worktree", "add", options.worktreePath, options.branchName],
+      { cwd: repositoryRoot, signal },
+    );
+    if (!result.ok) return gitErr(result.error);
+
+    const after = await this.listWorktrees(repositoryRoot, signal);
+    if (!after.ok) return after;
+    const created = after.value.find(
+      (w) => normalize(w.path) === normalize(options.worktreePath),
+    );
+    if (!created) {
+      return err({
+        kind: "git",
+        error: new GitError(
+          "Worktree was created but could not be found in the worktree list.",
+          null,
+          "",
+          [],
+        ),
+      });
+    }
+    return ok(created);
+  }
+
   async createWorktree(
     repositoryRoot: string,
     options: CreateWorktreeOptions,

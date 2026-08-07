@@ -125,6 +125,74 @@ export class TaskWorkspaceService {
   }
 
   /**
+   * Makes a task for a branch that already carries work.
+   *
+   * The case `createTask` cannot serve: it always cuts a new branch from a base, so a
+   * branch written before this extension existed, or by a chat-only task, could never
+   * become one. A worktree is checked out for the branch as it stands — nothing is
+   * rebased, merged or moved, because the work is the reason the branch matters.
+   *
+   * `baseBranch` is recorded but never acted on here. It is what later stages diff
+   * against, so getting it wrong makes a review read the wrong changes — which is why
+   * it is asked for rather than guessed.
+   */
+  async createTaskFromBranch(
+    input: {
+      repositoryRoot: string;
+      name: string;
+      branchName: string;
+      baseBranch: string;
+      description?: string;
+      configuredParentDir: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<Result<TaskWorkspace, ServiceError>> {
+    const existing = await this.repository.getByRepository(input.repositoryRoot);
+    if (existing.some((t) => t.branchName === input.branchName)) {
+      return err({
+        kind: "validation",
+        message: `A task already uses branch "${input.branchName}".`,
+      });
+    }
+
+    // Same naming rules as a new task, so an adopted branch lands where every other
+    // worktree does rather than somewhere only this path knows about.
+    const proposal = this.proposeTask({
+      repositoryRoot: input.repositoryRoot,
+      name: input.name,
+      branchPrefix: "",
+      configuredParentDir: input.configuredParentDir,
+    });
+    if (!proposal.ok) return proposal;
+
+    const created = await this.worktrees.addWorktreeForBranch(
+      input.repositoryRoot,
+      { branchName: input.branchName, worktreePath: proposal.value.worktreePath },
+      signal,
+    );
+    if (!created.ok) return err({ kind: "worktree", error: created.error });
+
+    const now = this.clock.now();
+    const task: TaskWorkspace = {
+      id: this.clock.newId(),
+      name: input.name.trim(),
+      description: input.description?.trim() || undefined,
+      repositoryRoot: input.repositoryRoot,
+      worktreePath: created.value.path,
+      branchName: input.branchName,
+      baseBranch: input.baseBranch,
+      status: "ready",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.repository.save(task);
+    this.logger.info(
+      `Adopted branch ${task.branchName} as task "${task.name}" at ${task.worktreePath}`,
+    );
+    return ok(task);
+  }
+
+  /**
    * Imports an existing (untracked) git worktree as a tracked task. Used when
    * reconciliation surfaces a worktree with no matching stored task.
    */
