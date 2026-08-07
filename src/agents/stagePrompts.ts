@@ -693,7 +693,20 @@ Work on this task has already been started, by hand or by an earlier session. Yo
 job is to find out how far it got — nothing more. Do not write code, do not fix
 anything, and do not finish anything you find half-done. A later stage owns that.
 
-Look at what is actually in the worktree and in the diff against ${context.baseBranch}.
+Look wherever the work would actually be, which is not always the repository:
+
+- the worktree, and the diff against ${context.baseBranch};
+- the environments this work targets, if you have tooling that can read them. Work
+  predating source control lives only there — a procedure deployed to DEV years ago
+  exists, and no diff will ever show it;
+- anything the project's own documentation records about it.
+
+A thing that exists in an environment but not in the repository is **not done**. The
+route's job is to bring it under source control and through review, and a stage skipped
+because the object already exists somewhere would skip exactly that. Say so in the
+evidence — "exists in DEV, absent from the repository" — because that sentence is what
+tells the implementing stage what it is actually for.
+
 For every other stage of the route listed above, reply with one line:
 
 "${ASSESSED_MARKER} <stage id> done|not done — what you saw that shows it"

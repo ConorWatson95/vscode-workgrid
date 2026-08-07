@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
 import { ServiceError } from "../services/taskWorkspaceService";
-import { RouteDefinition } from "../domain/taskRoute";
+import { RouteDefinition, assessmentStageDefinition } from "../domain/taskRoute";
 import { createPipeline } from "../domain/pipelineEngine";
 import { loadHarness } from "../services/reviewRulesService";
 import { withStatus } from "../ui/statusProgress";
@@ -100,6 +100,39 @@ export async function createTaskWorkspaceCommand(
   });
   if (!routeChoice) return;
 
+  // Asked at creation, not only when attaching a route to an existing task. The case
+  // that forced it: work that exists **only in an environment** — SQL deployed to DEV
+  // before it was ever in source control, or a task closed to be migrated onto the
+  // harness. There is no branch to adopt and no worktree to take over, so the way in is
+  // an ordinary new task; without this the route would start from nothing and the
+  // stages would rebuild what is already running.
+  let assessFirst = false;
+  if (routeChoice.route) {
+    const started = await vscode.window.showQuickPick(
+      [
+        {
+          label: "No — this is new work",
+          detail: "Every stage runs from the beginning.",
+          assess: false,
+        },
+        {
+          label: "Yes — some of it already exists",
+          detail:
+            "Adds an assessment stage that looks in the worktree and, where it has " +
+            "the tooling, in the environments this work targets. You approve its " +
+            "findings before any stage is skipped.",
+          assess: true,
+        },
+      ],
+      {
+        title: "Has any of this work already been done?",
+        placeHolder: "Including work done by hand, or deployed but never committed.",
+      },
+    );
+    if (!started) return;
+    assessFirst = started.assess;
+  }
+
   // With a route, this text is handed to every stage prompt. A thin brief — a bare
   // ticket reference, say — is allowed: a stage that needs more asks for it and the
   // route pauses, rather than the extension second-guessing what is enough.
@@ -182,7 +215,14 @@ export async function createTaskWorkspaceCommand(
       step(`attaching the ${routeChoice.route.label} route`);
       const harnessed = {
         ...created.value,
-        pipeline: createPipeline(routeChoice.route),
+        pipeline: createPipeline(
+          assessFirst
+            ? {
+                ...routeChoice.route,
+                stages: [assessmentStageDefinition(), ...routeChoice.route.stages],
+              }
+            : routeChoice.route,
+        ),
         updatedAt: new Date().toISOString(),
       };
       try {

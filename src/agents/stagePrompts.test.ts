@@ -846,3 +846,21 @@ describe("assessing work that already exists", () => {
     expect(prompt).toContain(ASSESSED_MARKER);
   });
 });
+
+describe("assessing work that lives outside the repository", () => {
+  // The case that forced it: SQL deployed to DEV before it was ever in source
+  // control, and a task closed to be migrated onto the harness. No branch, no
+  // worktree, nothing in any diff — and the work is unmistakably done.
+  it("tells the stage to look at the environments, not only the diff", () => {
+    const prompt = assessmentPrompt(CONTEXT, stage({ kind: "assessment" }));
+    expect(prompt).toContain("environments this work targets");
+    expect(prompt).toContain("no diff will ever show it");
+  });
+
+  // The distinction that keeps this from disabling the route it is attached to.
+  it("says an object outside source control is not done", () => {
+    const prompt = assessmentPrompt(CONTEXT, stage({ kind: "assessment" }));
+    expect(prompt).toContain("not done");
+    expect(prompt).toContain("absent from the repository");
+  });
+});

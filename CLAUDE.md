@@ -334,6 +334,16 @@ them was served:
 | A worktree with no task | **Adopt Worktree as Task** (already existed) |
 | A task with no route | **Attach a Route…** |
 | A branch, and nothing else | **Create Task from Existing Branch…** |
+| Nothing in git at all — work that exists only in an environment | An ordinary new task, with assessment offered at creation |
+
+The last row is the one that breaks the assumption underneath all the others: SQL
+deployed to DEV before it was ever in source control, or a task closed to be migrated
+onto the harness. There is no branch to adopt and no worktree to take over, so the way
+in is a normal new task — and the assessment stage has to look somewhere other than the
+diff. Its prompt now names the environments as a place to look, and states the rule that
+keeps this from disabling the route it is attached to: **a thing that exists in an
+environment but not in the repository is `not done`**, because bringing it under source
+control and through review is precisely what the route is for.
 
 The third is the one that had no path at all: `createWorktree` always passes `-b` and
 explicitly refuses an existing branch, which is right for new work and made older work
