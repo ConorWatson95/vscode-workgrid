@@ -190,7 +190,7 @@ describe("plan", () => {
 });
 
 describe("apply", () => {
-  it("appends missing review stages before the human gate and persists them", async () => {
+  it("splices missing review stages straight after the work and persists them", async () => {
     const { repo, plans } = service(paths("db/migrations/001.sql"));
     const original = harnessed();
     await repo.save(original);
@@ -202,12 +202,14 @@ describe("apply", () => {
 
     const saved = await repo.get("t1");
     const ids = saved?.pipeline?.stages.map((s) => s.id) ?? [];
+    // Directly after "fix", not just before the gate. Anything between the work and
+    // the review of it is discarded and re-run when the review sends work back.
     expect(ids).toEqual([
       "reproduce",
       "fix",
+      "sql-review",
       "regression-test",
       "code-review",
-      "sql-review",
       "human-verification",
     ]);
   });

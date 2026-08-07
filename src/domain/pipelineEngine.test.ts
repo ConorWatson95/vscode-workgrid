@@ -494,13 +494,15 @@ describe("applyRules", () => {
     expect(second.matches.map((m) => m.rule.id)).toEqual(["sql"]);
   });
 
-  it("appends at the end when a pipeline has no human gate", () => {
-    // An adopted ad-hoc pipeline has no terminal gate to insert before.
+  it("puts the review straight after the work, even with no gate to insert before", () => {
+    // An adopted ad-hoc pipeline has no terminal gate, so the barrier is the end of
+    // the route — but "no later than the end" is not a reason to run last. The
+    // review goes where it can first run: once the implementation stage exists.
     const result = applyRules(createPipeline(ROUTE), ["a.sql"]);
     expect(result.pipeline.stages.map((s) => s.id)).toEqual([
       "build",
-      "review",
       "sql-review",
+      "review",
     ]);
   });
 
@@ -1094,11 +1096,41 @@ describe("ruleInsertionIndex", () => {
     expect(ruleInsertionIndex(stages)).toBe(1);
   });
 
-  it("falls back to the human gate when the route deploys nothing", () => {
+  it("runs as early as the work allows, not as late as the barrier allows", () => {
+    // The expensive half of the old rule. A send-back discards its target and
+    // everything after it, so every stage between the work and its review is one
+    // thrown away and re-run when the review finds something. Here that is the code
+    // review; on the route this came from it was a code review *and* a deployment
+    // plan, lost three times over to the same double-counting join.
     const stages = [
       s("write", "implementation"),
       s("review", "codeReview"),
       s("signoff", "humanVerification"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(1);
+  });
+
+  it("goes after the last implementation stage, not the first", () => {
+    // Routes commonly split the work — the change, then its navigation and
+    // permissions. A review spliced between them reviews half a change.
+    const stages = [
+      s("write", "implementation"),
+      s("nav", "implementation"),
+      s("build", "test"),
+      s("deploy", "deployment"),
+    ];
+    expect(ruleInsertionIndex(stages)).toBe(2);
+  });
+
+  it("never lands in front of a stage that already ran", () => {
+    // Rules are applied mid-run, once a diff exists. The earliest *valid* position
+    // is bounded by what has already happened: a pending review spliced before a
+    // passed stage would claim an order that never occurred.
+    const stages = [
+      s("write", "implementation", "passed"),
+      s("nav", "implementation", "passed"),
+      s("build", "test", "pending"),
+      s("deploy", "deployment", "pending"),
     ];
     expect(ruleInsertionIndex(stages)).toBe(2);
   });

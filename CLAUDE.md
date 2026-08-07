@@ -216,6 +216,17 @@ gates, evidence and durable state outrank per-task speed.
   routes replace the built-ins entirely, and every route must contain a stage with
   `gate: "approval"` or it is rejected, so no route can pass itself.
 - `services/reviewPlanService.ts` — joins git changed paths + rules + engine.
+- **Rule reviews run as early as the work allows, not as late as the barrier allows**
+  (`ruleInsertionIndex`). The barrier — the first unresolved `deployment` or
+  `humanVerification` — says *no later than*; on its own it also placed every review
+  last, which is the expensive half. A send-back discards its target and everything
+  after it, so each stage standing between the work and its review is one thrown away
+  and re-run when the review finds something. On a real route a SQL review sat after
+  the code review and the DEV landing plan, found a double-counted join, and cost both
+  — three times over. Insertion is now after the **last** implementation stage before
+  the barrier (splitting a change across two stages is common, and a review spliced
+  between them reviews half a change), floored at the first unresolved stage so a
+  pending review never lands in front of one that already ran.
 
 - `services/pipelineRunner.ts` — the driver. Asks `nextAction`, does it, records
   the outcome, repeats; stops at human gates and failures. Depends on a narrow

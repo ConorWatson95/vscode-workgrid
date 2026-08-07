@@ -270,7 +270,8 @@ export function applyRules(
 }
 
 /**
- * Where a rule's reviews belong: before anything irreversible happens.
+ * Where a rule's reviews belong: as soon as the work exists, and always before
+ * anything irreversible happens.
  *
  * This was the first `humanVerification` stage, which in a route that deploys to a
  * dev environment before a human signs off put the reviews *after the deployment*.
@@ -285,12 +286,42 @@ export function applyRules(
  * anything that happened.
  */
 export function ruleInsertionIndex(stages: readonly TaskStage[]): number {
-  const barrier = stages.findIndex(
+  const found = stages.findIndex(
     (stage) =>
       (stage.status === "pending" || stage.status === "awaiting-approval") &&
       (stage.kind === "deployment" || stage.kind === "humanVerification"),
   );
-  return barrier === -1 ? stages.length : barrier;
+  const barrier = found === -1 ? stages.length : found;
+
+  // The barrier says where a review may run no later than. On its own it also placed
+  // every review as late as it legally could, which turned out to be the expensive
+  // half of the decision.
+  //
+  // A send-back discards the target stage and everything after it, so every stage
+  // standing between the work and the review of it is a stage thrown away and re-run
+  // when the review finds something. On a real route that meant a SQL review running
+  // after the code review and the DEV landing plan, finding a double-counting join,
+  // and costing both of them — three times, because the first two send-backs had
+  // nowhere better to go.
+  //
+  // So: as early as the review can actually run, which is once the work exists.
+  let earliest = 0;
+  for (let index = 0; index < barrier; index += 1) {
+    if (stages[index].kind === "implementation") earliest = index + 1;
+  }
+
+  // Never into the past. A pending review spliced in front of stages that already
+  // ran would claim an order that never happened — the same reason the barrier only
+  // counts unresolved stages.
+  const unresolved = stages.findIndex(
+    (stage) =>
+      stage.status === "pending" ||
+      stage.status === "active" ||
+      stage.status === "awaiting-approval",
+  );
+  const floor = unresolved === -1 ? barrier : unresolved;
+
+  return Math.min(barrier, Math.max(earliest, floor));
 }
 
 /**
