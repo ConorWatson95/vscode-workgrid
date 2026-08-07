@@ -324,6 +324,23 @@ sessions are invisible":
   read and rewritten whole — and truncation is announced, since output that just
   stops reads as the command having stopped.
 
+### A stage knows the route it is part of
+
+`StageContext.routeStages` — every stage in order, intents included, with this one
+marked. Built from the **live pipeline**, not the route definition, so rule-added
+reviews appear; a stage told a route that omits them would raise the very work those
+reviews exist to do.
+
+Added because a behaviour review raised "deploy this migration to DEV" as a
+verification item for a human, when the route already had a deployment stage two steps
+later. The stage was not wrong that the work was outstanding — it had no way to know
+anyone was going to do it. A cold session cannot rediscover this at any price: the
+route is not in the repository, the diff or the brief.
+
+It is also what gives `DEFERRED` its meaning. The engine defines a deferral as work
+belonging to **no stage**, and until this existed no stage could tell that from work
+belonging to the next one — so the careful ones over-reported and the rest said nothing.
+
 ### Work that belongs to no stage
 
 Every stage is told to stay within its objective and say so rather than reach

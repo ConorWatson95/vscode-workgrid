@@ -397,6 +397,10 @@ export class PipelineRunner {
       // follows, so expiring it at the next stage boundary would waste it.
       guidance: (task.pipeline?.guidance ?? []).map((note) => note.text),
       handoffs: stageId ? handoffsBefore(task.pipeline!, stageId) : undefined,
+      // Named from the live pipeline rather than the route definition, so rule-added
+      // review stages appear too — a stage told a route that omits them would raise
+      // the very work those reviews exist to do.
+      routeStages: stageId ? routeOutline(task.pipeline, stageId) : undefined,
     };
   }
 
@@ -1362,4 +1366,25 @@ function withVerification(
       ? [...(activity?.errors ?? []), `verification could not run: ${outcome.spawnError}`]
       : activity?.errors,
   };
+}
+
+/**
+ * The route as a stage should see it: every stage in order, with this one marked.
+ *
+ * Skipped and passed stages are included. A stage that already ran is why something is
+ * *not* outstanding, and omitting it invites the reader to raise work that is done.
+ */
+function routeOutline(
+  pipeline: TaskPipeline | undefined,
+  stageId: string,
+): { name: string; intent: string; position: "earlier" | "current" | "later" }[] | undefined {
+  if (!pipeline || pipeline.stages.length === 0) return undefined;
+  const at = pipeline.stages.findIndex((stage) => stage.id === stageId);
+  if (at === -1) return undefined;
+
+  return pipeline.stages.map((stage, index) => ({
+    name: stage.name,
+    intent: stage.intent,
+    position: index === at ? "current" : index < at ? "earlier" : "later",
+  }));
 }

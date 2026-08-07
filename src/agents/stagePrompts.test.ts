@@ -749,3 +749,38 @@ describe("a behaviour review's output channels", () => {
     ]);
   });
 });
+
+describe("the route a stage is part of", () => {
+  const ROUTE_CONTEXT = {
+    ...CONTEXT,
+    routeStages: [
+      { name: "Implement", intent: "Write the proc.", position: "earlier" as const },
+      { name: "Behaviour review", intent: "Plan the checks.", position: "current" as const },
+      { name: "Deploy to DEV", intent: "Run the migrations.", position: "later" as const },
+    ],
+  };
+
+  // The failure this closes: a behaviour review raised "deploy this migration to DEV"
+  // as a verification item for a human, when the route already had a deployment stage
+  // two steps later. It was not wrong that the work was outstanding — it had no way to
+  // know anyone was going to do it.
+  it("names every stage, marks the current one, and says later ones have owners", () => {
+    const prompt = behaviourReviewPrompt(ROUTE_CONTEXT, stage({ kind: "behaviourReview" }));
+    expect(prompt).toContain("Deploy to DEV — Run the migrations.");
+    expect(prompt).toContain("(you are here)");
+    expect(prompt).toContain("do not raise it as outstanding");
+  });
+
+  it("reaches an implementation subtask too, not only reviews", () => {
+    const prompt = subtaskPrompt(ROUTE_CONTEXT, stage(), {
+      id: "s1-1", title: "T", prompt: "P", status: "pending",
+    });
+    expect(prompt).toContain("Deploy to DEV");
+  });
+
+  it("says nothing about a route when there is none to describe", () => {
+    expect(subtaskPrompt(CONTEXT, stage(), {
+      id: "s1-1", title: "T", prompt: "P", status: "pending",
+    })).not.toContain("you are here");
+  });
+});

@@ -49,6 +49,28 @@ export interface StageContext {
    * paying for, re-deriving what the last stage established is not.
    */
   handoffs?: { stageName: string; text: string }[];
+  /**
+   * The route's stages in order, with this one marked.
+   *
+   * The gap this closes, which cost a real sign-off: a behaviour review raised
+   * "deploy this migration to DEV" as a verification item for a human, when the route
+   * already had a deployment stage that would do exactly that two steps later. The
+   * stage was not wrong about the work being outstanding — it had no way to know
+   * anyone was going to do it.
+   *
+   * A cold session cannot rediscover this at any price: the route is not in the
+   * repository, not in the diff, and not in the brief. It is a deterministic fact the
+   * runtime already holds, which is precisely what `StageContext` is for.
+   *
+   * It also gives `DEFERRED` its meaning. The engine defines a deferral as work
+   * belonging to *no stage*, and until now no stage could tell that from work
+   * belonging to the next one — so the honest ones over-reported and the rest said
+   * nothing.
+   *
+   * Intents are included because a stage name alone ("Deploy") does not say whether it
+   * covers the thing in hand.
+   */
+  routeStages?: { name: string; intent: string; position: "earlier" | "current" | "later" }[];
 }
 
 /**
@@ -137,6 +159,19 @@ function preamble(context: StageContext, stage: TaskStage): string {
           `${context.branchName} when you are finished, and say so — the stages after`,
           `you refuse to run until it is back, since they would otherwise report on`,
           `whatever tree you left behind.`,
+        ]
+      : []),
+    ...(context.routeStages && context.routeStages.length > 0
+      ? [
+          "",
+          "This task's route, in order. Stages after yours have owners already: do not",
+          "do their work, and do not raise it as outstanding — that is what they are",
+          "for. Raise only work no stage here covers.",
+          ...context.routeStages.map(
+            (entry) =>
+              `${entry.position === "current" ? "> " : "  "}${entry.name}` +
+              `${entry.position === "current" ? " (you are here)" : ""} — ${entry.intent}`,
+          ),
         ]
       : []),
     ...(context.handoffs && context.handoffs.length > 0
