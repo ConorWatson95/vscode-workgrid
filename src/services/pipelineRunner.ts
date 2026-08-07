@@ -56,7 +56,7 @@ import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
 import { ReviewPlanService } from "./reviewPlanService";
-import { WorktreeClaimService } from "./worktreeClaimService";
+import { WorktreeClaimService, WorktreeSnapshot } from "./worktreeClaimService";
 import {
   PermissionDenial,
   formatDenialReport,
@@ -922,7 +922,12 @@ export class PipelineRunner {
         if (recorded.ok) pipeline = recorded.value;
 
         return {
-          task: await this.save(task, pipeline),
+          task: await this.recordAppearedWorktrees(
+            await this.save(task, pipeline),
+            claimsBefore,
+            stage,
+            steps,
+          ),
           failed: false,
           denied: denials,
         };
@@ -936,7 +941,16 @@ export class PipelineRunner {
       const reverted = revertSubtask(pipeline, subtask.id);
       if (reverted.ok) pipeline = reverted.value;
       steps.push(`"${subtask.title}" was stopped; it will run again.`);
-      return { task: await this.save(task, pipeline), failed: false, cancelled: true };
+      return {
+        task: await this.recordAppearedWorktrees(
+          await this.save(task, pipeline),
+          claimsBefore,
+          stage,
+          steps,
+        ),
+        failed: false,
+        cancelled: true,
+      };
     }
 
     // A question takes precedence over every other reading of the reply: the work
@@ -957,7 +971,16 @@ export class PipelineRunner {
       });
       if (recorded.ok) pipeline = recorded.value;
       steps.push(`"${subtask.title}" asked for more information.`);
-      return { task: await this.save(task, pipeline), failed: false, question };
+      return {
+        task: await this.recordAppearedWorktrees(
+          await this.save(task, pipeline),
+          claimsBefore,
+          stage,
+          steps,
+        ),
+        failed: false,
+        question,
+      };
     }
 
     // The agent has said it is done; now something other than the agent decides.
@@ -1212,6 +1235,56 @@ export class PipelineRunner {
     }
 
     return { task: saved, failed: !reply.ok, reason };
+  }
+
+  /**
+   * Records the worktrees that appeared while a subtask ran.
+   *
+   * Called on **every** way out of a subtask, not only the one where the reply was
+   * interpreted. The worktrees exist the moment the session ends, whatever we then
+   * decide the reply meant — and a promotion stage is the likeliest of all stages to
+   * exit early, because asking a question, being stopped, or having a `git push`
+   * refused is routine for one. Recorded only on the path that read the reply, a
+   * `promote/*` tree created by a stage that then asked something was never attached
+   * to anything: not cleaned up, not claimed, and listed forever as an orphan the
+   * harness itself had made.
+   *
+   * Must run *after* the caller has saved its own pipeline changes. The claim is
+   * written through the repository, and the state file is read-modify-write, so an
+   * in-memory task saved afterwards would drop the claim again.
+   *
+   * Conflicts are only *held* on the main path, where the stage's outcome is being
+   * decided anyway. Here they are logged: the stage has not passed, so the next run
+   * re-snapshots and holds it then, and holding a stage that is simultaneously
+   * waiting on a question would be two contradictory reasons to stop.
+   */
+  private async recordAppearedWorktrees(
+    task: TaskWorkspace,
+    claimsBefore: WorktreeSnapshot | undefined,
+    stage: TaskStage,
+    steps: string[],
+  ): Promise<TaskWorkspace> {
+    if (!claimsBefore || !this.claims) return task;
+
+    const outcome = await this.claims.recordAppeared(task.id, claimsBefore, {
+      stageId: stage.id,
+      at: new Date().toISOString(),
+    });
+    if (outcome.claimed.length === 0 && outcome.conflicts.length === 0) return task;
+
+    if (outcome.claimed.length > 0) {
+      steps.push(
+        `"${stage.name}" created ${outcome.claimed.length} worktree(s), now recorded ` +
+          `against this task: ${outcome.claimed.map((c) => c.path).join(", ")}.`,
+      );
+    }
+    for (const conflict of outcome.conflicts) {
+      this.logger.warn(
+        `Harness [${task.name}] "${stage.name}" overlaps another task at ` +
+          `${conflict.path} (${conflict.reason}). It will be held when this stage runs again.`,
+      );
+    }
+    return (await this.repository.get(task.id)) ?? task;
   }
 
   private async save(

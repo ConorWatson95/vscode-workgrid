@@ -1742,6 +1742,64 @@ describe("worktree claims", () => {
     expect((await repo.get(subject.id))?.worktreeClaims ?? []).toEqual([]);
   });
 
+  // The bug this closes: the claim was recorded only on the path that interpreted the
+  // reply, and a promotion stage is the likeliest of all stages to leave by another —
+  // asking a question, being stopped, or having a push refused is routine for one. The
+  // worktrees exist the moment the session ends, however the reply is later read, and
+  // an unrecorded one is attached to nothing: never cleaned up, and listed forever as
+  // an orphan the harness itself created.
+  it("records a worktree even when the stage ends by asking a question", async () => {
+    const sessions = fakeSessions({
+      "": { text: "NEEDS-INFO:\n1. Which environment should this promote to?" },
+    });
+    const { runner, repo } = moverRunner(sessions, [
+      [{ path: "C:/repos/app-t1", branch: "bug/dealer-mapping" }],
+      [
+        { path: "C:/repos/app-t1", branch: "bug/dealer-mapping" },
+        { path: "C:/repos/promote-uat", branch: "promote/t1-uat" },
+      ],
+    ]);
+    const subject = { ...task(), pipeline: createPipeline(MOVER) };
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    expect(report.outcome.kind).toBe("needsInput");
+    const saved = await repo.get(subject.id);
+    expect((saved?.worktreeClaims ?? []).map((c) => c.path)).toEqual([
+      "C:/repos/promote-uat",
+    ]);
+  });
+
+  it("records a worktree even when the stage is stopped mid-run", async () => {
+    // Aborted from inside the session, which is what stopping an agent actually does:
+    // the worktree already exists by then, and the run leaves by the cancel path.
+    const controller = new AbortController();
+    const sessions: StageSessionRunner = {
+      async run() {
+        controller.abort();
+        return { ok: true, text: "Cherry-picked." };
+      },
+    };
+    const { runner, repo } = moverRunner(sessions, [
+      [{ path: "C:/repos/app-t1", branch: "bug/dealer-mapping" }],
+      [
+        { path: "C:/repos/app-t1", branch: "bug/dealer-mapping" },
+        { path: "C:/repos/promote-uat", branch: "promote/t1-uat" },
+      ],
+    ]);
+    const subject = { ...task(), pipeline: createPipeline(MOVER) };
+    await repo.save(subject);
+
+    const report = await runner.advance(subject, controller.signal);
+
+    expect(report.outcome.kind).toBe("cancelled");
+    const saved = await repo.get(subject.id);
+    expect((saved?.worktreeClaims ?? []).map((c) => c.path)).toEqual([
+      "C:/repos/promote-uat",
+    ]);
+  });
+
   it("does not ask git about a stage that cannot move the worktree", async () => {
     // A list per subtask of every stage is a process launch to learn nothing.
     let listed = 0;

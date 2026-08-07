@@ -438,6 +438,15 @@ removed, the standing `qube-publish-*` trees must not be, or the next publish ha
 to run. Conflicts hold the stage and are never forced. **Branches are never deleted**: a
 worktree is a checkout that can be remade, a branch may hold the only copy of its commits.
 
+**Claims are recorded on every exit from a subtask**, not only the one that reads the
+reply. The worktrees exist the moment the session ends, whatever the reply is later
+taken to mean — and a promotion stage is the likeliest of all stages to leave by
+another path, since asking a question, being stopped, or having a `git push` refused is
+routine for one. Recorded only on the main path, a `promote/*` tree made by a stage that
+then asked something was attached to nothing: never cleaned up, and listed forever as an
+orphan the harness itself had created. Conflicts are still only *held* on the main path;
+elsewhere they are logged, because the stage has not passed and the next run re-snapshots.
+
 A claim is also a *match*, in both directions. **`reconcileTasks` excludes claimed paths
 from orphans** — an orphan is a worktree with no matching task, and a claim is exactly
 that, so without this the harness filled its own orphan list with the trees its routes
