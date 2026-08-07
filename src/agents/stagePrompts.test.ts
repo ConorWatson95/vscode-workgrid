@@ -3,6 +3,8 @@ import {
   StageContext,
   behaviourReviewPrompt,
   parseChecklistReply,
+  DEFERRED_MARKER,
+  ACTION_MARKER,
   parseNeedsInfo,
   parseSubtaskPlan,
   splitPrompt,
@@ -712,5 +714,38 @@ describe("stripVerdict", () => {
     const reply = "Wrong proc.\n\nVERDICT: block";
     expect(parseVerdict(reply)).toBe("block");
     expect(parseVerdict(stripVerdict(reply))).toBeUndefined();
+  });
+});
+
+describe("a behaviour review's output channels", () => {
+  // The bug: a behaviour review had one channel — the checklist — so work it noticed
+  // nobody had done went out as a verification item, and a person was asked to deploy
+  // a migration under the heading "verification items raised". It was not being lazy;
+  // it had one door.
+  it("can decline work and name human-only steps, not just list checks", () => {
+    const prompt = behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" }));
+    expect(prompt).toContain(DEFERRED_MARKER);
+    expect(prompt).toContain(ACTION_MARKER);
+  });
+
+  it("says a checklist item is an observation and never work", () => {
+    const prompt = behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" }));
+    expect(prompt).toContain("observes");
+    expect(prompt).toContain("It is never work");
+  });
+
+  // The reply now legitimately carries marker lines beside the bullets, and the
+  // checklist parser must not turn those into checklist items.
+  it("parses a mixed reply into checks only", () => {
+    const items = parseChecklistReply(
+      [
+        `${DEFERRED_MARKER} Deploy 001-proc.sql to the DEV database`,
+        "- Open the parts scorecard for a dealer with no sales and confirm it reads 0.0%",
+        `${ACTION_MARKER} Merge the pull request once approved`,
+      ].join("\n"),
+    );
+    expect(items).toEqual([
+      "Open the parts scorecard for a dealer with no sales and confirm it reads 0.0%",
+    ]);
   });
 });

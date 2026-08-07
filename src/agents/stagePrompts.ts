@@ -319,6 +319,24 @@ export function stripActions(reply: string): string {
     .trimEnd();
 }
 
+/**
+ * Asks a stage to declare work that is not its own.
+ *
+ * Extracted so a behaviour review can be given it too. Without it that stage had a
+ * single output channel — the checklist — so work it noticed nobody had done went out
+ * as a verification item, and a person was asked to deploy a migration under the
+ * heading "verification items raised". The stage was not being lazy; it had one door.
+ */
+function deferralInstruction(): string {
+  return `
+
+If you find work that belongs to a different stage of the workflow and has not been
+done, do not do it and do not fold it into a checklist item. Write it on its own line
+as "${DEFERRED_MARKER} <what needs doing, and where you think it belongs>", one line
+per item. Work declined this way is followed up by the workflow and holds anything
+that ships until it is settled; work merely mentioned in prose is not.`;
+}
+
 /** Asks a stage to name the steps it cannot take itself. */
 function actionInstruction(): string {
   return `
@@ -574,11 +592,7 @@ Objective: ${subtask.title}
 
 ${subtask.prompt}
 
-Stay within this objective. If you discover work that belongs to a different
-stage of the workflow, do not do it — instead write it on its own line as
-"${DEFERRED_MARKER} <what needs doing, and where you think it belongs>". Use one
-line per item. Something declined this way is followed up by the workflow, so it
-is not lost; something merely mentioned in your reply is not.${blockedInstruction(stage)}${actionInstruction()}${
+Stay within this objective.${deferralInstruction()}${blockedInstruction(stage)}${actionInstruction()}${
     stage.planFile && planSteps && planSteps.length > 0
       ? planStepInstruction(stage.planFile, planSteps)
       : ""
@@ -603,12 +617,19 @@ export function behaviourReviewPrompt(
 
 ${stage.intent}
 
-Reply with only a checklist, one item per line, each starting with "- ".
+Reply with a checklist, one item per line, each starting with "- ".
 Each item must name what a human should exercise and what would indicate a regression.
+
+A checklist item is something a person **observes**. It is never work. If something
+has to be *done* before the behaviour can be observed at all — a script run, an object
+deployed, a job triggered — that is not a checklist item, whoever ends up doing it. Put
+it on one of the lines below instead, and write the checklist item as the observation
+that follows it.
+
 Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
 
-If nothing needs manual verification, reply with exactly: NONE`;
+If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
 }
 
 /**
