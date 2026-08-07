@@ -47,13 +47,15 @@ import {
   setChecklistItem,
   unansweredQuestions,
   ungrantedDenials,
+  createPipeline,
 } from "../domain/pipelineEngine";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
 import { scanSlashCommands } from "../agents/slashCommands";
 import { formatReviewPlan } from "../services/reviewPlanService";
-import { HARNESS_CONFIG_RELATIVE_PATH } from "../services/reviewRulesService";
+import { HARNESS_CONFIG_RELATIVE_PATH, loadHarness } from "../services/reviewRulesService";
+import { RouteDefinition, assessmentStageDefinition } from "../domain/taskRoute";
 import {
   RULE_TEMPLATES,
   renderRuleTemplate,
@@ -100,6 +102,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.startTerminal", (arg) => launchInModeCommand(ctx, arg, "terminal")),
     register("taskWorkspaces.stopAgent", (arg) => stopAgentCommand(ctx, arg)),
     register("taskWorkspaces.adopt", (arg) => adoptCommand(ctx, arg)),
+    register("taskWorkspaces.attachRoute", (arg) => attachRouteCommand(ctx, arg)),
     register("taskWorkspaces.removeOrphan", (arg) => removeOrphanCommand(ctx, arg)),
     register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
     register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
@@ -2703,4 +2706,94 @@ function describeWorktreeError(error: unknown): string {
   if (e?.kind === "validation" && e.message) return e.message;
   if (e?.error?.message) return `Git error: ${e.error.message}`;
   return "Failed to remove task workspace.";
+}
+
+/**
+ * Puts an existing task on a route.
+ *
+ * The gap this closes: `createPipeline` was reachable from exactly one place — task
+ * creation — so work already under way could never enter the runtime. The fallback was
+ * a chat session, outside every gate the harness provides, which is precisely the work
+ * that most needs them.
+ *
+ * The offer to assess is the honest half. Attaching a route to half-finished work and
+ * running from stage one redoes what is done; letting the operator tick off the stages
+ * they believe are complete records work as done because somebody said so, with no
+ * evidence and nothing to read later — the exact failure this harness exists to
+ * prevent. An assessment stage turns that claim into an artefact, and its gate is where
+ * a person approves it.
+ */
+async function attachRouteCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) return;
+
+  // Refused rather than merged. A pipeline holds what has already happened —
+  // approvals, checklist items, deferrals, handoffs — and replacing it would discard
+  // that silently. Re-opening a stage is the supported way back.
+  if (task.pipeline) {
+    void vscode.window.showWarningMessage(
+      `"${task.name}" is already on the ${task.pipeline.routeLabel ?? task.pipeline.routeId} route.`,
+      { modal: true, detail: "Remove and recreate the task to change its route." },
+    );
+    return;
+  }
+
+  const scope = ctx.repositoryUri?.();
+  const harness = loadHarness(repositoryRoot, {
+    configuredPath: ctx.configuration.harnessConfigPath(scope),
+  });
+  const picked = await vscode.window.showQuickPick(
+    harness.routes.map((route: RouteDefinition) => ({
+      label: route.label,
+      detail: `${route.description} (${route.stages.length} stages)`,
+      route,
+    })),
+    { title: `Attach a route to "${task.name}"`, placeHolder: "Which route should this follow?" },
+  );
+  if (!picked) return;
+
+  const started = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Yes — assess what is already done first",
+        detail:
+          "Adds an assessment stage that reads the worktree and reports which stages " +
+          "the existing work already satisfies. You approve its findings before any " +
+          "stage is skipped.",
+        assess: true,
+      },
+      {
+        label: "No — run the route from the beginning",
+        detail: "Every stage runs. Stages are told their output may already exist.",
+        assess: false,
+      },
+    ],
+    {
+      title: "Has work on this task already started?",
+      placeHolder: "This decides whether stages can be skipped on evidence.",
+    },
+  );
+  if (!started) return;
+
+  const pipeline = createPipeline(
+    started.assess
+      ? {
+          ...picked.route,
+          stages: [assessmentStageDefinition(), ...picked.route.stages],
+        }
+      : picked.route,
+  );
+
+  await ctx.repository.save({
+    ...task,
+    pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    `"${task.name}" is now on the ${picked.route.label} route.` +
+      (started.assess ? " Advance it to assess what is already done." : ""),
+  );
 }

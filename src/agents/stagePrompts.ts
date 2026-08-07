@@ -443,6 +443,9 @@ export function readStageReply(text: string): StageReply {
   // an account, not making a second one.
   const stepAccounts = parseStepAccounts(report);
   report = stripStepAccounts(report);
+  // Same reason as every other marker: a report ending in bare protocol lines is
+  // machinery leaking into a document a person reads.
+  report = stripAssessments(report);
 
   return {
     verdict,
@@ -665,6 +668,86 @@ Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
 
 If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
+}
+
+/** How an assessment stage reports on one stage of the route. */
+export const ASSESSED_MARKER = "ASSESSED:";
+
+/**
+ * Asks an assessment stage which of the route's stages the existing work already
+ * satisfies.
+ *
+ * The whole point is that it produces *evidence*, not a verdict. The alternative —
+ * a human ticking off the stages they believe are done — records work as complete
+ * because somebody said so, which is the failure the harness exists to prevent.
+ *
+ * Stage ids rather than names, because the reply is parsed and matched: a stage
+ * renamed between the route file and the pipeline would silently match nothing.
+ */
+export function assessmentPrompt(context: StageContext, stage: TaskStage): string {
+  return `${preamble(context, stage)}
+
+${stage.intent}
+
+Work on this task has already been started, by hand or by an earlier session. Your
+job is to find out how far it got — nothing more. Do not write code, do not fix
+anything, and do not finish anything you find half-done. A later stage owns that.
+
+Look at what is actually in the worktree and in the diff against ${context.baseBranch}.
+For every other stage of the route listed above, reply with one line:
+
+"${ASSESSED_MARKER} <stage id> done|not done — what you saw that shows it"
+
+The evidence is the part that matters, and it must be something you observed: an
+object that exists, a file that contains a thing, a row that is present or absent.
+"Looks complete" is not evidence. If you cannot tell, say "not done" and say why —
+a stage run needlessly costs a session, while a stage skipped wrongly costs the
+thing it was there to catch.
+
+Judge only whether the work exists, never whether it is good. A stage you mark done
+is skipped, so its review never runs; if what you find looks wrong, mark it not done
+and say so.`;
+}
+
+/**
+ * Reads an assessment stage's per-stage conclusions.
+ *
+ * Tolerant in the same way the plan-step parser is: the marker must start a line, the
+ * separator may be any dash, and a line without one keeps its whole tail as evidence
+ * rather than being dropped.
+ */
+export function parseAssessments(
+  reply: string,
+): { stageId: string; done: boolean; evidence: string }[] {
+  const found: { stageId: string; done: boolean; evidence: string }[] = [];
+  const seen = new Set<string>();
+  // A literal, not a template built from the marker constant. Built that way the
+  // escapes collapse — `\S` became "S" and the class `[—\-:]` an out-of-order range —
+  // and `new RegExp` threw on construction, which would have failed every assessment
+  // reply rather than merely parsing one badly.
+  const pattern =
+    /^[ \t]*ASSESSED:[ \t]*(\S+)[ \t]+(done|not done)\b[ \t]*[—:-]*[ \t]*(.*)$/gim;
+  for (const match of reply.matchAll(pattern)) {
+    const stageId = match[1].trim();
+    // First mention wins, so a reply that restates the instruction or corrects
+    // itself later cannot flip a stage to skipped after the fact.
+    if (seen.has(stageId)) continue;
+    seen.add(stageId);
+    found.push({
+      stageId,
+      done: match[2].toLowerCase() === "done",
+      evidence: match[3].trim(),
+    });
+  }
+  return found;
+}
+
+/** The reply without its assessment lines. See `stripVerdict` on the newline collapse. */
+export function stripAssessments(reply: string): string {
+  return reply
+    .replace(/^[ \t]*ASSESSED:[ \t]*.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 }
 
 /**

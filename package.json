@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.64.0",
+  "version": "0.65.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -196,6 +196,12 @@
         "title": "Remove Workspace",
         "category": "Task Workspaces",
         "icon": "$(trash)"
+      },
+      {
+        "command": "taskWorkspaces.attachRoute",
+        "title": "Attach a Route…",
+        "category": "Task Workspaces",
+        "icon": "$(list-ordered)"
       },
       {
         "command": "taskWorkspaces.adopt",
@@ -429,6 +435,11 @@
           "command": "taskWorkspaces.showDiff",
           "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
           "group": "1_open@3"
+        },
+        {
+          "command": "taskWorkspaces.attachRoute",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /task/",
+          "group": "1_open@5"
         },
         {
           "command": "taskWorkspaces.requiredReviews",

@@ -3,6 +3,10 @@ import {
   StageContext,
   behaviourReviewPrompt,
   parseChecklistReply,
+  parseAssessments,
+  stripAssessments,
+  assessmentPrompt,
+  ASSESSED_MARKER,
   DEFERRED_MARKER,
   ACTION_MARKER,
   parseNeedsInfo,
@@ -782,5 +786,63 @@ describe("the route a stage is part of", () => {
     expect(subtaskPrompt(CONTEXT, stage(), {
       id: "s1-1", title: "T", prompt: "P", status: "pending",
     })).not.toContain("you are here");
+  });
+});
+
+describe("assessing work that already exists", () => {
+  it("reads a per-stage conclusion with its evidence", () => {
+    const parsed = parseAssessments(
+      [
+        "ASSESSED: implement done — p_Parts_Get_ByDescriptionCode exists in the worktree",
+        "ASSESSED: permissions not done — no row in p_Permissions_Get_FieldValues",
+      ].join("\n"),
+    );
+    expect(parsed).toEqual([
+      {
+        stageId: "implement",
+        done: true,
+        evidence: "p_Parts_Get_ByDescriptionCode exists in the worktree",
+      },
+      {
+        stageId: "permissions",
+        done: false,
+        evidence: "no row in p_Permissions_Get_FieldValues",
+      },
+    ]);
+  });
+
+  // A reply that restates the instruction, or corrects itself later, must not be able
+  // to flip a stage to skipped after the fact.
+  it("keeps the first mention of a stage", () => {
+    const parsed = parseAssessments(
+      ["ASSESSED: deploy not done — nothing in DEV", "ASSESSED: deploy done — actually fine"].join("\n"),
+    );
+    expect(parsed).toEqual([
+      { stageId: "deploy", done: false, evidence: "nothing in DEV" },
+    ]);
+  });
+
+  it("tolerates a missing separator and other dashes", () => {
+    expect(parseAssessments("ASSESSED: build done the dll is present")).toEqual([
+      { stageId: "build", done: true, evidence: "the dll is present" },
+    ]);
+  });
+
+  it("ignores the marker inside prose", () => {
+    expect(parseAssessments("I would say ASSESSED: build done here")).toEqual([]);
+  });
+
+  it("strips its lines from the report", () => {
+    const report = stripAssessments("Findings.\nASSESSED: build done — present\nEnd.");
+    expect(report).not.toContain("ASSESSED:");
+    expect(report).toContain("Findings.");
+    expect(report).toContain("End.");
+  });
+
+  it("tells the stage to judge existence, not quality, and to change nothing", () => {
+    const prompt = assessmentPrompt(CONTEXT, stage({ kind: "assessment" }));
+    expect(prompt).toContain("do not fix");
+    expect(prompt).toContain("never whether it is good");
+    expect(prompt).toContain(ASSESSED_MARKER);
   });
 });

@@ -9,6 +9,7 @@ import {
   finishSubtask,
   nextAction,
   planStage,
+  recordAssessments,
   recordChecklist,
   recordDenials,
   recordQuestion,
@@ -42,7 +43,9 @@ import {
 
 import {
   StageContext,
+  assessmentPrompt,
   behaviourReviewPrompt,
+  parseAssessments,
   parseChecklistReply,
   parseNeedsInfo,
   readStageReply,
@@ -827,10 +830,14 @@ export class PipelineRunner {
 
     const context = this.contextFor(task, stage.id);
 
-    // A behaviour review is asked for a checklist; everything else does the work.
-    const prompt = producesChecklist(stage.kind)
-      ? behaviourReviewPrompt(context, stage)
-      : subtaskPrompt(context, stage, subtask, planSteps);
+    // A behaviour review is asked for a checklist, an assessment for a reading of
+    // what already exists; everything else does the work.
+    const prompt =
+      stage.kind === "assessment"
+        ? assessmentPrompt(context, stage)
+        : producesChecklist(stage.kind)
+          ? behaviourReviewPrompt(context, stage)
+          : subtaskPrompt(context, stage, subtask, planSteps);
 
     let pipeline = task.pipeline!;
     // Registered before the session runs, so the steps exist to be unaccounted for
@@ -1009,6 +1016,19 @@ export class PipelineRunner {
       );
     } else if (verification) {
       steps.push(`"${stage.name}" passed verification.`);
+    }
+
+    if (reply.ok && stage.kind === "assessment") {
+      const assessments = parseAssessments(reply.text);
+      const recorded = recordAssessments(pipeline, stage.id, assessments);
+      if (recorded.ok) pipeline = recorded.value;
+      const done = assessments.filter((entry) => entry.done).length;
+      steps.push(
+        assessments.length === 0
+          ? `"${stage.name}" reported on no stages — every stage will run.`
+          : `"${stage.name}" found ${done} of ${assessments.length} stage(s) already ` +
+            `done. They are skipped only once you approve this stage.`,
+      );
     }
 
     if (reply.ok && producesChecklist(stage.kind)) {

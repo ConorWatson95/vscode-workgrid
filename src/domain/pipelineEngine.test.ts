@@ -34,6 +34,8 @@ import {
   setChecklistItem,
   skipStage,
   revertSubtask,
+  recordAssessments,
+  assessedAsDone,
   startSubtask,
   SubtaskSpec,
 } from "./pipelineEngine";
@@ -1562,5 +1564,113 @@ describe("intervention counting", () => {
     const reverted = must(revertSubtask(started, "review-1"));
 
     expect(reverted.interventions).toBeUndefined();
+  });
+});
+
+describe("assessing work that already exists", () => {
+  const WITH_ASSESSMENT: RouteDefinition = {
+    id: "attached",
+    label: "Attached",
+    description: "A route attached to work already under way.",
+    stages: [
+      {
+        id: "assess",
+        label: "Assess existing work",
+        kind: "assessment",
+        intent: "Establish what is already done.",
+        splittable: false,
+        gate: "approval",
+      },
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Write it.",
+        splittable: false,
+        gate: "auto",
+      },
+      {
+        id: "review",
+        label: "Review",
+        kind: "codeReview",
+        intent: "Review it.",
+        splittable: false,
+        gate: "approval",
+      },
+    ],
+  };
+
+  const held = (pipeline: ReturnType<typeof createPipeline>) => ({
+    ...pipeline,
+    stages: pipeline.stages.map((s) =>
+      s.id === "assess" ? { ...s, status: "awaiting-approval" as const } : s,
+    ),
+  });
+
+  it("records conclusions without acting on them", () => {
+    const pipeline = must(
+      recordAssessments(createPipeline(WITH_ASSESSMENT), "assess", [
+        { stageId: "build", done: true, evidence: "the proc exists" },
+      ]),
+    );
+
+    // Stored, not applied: a person reads the evidence before stages stop running.
+    expect(assessedAsDone(pipeline, "assess")).toHaveLength(1);
+    expect(pipeline.stages.find((s) => s.id === "build")?.status).toBe("pending");
+  });
+
+  it("skips an assessed stage at the gate, with the evidence and never as passed", () => {
+    const recorded = must(
+      recordAssessments(createPipeline(WITH_ASSESSMENT), "assess", [
+        { stageId: "build", done: true, evidence: "the proc exists" },
+        { stageId: "review", done: false, evidence: "no review recorded" },
+      ]),
+    );
+    const approved = must(approveStage(held(recorded), "assess", "2026-08-07T09:00:00Z"));
+
+    const build = approved.stages.find((s) => s.id === "build");
+    // Skipped, not passed. A stage that ran has a report and possibly a verify exit
+    // code; this has an agent's reading of a diff, and the record must say which.
+    expect(build?.status).toBe("skipped");
+    expect(build?.skipReason).toContain("the proc exists");
+    expect(approved.stages.find((s) => s.id === "review")?.status).toBe("pending");
+  });
+
+  it("ignores a conclusion about a stage that has already resolved", () => {
+    const base = createPipeline(WITH_ASSESSMENT);
+    const withPassed = {
+      ...base,
+      stages: base.stages.map((s) =>
+        s.id === "build" ? { ...s, status: "passed" as const } : s,
+      ),
+    };
+
+    const recorded = must(
+      recordAssessments(withPassed, "assess", [
+        { stageId: "build", done: true, evidence: "reading a diff" },
+      ]),
+    );
+    expect(assessedAsDone(recorded, "assess")).toEqual([]);
+  });
+
+  it("ignores a conclusion about the assessing stage itself", () => {
+    const recorded = must(
+      recordAssessments(createPipeline(WITH_ASSESSMENT), "assess", [
+        { stageId: "assess", done: true, evidence: "circular" },
+      ]),
+    );
+    expect(assessedAsDone(recorded, "assess")).toEqual([]);
+  });
+
+  it("leaves an ordinary approval alone", () => {
+    const pipeline = createPipeline(WITH_ASSESSMENT);
+    const heldReview = {
+      ...pipeline,
+      stages: pipeline.stages.map((s) =>
+        s.id === "review" ? { ...s, status: "awaiting-approval" as const } : s,
+      ),
+    };
+    const approved = must(approveStage(heldReview, "review", "2026-08-07T09:00:00Z"));
+    expect(approved.stages.find((s) => s.id === "build")?.status).toBe("pending");
   });
 });

@@ -53,7 +53,27 @@ export type StageKind =
    */
   | "behaviourReview"
   /** A human works through the accumulated checklist before merge. */
-  | "humanVerification";
+  | "humanVerification"
+  /**
+   * Reads work that already exists and reports which of the route's stages it
+   * already satisfies.
+   *
+   * Exists because a route could only ever be attached to a brand-new task, so work
+   * already under way had no way into the runtime at all — the fallback was a chat
+   * session, outside every gate the harness provides.
+   *
+   * The alternative was letting a human tick off the stages they believe are done,
+   * which reintroduces the exact failure the harness exists to prevent: a step
+   * recorded as complete because somebody said so, with no evidence and nothing to
+   * read afterwards. An assessment turns that claim into an artefact somebody
+   * produced and a human approved.
+   *
+   * Its conclusions mark stages **skipped**, never passed. A stage that ran has a
+   * report, sometimes a verify exit code and plan-step accounts; an assessed one has
+   * an agent's reading of a diff. Recording them the same way would make the pipeline
+   * stop being a truthful record of what happened.
+   */
+  | "assessment";
 
 /** Every stage kind, for validating config that names one. */
 export const ALL_STAGE_KINDS: readonly StageKind[] = [
@@ -65,6 +85,7 @@ export const ALL_STAGE_KINDS: readonly StageKind[] = [
   "domainReview",
   "behaviourReview",
   "humanVerification",
+  "assessment",
 ];
 
 /** Marks a `sendBackTo` entry as naming a stage kind rather than a stage id. */
@@ -392,4 +413,32 @@ export const BUILT_IN_ROUTES: readonly RouteDefinition[] = [
 
 export function findRoute(routeId: string): RouteDefinition | undefined {
   return BUILT_IN_ROUTES.find((route) => route.id === routeId);
+}
+
+/**
+ * The stage prepended when a route is attached to work already under way.
+ *
+ * Synthesized rather than required of every project's route file, because it is a
+ * property of *how the task entered the runtime*, not of the kind of work — the same
+ * route is used whether the work started here or elsewhere.
+ *
+ * `gate: "approval"` is the whole design. Its conclusions skip stages, and a stage
+ * skipped wrongly costs exactly the thing it was there to catch, so a person reads the
+ * evidence before any of that takes effect.
+ */
+export const ASSESSMENT_STAGE_ID = "assess-existing";
+
+export function assessmentStageDefinition(): RouteStageDefinition {
+  return {
+    id: ASSESSMENT_STAGE_ID,
+    label: "Assess existing work",
+    kind: "assessment",
+    intent:
+      "Work on this task has already been started. Establish which stages of this " +
+      "route the existing work already satisfies, and report the evidence for each.",
+    // One unit of work: splitting it would have several sessions each reporting on
+    // part of the route, and nothing reconciling their conclusions.
+    splittable: false,
+    gate: "approval",
+  };
 }

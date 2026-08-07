@@ -86,12 +86,10 @@ export async function createTaskWorkspaceCommand(
     {
       label: "Chat task",
       description: "no route",
-      // Does not claim a route can be added later: nothing attaches one to an
-      // existing task, and the previous "You can decide later" promised exactly
-      // that. Better to say what the choice costs than to be found out by it.
       detail:
         "A worktree and a chat session, and nothing else: no stages, no gates, " +
-        "no brief handed to prompts. A route can only be chosen now.",
+        "no brief handed to prompts. Attach a Route… adds one later, with the " +
+        "option to assess what is already done.",
       route: undefined,
     },
   ];

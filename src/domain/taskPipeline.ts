@@ -202,6 +202,26 @@ export interface DeferralItem {
   resolvedAt?: string;
 }
 
+/**
+ * One stage of the route, as an assessment stage found it.
+ *
+ * `done` means the work appears already present. It never means the stage passed:
+ * the evidence is a reading of what exists, not a run, and the two must not be
+ * recorded the same way.
+ */
+export interface StageAssessment {
+  /** The stage this is about. */
+  stageId: string;
+  done: boolean;
+  /**
+   * What the assessment saw, in its own words.
+   *
+   * Required in practice for the same reason settling a deferral requires a
+   * sentence: "done" alone is the claim this whole mechanism exists to replace.
+   */
+  evidence: string;
+}
+
 /** Longest deferral text kept. They are one-liners; anything longer is a reply. */
 export const MAX_DEFERRAL_CHARS = 400;
 
@@ -307,6 +327,24 @@ export interface TaskStage {
    * does not require a new task.
    */
   verify?: string;
+  /**
+   * What an assessment stage concluded about each stage of the route.
+   *
+   * Held on the assessing stage, not on the stages assessed, for the same reason
+   * plan-step accounts are held on the stage that ran: re-opening the assessment
+   * discards its conclusions along with everything else that run produced, which is
+   * right — the next run has to look again.
+   */
+  assessments?: StageAssessment[];
+  /**
+   * Why this stage was skipped, when something other than a person skipped it.
+   *
+   * An assessed stage is recorded as **skipped**, never passed, and this is what
+   * stops that being indistinguishable from a human stepping past it. A stage that
+   * ran has a report; this has an agent's reading of a diff, and the record has to
+   * say which of the two it is.
+   */
+  skipReason?: string;
   /**
    * MCP servers this stage cannot run without; see the route definition. Refreshed
    * for a stage that has not started, like `verify` — a stage that already ran keeps

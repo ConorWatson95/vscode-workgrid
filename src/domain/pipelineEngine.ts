@@ -7,6 +7,7 @@ import {
   Subtask,
   DeferralItem,
   MAX_DEFERRAL_CHARS,
+  StageAssessment,
   SubtaskActivity,
   TaskPipeline,
   TaskStage,
@@ -1172,6 +1173,49 @@ export function revertSubtask(
 }
 
 /**
+ * Records what an assessment stage concluded about each stage of the route.
+ *
+ * Stored, not applied. Applying happens at the gate, because the whole reason an
+ * assessment exists rather than a checkbox is that a human reads the evidence before
+ * stages stop running — and a mapping applied on arrival would have skipped them
+ * before anyone looked.
+ *
+ * Conclusions about the assessing stage itself, or about stages that have already
+ * resolved, are dropped: the first is meaningless and the second would rewrite
+ * history from a reading of a diff.
+ */
+export function recordAssessments(
+  pipeline: TaskPipeline,
+  stageId: string,
+  assessments: readonly StageAssessment[],
+): Result<TaskPipeline, PipelineError> {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage) return err(unknownStage(stageId));
+
+  const known = new Map(pipeline.stages.map((s) => [s.id, s]));
+  const kept = assessments.filter((entry) => {
+    if (entry.stageId === stageId) return false;
+    const target = known.get(entry.stageId);
+    return target !== undefined && target.status === "pending";
+  });
+
+  return ok(replaceStage(pipeline, { ...stage, assessments: [...kept] }));
+}
+
+/**
+ * Stages an approved assessment says are already done.
+ *
+ * Exposed so a caller can say what approving will do before it does it.
+ */
+export function assessedAsDone(
+  pipeline: TaskPipeline,
+  stageId: string,
+): StageAssessment[] {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  return (stage?.assessments ?? []).filter((entry) => entry.done);
+}
+
+/**
  * Approves a stage held at a human gate, allowing the route to advance.
  *
  * The human-verification gate additionally requires the accumulated checklist
@@ -1255,8 +1299,35 @@ export function approveStage(
       ]
     : pipeline.guidance;
 
+  // An approved assessment is where its conclusions take effect. Marked *skipped*
+  // with the evidence attached, never passed: a stage that ran has a report and
+  // possibly a verify exit code, while this has an agent's reading of a diff, and
+  // recording them alike would make the pipeline stop being a record of what
+  // happened. Only pending stages are touched, so nothing that already ran is
+  // rewritten.
+  const assessed = stage.kind === "assessment" ? assessedAsDone(pipeline, stage.id) : [];
+  const byId = new Map(assessed.map((entry) => [entry.stageId, entry]));
+  const withAssessment = pipeline.stages.map((candidate) => {
+    const entry = byId.get(candidate.id);
+    if (!entry || candidate.status !== "pending") return candidate;
+    return {
+      ...candidate,
+      status: "skipped" as const,
+      skipReason: `assessed as already done: ${entry.evidence}`,
+      finishedAt: at,
+      subtasks: candidate.subtasks.map((subtask) =>
+        subtask.status === "pending"
+          ? { ...subtask, status: "skipped" as const, finishedAt: at }
+          : subtask,
+      ),
+    };
+  });
+
   return ok({
-    ...replaceStage(pipeline, { ...stage, status: "passed", finishedAt: at }),
+    ...replaceStage(
+      { ...pipeline, stages: withAssessment },
+      { ...stage, status: "passed", finishedAt: at },
+    ),
     ...counted(pipeline, { kind: "approval", stageId: stage.id }, at),
     currentStage: undefined,
     guidance,

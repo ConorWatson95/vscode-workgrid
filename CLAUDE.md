@@ -324,6 +324,37 @@ sessions are invisible":
   read and rewritten whole — and truncation is announced, since output that just
   stops reads as the command having stopped.
 
+### Work that was already under way
+
+`createPipeline` was reachable from exactly one place — task creation — so work already
+started could never enter the runtime, and the fallback was a chat session outside every
+gate the harness provides. **Attach a Route…** (`attachRouteCommand`) fixes the entry
+point; it refuses a task that already has a pipeline, because a pipeline holds
+approvals, checklist items, deferrals and handoffs, and replacing it would discard them
+silently.
+
+Attaching offers an **assessment stage** (`StageKind "assessment"`,
+`assessmentStageDefinition()`, prepended — synthesized rather than required of every
+project's route file, since it is a property of how the task entered, not of the work).
+It reads the worktree and reports `ASSESSED: <stage id> done|not done — evidence` per
+stage. The alternative was letting the operator tick off stages they believe are done,
+which records work as complete because somebody said so — the exact failure the harness
+exists to prevent.
+
+Three rules make it safe:
+
+- **Recorded, not applied.** `recordAssessments` stores the mapping; `approveStage`
+  applies it. The gate is the point — a person reads the evidence before any stage stops
+  running.
+- **Skipped, never passed.** A stage that ran has a report and possibly a `verify` exit
+  code; an assessed one has an agent's reading of a diff. `skipReason` carries the
+  evidence so the two can never be confused later.
+- **Only pending stages.** A conclusion about a stage that already resolved, or about
+  the assessing stage itself, is dropped rather than allowed to rewrite history.
+
+The prompt tells it to judge *existence, not quality*: a stage marked done is skipped,
+so its review never runs — if the work looks wrong, that is "not done".
+
 ### A stage knows the route it is part of
 
 `StageContext.routeStages` — every stage in order, intents included, with this one
