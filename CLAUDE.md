@@ -227,6 +227,14 @@ gates, evidence and durable state outrank per-task speed.
   the barrier (splitting a change across two stages is common, and a review spliced
   between them reviews half a change), floored at the first unresolved stage so a
   pending review never lands in front of one that already ran.
+- **A checklist-writing review goes *after* the first deployment, not before it.** The
+  exact inverse, and it needs its own rule: a checklist is a list of things for a person
+  to exercise, so a runtime QA stage raised before anything reached DEV produces items
+  nobody can yet test, and holds the route on them. The barrier reasoning does not apply
+  either — "before anything irreversible" protects a review asking whether an object is
+  *safe to run*; a behaviour review asks how it *behaved*, which has no answer until it
+  has. Keyed on `producesChecklist(kind)`, so stages are spliced one at a time rather
+  than all at one point.
 
 - `services/pipelineRunner.ts` — the driver. Asks `nextAction`, does it, records
   the outcome, repeats; stops at human gates and failures. Depends on a narrow

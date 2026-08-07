@@ -13,7 +13,12 @@ import {
   TaskStage,
   truncateHandoff,
 } from "./taskPipeline";
-import { RouteDefinition, RouteStageDefinition } from "./taskRoute";
+import {
+  RouteDefinition,
+  RouteStageDefinition,
+  StageKind,
+  producesChecklist,
+} from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
 import {
   InterventionKind,
@@ -250,9 +255,17 @@ export function applyRules(
     return { pipeline, added, matches, deployedAlready: [] };
   }
 
+  // Placed one at a time, because where a rule stage belongs depends on what it is:
+  // a static review goes in front of the deployment, a behaviour review that writes
+  // a checklist goes after it. A single splice point for all of them put a runtime
+  // checklist in front of the DEV push it was meant to be exercised against.
   const stages = [...pipeline.stages];
-  const at = ruleInsertionIndex(pipeline.stages);
-  stages.splice(at, 0, ...added);
+  let at = stages.length;
+  for (const stage of added) {
+    const index = ruleInsertionIndex(stages, stage.kind);
+    stages.splice(index, 0, stage);
+    at = Math.min(at, index);
+  }
 
   // Deployments already behind the insertion point. There is nowhere earlier to put
   // these reviews — a pending stage cannot be placed before one that has run, where
@@ -285,7 +298,24 @@ export function applyRules(
  * has passed would place it in the past, where the order no longer describes
  * anything that happened.
  */
-export function ruleInsertionIndex(stages: readonly TaskStage[]): number {
+export function ruleInsertionIndex(
+  stages: readonly TaskStage[],
+  kind?: StageKind,
+): number {
+  // A checklist is a list of things for a person to *exercise*, so the stage that
+  // writes one is worthless until the work is running somewhere. It is the exact
+  // inverse of a static review, and putting both in front of the deployment made the
+  // checklist unusable: it was raised before anything reached DEV, and holding the
+  // route on items nobody could yet test is a gate that can only be clicked past.
+  //
+  // The barrier reasoning does not apply to it either. "Before anything irreversible"
+  // protects a review that says whether an object is safe to run; a behaviour review
+  // asks how it behaved, which is a question with no answer until it has run.
+  if (kind && producesChecklist(kind)) {
+    const deployed = stages.findIndex((stage) => stage.kind === "deployment");
+    if (deployed !== -1) return Math.max(deployed + 1, firstUnresolvedIndex(stages));
+  }
+
   const found = stages.findIndex(
     (stage) =>
       (stage.status === "pending" || stage.status === "awaiting-approval") &&
@@ -313,15 +343,21 @@ export function ruleInsertionIndex(stages: readonly TaskStage[]): number {
   // Never into the past. A pending review spliced in front of stages that already
   // ran would claim an order that never happened — the same reason the barrier only
   // counts unresolved stages.
-  const unresolved = stages.findIndex(
+  const unresolved = firstUnresolvedIndex(stages);
+  const floor = unresolved === stages.length ? barrier : unresolved;
+
+  return Math.min(barrier, Math.max(earliest, floor));
+}
+
+/** Where the route currently is; `stages.length` when everything has resolved. */
+function firstUnresolvedIndex(stages: readonly TaskStage[]): number {
+  const index = stages.findIndex(
     (stage) =>
       stage.status === "pending" ||
       stage.status === "active" ||
       stage.status === "awaiting-approval",
   );
-  const floor = unresolved === -1 ? barrier : unresolved;
-
-  return Math.min(barrier, Math.max(earliest, floor));
+  return index === -1 ? stages.length : index;
 }
 
 /**

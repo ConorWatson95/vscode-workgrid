@@ -1122,6 +1122,28 @@ describe("ruleInsertionIndex", () => {
     expect(ruleInsertionIndex(stages)).toBe(2);
   });
 
+  it("puts a checklist-writing review after the deployment, not before it", () => {
+    // The inverse of every other review, and the reported problem: a runtime QA
+    // checklist raised before anything reached DEV is a list of things nobody can
+    // exercise yet, holding the route on items that cannot be ticked.
+    const stages = [
+      s("write", "implementation"),
+      s("deploy-dev", "deployment"),
+      s("dev-plan", "planning"),
+      s("promote", "deployment"),
+    ];
+    expect(ruleInsertionIndex(stages, "behaviourReview")).toBe(2);
+    // A static review still goes in front of it: whether an object is safe to run is
+    // a question worth nothing once it has run.
+    expect(ruleInsertionIndex(stages, "domainReview")).toBe(1);
+  });
+
+  it("falls back to the barrier for a checklist stage when nothing deploys", () => {
+    // Nothing to wait for, so the ordinary rule applies rather than appending it last.
+    const stages = [s("write", "implementation"), s("signoff", "humanVerification")];
+    expect(ruleInsertionIndex(stages, "behaviourReview")).toBe(1);
+  });
+
   it("never lands in front of a stage that already ran", () => {
     // Rules are applied mid-run, once a diff exists. The earliest *valid* position
     // is bounded by what has already happened: a pending review spliced before a

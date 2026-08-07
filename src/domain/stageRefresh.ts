@@ -245,26 +245,35 @@ export function revertToStage(
  */
 export function repositionRuleStages(
   pipeline: TaskPipeline,
-  insertionIndex: (stages: readonly TaskStage[]) => number,
+  insertionIndex: (stages: readonly TaskStage[], kind?: StageKind) => number,
 ): { pipeline: TaskPipeline; moved: string[] } {
-  const barrier = insertionIndex(pipeline.stages);
+  // Each stage judged against its own target, not one shared barrier: a static review
+  // belongs in front of the deployment and a behaviour review that writes a checklist
+  // belongs after it, so "is it in the wrong place?" is a different question per kind.
   const movable = pipeline.stages.filter(
     (stage, index) =>
-      index > barrier && stage.addedByRule !== undefined && stage.status === "pending",
+      stage.addedByRule !== undefined &&
+      stage.status === "pending" &&
+      index !== insertionIndex(pipeline.stages, stage.kind),
   );
   if (movable.length === 0) return { pipeline, moved: [] };
 
   const rest = pipeline.stages.filter((stage) => !movable.includes(stage));
-  // Recomputed against the remaining stages: removing the movable ones can shift
-  // where the barrier sits, so splicing at the old index could land past it.
-  const target = insertionIndex(rest);
   const stages = [...rest];
-  stages.splice(target, 0, ...movable);
+  const moved: string[] = [];
+  for (const stage of movable) {
+    // Recomputed as each one lands: removing the movable stages shifts the barrier,
+    // and every insertion shifts it again.
+    const target = insertionIndex(stages, stage.kind);
+    // A stage already where it belongs relative to the others is left alone rather
+    // than reported as moved — the caller announces the move to the user.
+    const from = pipeline.stages.indexOf(stage);
+    stages.splice(target, 0, stage);
+    if (stages.indexOf(stage) !== from) moved.push(stage.id);
+  }
 
-  return {
-    pipeline: { ...pipeline, stages },
-    moved: movable.map((stage) => stage.id),
-  };
+  if (moved.length === 0) return { pipeline, moved: [] };
+  return { pipeline: { ...pipeline, stages }, moved };
 }
 
 /**
