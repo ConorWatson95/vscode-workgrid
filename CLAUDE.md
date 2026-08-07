@@ -404,6 +404,29 @@ Two checks that both exist because the failure they prevent is a stage *succeedi
   keyed on the requested name compares two runs of the same model. `UsageTotals.models`
   carries the distinct set; two entries where a stage asked for one is the tell.
 
+### Keeping a worktree the checkout it claims to be
+
+Two rules in `worktreeProvisioner.ts`, both learned from a task that was dirty before
+anyone touched it.
+
+- **`copyIntoWorktree` never replaces a file already at the destination.** A fresh
+  worktree contains exactly what git tracks, so a file already there is a tracked one —
+  and the setting exists for the files git does *not* track. A directory entry
+  (`tools/mcp/sftp/profiles`) sweeps up any tracked file inside it, and copying the main
+  checkout's copy over the worktree's produced a modified file with identical content
+  and different line endings, because the two checkouts had normalised differently.
+- **`linkSiblings` never touches a path that is not already a link.** Links are created
+  in the worktree *parent*, which is also where real repositories live, so a mistyped
+  name points at a working clone; `readLink` uses `lstat`, not `stat`, because `stat`
+  follows the link and makes a junction indistinguishable from a real directory. Junctions
+  on Windows, which need no elevation.
+
+The reason links are needed at all: a project referencing a sibling as
+`..\..\QubeData\QubeData.csproj` resolves from a checkout beside that sibling and not
+from a worktree one level deeper. A `Directory.Build.props` can probe and fix *project*
+references; a `.sln` cannot, since solution files take no MSBuild properties — so the
+layout the committed paths assume has to actually exist.
+
 ### Who holds which worktree
 
 `domain/worktreeLease.ts` + `services/worktreeClaimService.ts`. Stages create worktrees

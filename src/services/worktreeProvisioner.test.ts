@@ -42,6 +42,40 @@ function fakeFs(
       if (failSet.has(normalise(from))) throw new Error("EACCES");
       copies.push([from, to]);
     },
+    readLink: () => undefined,
+    removeLink: () => {},
+    createDirectoryLink: () => {},
+  };
+}
+
+/**
+ * Filesystem for the link tests: `links` maps an existing link path to what it
+ * points at, `real` is paths that exist and are *not* links.
+ */
+function linkFs(
+  links: Record<string, string> = {},
+  real: string[] = [],
+): CopyFileSystem & { created: [string, string][]; removed: string[] } {
+  const normalise = (p: string) => path.resolve(p).toLowerCase();
+  const linkMap = new Map(Object.entries(links).map(([k, v]) => [normalise(k), v]));
+  const realSet = new Set(real.map(normalise));
+  const created: [string, string][] = [];
+  const removed: string[] = [];
+
+  return {
+    created,
+    removed,
+    exists: (t) => realSet.has(normalise(t)) || linkMap.has(normalise(t)),
+    isDirectory: () => true,
+    mkdirp: () => {},
+    copyFile: () => {},
+    copyDirectory: () => {},
+    readLink: (t) => linkMap.get(normalise(t)),
+    removeLink: (t) => {
+      removed.push(t);
+      linkMap.delete(normalise(t));
+    },
+    createDirectoryLink: (linkPath, targetPath) => created.push([linkPath, targetPath]),
   };
 }
 
@@ -180,5 +214,77 @@ describe("WorktreeProvisioner", () => {
     );
     expect(result.problems).toHaveLength(1);
     expect(warnings.join(" ")).toContain("escapes the worktree");
+  });
+});
+
+describe("linkSiblings", () => {
+  // Deliberately not under the worktree parent: that is where the link goes, and a
+  // link whose target is its own path is a loop the planner refuses.
+  const SIBLING = path.resolve("C:/siblings/QubeData");
+
+  it("creates a junction beside the worktree when nothing is there", () => {
+    const fs = linkFs({}, [SIBLING]);
+    const result = new WorktreeProvisioner(logger, fs).linkSiblings(
+      [SIBLING],
+      REPO,
+      WORKTREE,
+    );
+
+    expect(result.problems).toEqual([]);
+    expect(fs.created).toEqual([[path.join(path.dirname(WORKTREE), "QubeData"), SIBLING]]);
+  });
+
+  it("does nothing when the link already points at the target", () => {
+    const linkPath = path.join(path.dirname(WORKTREE), "QubeData");
+    const fs = linkFs({ [linkPath]: SIBLING }, [SIBLING]);
+    new WorktreeProvisioner(logger, fs).linkSiblings([SIBLING], REPO, WORKTREE);
+
+    expect(fs.created).toEqual([]);
+    expect(fs.removed).toEqual([]);
+  });
+
+  it("repoints a link that points somewhere else", () => {
+    const linkPath = path.join(path.dirname(WORKTREE), "QubeData");
+    const fs = linkFs({ [linkPath]: path.resolve("C:/old/QubeData") }, [SIBLING]);
+    new WorktreeProvisioner(logger, fs).linkSiblings([SIBLING], REPO, WORKTREE);
+
+    expect(fs.removed).toEqual([linkPath]);
+    expect(fs.created).toEqual([[linkPath, SIBLING]]);
+  });
+
+  // The rule the whole feature rests on. Links go in the directory where real
+  // repositories also live, so a mistyped name points at a working clone — and the
+  // difference between repointing a link and deleting a repository is one lstat.
+  it("never removes something that is not a link", () => {
+    const linkPath = path.join(path.dirname(WORKTREE), "QubeData");
+    const fs = linkFs({}, [SIBLING, linkPath]);
+    const result = new WorktreeProvisioner(logger, fs).linkSiblings(
+      [SIBLING],
+      REPO,
+      WORKTREE,
+    );
+
+    expect(fs.removed).toEqual([]);
+    expect(fs.created).toEqual([]);
+    expect(result.problems[0]).toContain("not a link");
+  });
+
+  it("reports a target that does not exist rather than linking to nothing", () => {
+    const fs = linkFs({}, []);
+    const result = new WorktreeProvisioner(logger, fs).linkSiblings(
+      [SIBLING],
+      REPO,
+      WORKTREE,
+    );
+
+    expect(fs.created).toEqual([]);
+    expect(result.missing).toHaveLength(1);
+  });
+
+  it("does nothing at all when nothing is configured", () => {
+    const fs = linkFs();
+    const result = new WorktreeProvisioner(logger, fs).linkSiblings([], REPO, WORKTREE);
+    expect(result).toEqual({ copied: [], missing: [], problems: [] });
+    expect(fs.created).toEqual([]);
   });
 });

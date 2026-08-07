@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { CopyEntry } from "../domain/worktreeCopyPlan";
+import { SiblingLinkEntry } from "../domain/siblingLinkPlan";
 import {
   AgentMode,
   ContextStrategy,
@@ -122,6 +123,10 @@ export class ExtensionConfiguration {
 
   stageMcpServers(scope?: vscode.Uri): string[] {
     return this.settings(scope).stageMcpServers();
+  }
+
+  linkSiblings(scope?: vscode.Uri): SiblingLinkEntry[] {
+    return this.settings(scope).linkSiblings();
   }
 
   stageTimeoutMinutes(scope?: vscode.Uri): number {

@@ -166,6 +166,17 @@ export async function createTaskWorkspaceCommand(
       created.value.worktreePath,
     );
 
+    // Sibling links go beside the worktree, not in it, and are shared by every task
+    // in this parent directory — so this is idempotent and usually does nothing. Run
+    // per task anyway: the first task in a fresh worktree directory is the one that
+    // needs them, and there is no other moment that reliably happens.
+    step("linking sibling repositories");
+    ctx.provisioner.linkSiblings(
+      ctx.configuration.linkSiblings(scope),
+      repositoryRoot,
+      created.value.worktreePath,
+    );
+
     // Attach the pipeline after the worktree exists, so a failed creation never
     // leaves a harnessed task with no worktree behind it.
     let routeFailed = false;

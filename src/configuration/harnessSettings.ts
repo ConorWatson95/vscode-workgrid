@@ -1,4 +1,5 @@
 import { CopyEntry } from "../domain/worktreeCopyPlan";
+import { SiblingLinkEntry } from "../domain/siblingLinkPlan";
 
 /**
  * Every setting the harness reads, with its default and its normalisation.
@@ -91,6 +92,20 @@ export class HarnessSettings {
    */
   copyIntoWorktree(): CopyEntry[] {
     const entries = this.reader.get<CopyEntry[]>("copyIntoWorktree", []);
+    return Array.isArray(entries) ? entries : [];
+  }
+
+  /**
+   * Sibling repositories to link beside the worktrees.
+   *
+   * A project referencing a sibling by relative path — `..\..\QubeData\Qube.csproj`
+   * — resolves correctly from a checkout next to that sibling and incorrectly from a
+   * worktree one level deeper. A `Directory.Build.props` can probe and fix *project*
+   * references; a `.sln` cannot, because solution files take no MSBuild properties.
+   * A link in the worktree parent restores the layout those checked-in paths assume.
+   */
+  linkSiblings(): SiblingLinkEntry[] {
+    const entries = this.reader.get<SiblingLinkEntry[]>("linkSiblings", []);
     return Array.isArray(entries) ? entries : [];
   }
 
