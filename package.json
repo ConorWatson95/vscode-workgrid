@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.68.1",
+  "version": "0.69.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -316,6 +316,18 @@
         "title": "Send Findings Back to an Earlier Stage…",
         "category": "Task Workspaces",
         "icon": "$(reply)"
+      },
+      {
+        "command": "taskWorkspaces.setExperimentArm",
+        "title": "Set Experiment Arm…",
+        "category": "Task Workspaces",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "taskWorkspaces.compareRuns",
+        "title": "Compare With Another Run…",
+        "category": "Task Workspaces",
+        "icon": "$(diff)"
       }
     ],
     "menus": {
@@ -576,6 +588,16 @@
           "command": "taskWorkspaces.showStageReport",
           "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
           "group": "harness@5"
+        },
+        {
+          "command": "taskWorkspaces.setExperimentArm",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
+          "group": "harness@6"
+        },
+        {
+          "command": "taskWorkspaces.compareRuns",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
+          "group": "harness@7"
         },
         {
           "command": "taskWorkspaces.verifyAllChecklist",

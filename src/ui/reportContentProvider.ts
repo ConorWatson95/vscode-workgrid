@@ -3,6 +3,11 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import { formatStageReport, formatTaskReport, withLiveActivity } from "./stageReport";
 import { LiveActivity } from "../services/pipelineRunner";
 import {
+  compareRuns,
+  describeArms,
+  formatRunComparison,
+} from "../domain/runComparison";
+import {
   decodeReportTarget,
   encodeReportTarget,
   reportFileName,
@@ -80,6 +85,22 @@ export class ReportContentProvider
     const task = await this.loadTask(target.taskId);
     if (!task) return "_This task no longer exists._";
 
+    if (target.compareWith) {
+      const other = await this.loadTask(target.compareWith);
+      if (!other) return "_The task this was being compared against no longer exists._";
+      if (!task.pipeline || !other.pipeline) {
+        // A task with no route has no stages and no usage, so a comparison would be
+        // a table of dashes that reads as "this run cost nothing".
+        return "_A comparison needs both tasks to have a route._";
+      }
+      const comparison = compareRuns(
+        { label: task.name, pipeline: task.pipeline },
+        { label: other.name, pipeline: other.pipeline },
+      );
+      const arms = describeArms(task.pipeline, other.pipeline);
+      return formatRunComparison(comparison) + (arms ? `\n\n---\n\n${arms}\n` : "\n");
+    }
+
     if (!target.stageId) return formatTaskReport(task.name, task.pipeline);
 
     const stage = task.pipeline?.stages.find((s) => s.id === target.stageId);
@@ -116,6 +137,20 @@ export class ReportContentProvider
       scheme: REPORT_SCHEME,
       path: `/${reportFileName(task.name, stage?.name)}`,
       query: encodeReportTarget({ taskId: task.id, stageId: stage?.id }),
+    });
+    this.issued.set(uri.toString(), uri);
+    return uri;
+  }
+
+  /** A stable URI for a two-run comparison. */
+  comparisonUriFor(
+    a: { id: string; name: string },
+    b: { id: string; name: string },
+  ): vscode.Uri {
+    const uri = vscode.Uri.from({
+      scheme: REPORT_SCHEME,
+      path: `/${reportFileName(`${a.name} vs ${b.name}`)}`,
+      query: encodeReportTarget({ taskId: a.id, compareWith: b.id }),
     });
     this.issued.set(uri.toString(), uri);
     return uri;

@@ -28,6 +28,7 @@ import {
   startSubtask,
 } from "../domain/pipelineEngine";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
+import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
 import { substitutePlaceholders } from "../domain/commandPlaceholders";
@@ -400,7 +401,15 @@ export class PipelineRunner {
       // Every later stage sees it: guidance given at a gate is about the work that
       // follows, so expiring it at the next stage boundary would waste it.
       guidance: (task.pipeline?.guidance ?? []).map((note) => note.text),
-      handoffs: stageId ? handoffsBefore(task.pipeline!, stageId) : undefined,
+      // Withheld on the experiment's other arm, and withheld *here* rather than at
+      // recording: the stages still write their handoff blocks and the pipeline still
+      // stores them, so the two arms stay comparable on what the stages did and the
+      // run is still readable afterwards. An experiment that destroys its own
+      // evidence measures one number and answers no question about why.
+      handoffs:
+        stageId && !handoffsSuppressed(task.pipeline)
+          ? handoffsBefore(task.pipeline!, stageId)
+          : undefined,
       // Named from the live pipeline rather than the route definition, so rule-added
       // review stages appear too — a stage told a route that omits them would raise
       // the very work those reviews exist to do.

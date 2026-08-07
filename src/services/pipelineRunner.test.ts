@@ -677,6 +677,25 @@ describe("the handoff carried between stages", () => {
     expect(later?.prompt).toContain("Kept the legacy column");
   });
 
+  it("withholds it from a later stage on the no-handoffs arm, but still records it", async () => {
+    // The other side of the measurement. Suppressed at delivery rather than at
+    // recording, so both arms stay comparable on what the stages actually did and the
+    // run is still readable — an experiment that destroys its own evidence measures
+    // one number and answers no question about why.
+    const sessions = fakeSessions({ "build:": { text: REPLY } });
+    const { repo, runner } = makeRunner(sessions);
+    const task = handoffTask();
+    task.pipeline!.experiment = { id: "handoffs", arm: "no-handoffs", at: "t" };
+    await repo.save(task);
+    await runner.advance((await repo.get("t1"))!);
+
+    const later = sessions.calls.find((c) => c.label.startsWith("behaviour:"));
+    expect(later?.prompt).not.toContain("Kept the legacy column");
+    expect((await repo.get("t1"))!.pipeline!.handoffs?.[0]?.text).toContain(
+      "Kept the legacy column",
+    );
+  });
+
   it("falls back to the whole reply when the stage wrote no block", async () => {
     // The block is asked for in a prompt, so it can be ignored — and a stage that
     // ignores it must still contribute something rather than silently nothing.

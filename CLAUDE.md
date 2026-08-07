@@ -600,8 +600,36 @@ Three things make it honest rather than decorative:
   than "0 of 4 are self-reported" — a reassurance printed on every report is read as
   decoration and then not read at all.
 
-Remaining gap: the handoff-versus-rediscovery question is measurable but **not yet
-measured**: the next real step is a route run both ways, compared on the recorded cost.
+### Running the handoff-versus-rediscovery experiment
+
+The question CLAUDE.md described for weeks as "measurable but not yet measured". The
+numbers existed; two things did not — a way to run the *other* arm, and any durable
+record of which arm a run had been.
+
+- `domain/pipelineExperiment.ts` + `TaskPipeline.experiment` — the arm, persisted on
+  the pipeline. **Not a setting**: a setting is read when a stage runs, so flipping it
+  mid-route yields a run that is half of each, which is the one outcome that is neither
+  arm and cannot be spotted in the numbers afterwards. The command refuses to change an
+  arm on a run that has started.
+- **Suppressed at delivery, not at recording.** On `no-handoffs` the stages still write
+  their `HANDOFF:` blocks and the pipeline still stores them; `contextFor` simply does
+  not pass them on. The arms stay comparable on what the stages did, and the run is
+  still readable — an experiment that destroys its own evidence measures one number and
+  answers no question about why.
+- `domain/runComparison.ts` — two runs side by side. Most of the module is `warnings`,
+  because the failure mode is not a wrong number but a right number about two runs that
+  were not comparable: different routes, both runs on the same arm, a substituted model,
+  unmeasured subtasks, a rule-added stage in only one, or one run having *proved* less
+  than the other. Rendered **above** the totals: a comparison is read for its bottom
+  line, so a caveat printed underneath one is a caveat nobody applied.
+- **Fresh input is the number at issue** (`input + cacheCreation`), reported separately
+  from cache reads. A stage that rediscovers reads files again, and that lands in fresh
+  input; a single token total hides the entire effect. Interventions sit in the same
+  table as cost, because a run that is cheaper and asks twice as many questions has
+  moved the wrong number.
+
+Still unmeasured until a route is actually run both ways — but that is now an
+experiment rather than an anecdote.
 
 ## Context discipline
 

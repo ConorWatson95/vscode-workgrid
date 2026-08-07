@@ -13,6 +13,7 @@ import {
   syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
+import { HANDOFF_EXPERIMENT } from "../domain/pipelineExperiment";
 import {
   formatFindings,
   parseReviewFindings,
@@ -122,6 +123,8 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
+    register("taskWorkspaces.setExperimentArm", (arg) => setExperimentArmCommand(ctx, arg)),
+    register("taskWorkspaces.compareRuns", (arg) => compareRunsCommand(ctx, arg)),
     register("taskWorkspaces.sendBackToStage", (arg) => sendBackToStageCommand(ctx, arg)),
     register("taskWorkspaces.answerQuestions", (arg) => openQuestionsCommand(ctx, arg)),
     register("taskWorkspaces.grantDenial", (arg) => grantDenialCommand(ctx, arg)),
@@ -641,6 +644,156 @@ async function showStageReportCommand(
   } catch {
     // The built-in markdown extension can be disabled. The document is still
     // read-only, so the fallback loses the rendering and nothing else.
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+}
+
+/**
+ * Puts a task on one side of a comparison, or takes it off.
+ *
+ * Set before the route runs, and refused once it has started: an arm changed
+ * halfway produces a run that is neither side, and the totals still look like a
+ * result. That is the one failure this whole facility cannot survive, because
+ * nothing about the numbers afterwards shows it happened.
+ */
+async function setExperimentArmCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const task = await resolveTask(ctx, arg);
+  if (!task) return;
+  if (!task.pipeline) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" has no route, so there is nothing to measure.`,
+    );
+    return;
+  }
+
+  const started = task.pipeline.stages.some(
+    (stage) => stage.subtasks.some((subtask) => subtask.startedAt) || stage.startedAt,
+  );
+  if (started && task.pipeline.experiment) {
+    void vscode.window.showWarningMessage(
+      `"${task.name}" is already running on the \`${task.pipeline.experiment.arm}\` arm. ` +
+        "Changing it now would produce a run that is neither side of the comparison.",
+    );
+    return;
+  }
+  if (started) {
+    const proceed = await vscode.window.showWarningMessage(
+      `"${task.name}" has already run stages with handoffs behaving normally.`,
+      { modal: true, detail: "Setting an arm now measures a route that was half of each." },
+      "Set Anyway",
+    );
+    if (proceed !== "Set Anyway") return;
+  }
+
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Control",
+        detail: "Handoffs carried forward, exactly as the harness normally behaves.",
+        arm: "control" as const,
+      },
+      {
+        label: "No handoffs",
+        detail:
+          "Stages still write their handoff blocks and the pipeline still stores them, " +
+          "but later stages are not given them — so each rediscovers what it needs.",
+        arm: "no-handoffs" as const,
+      },
+      {
+        label: "None — not part of an experiment",
+        detail: "Clears the arm. The run behaves normally and is excluded from comparisons.",
+        arm: undefined,
+      },
+    ],
+    {
+      title: `Experiment arm for "${task.name}"`,
+      placeHolder: "Which side of the handoff comparison is this run?",
+    },
+  );
+  if (!choice) return;
+
+  const note = choice.arm
+    ? await vscode.window.showInputBox({
+        title: "Anything worth recording about the conditions?",
+        placeHolder: "Optional — e.g. 'same ticket as NMGB-2799, rerun from scratch'",
+      })
+    : undefined;
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: {
+      ...task.pipeline,
+      experiment: choice.arm
+        ? {
+            id: HANDOFF_EXPERIMENT,
+            arm: choice.arm,
+            at: new Date().toISOString(),
+            ...(note?.trim() ? { note: note.trim() } : {}),
+          }
+        : undefined,
+    },
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    choice.arm
+      ? `"${task.name}" is on the \`${choice.arm}\` arm.`
+      : `"${task.name}" is no longer part of an experiment.`,
+  );
+}
+
+/**
+ * Opens two runs side by side.
+ *
+ * The measurement the harness has been able to describe but not perform: does
+ * carrying a stage's conclusion forward cost less than the next stage rediscovering
+ * it? Most of what the report does is refuse to mislead — see `runComparison.ts`.
+ */
+async function compareRunsCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  const first = await resolveTask(ctx, arg);
+  if (!first) return;
+  if (!first.pipeline) {
+    void vscode.window.showInformationMessage(
+      `"${first.name}" has no route, so there is nothing to compare.`,
+    );
+    return;
+  }
+
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  const others = (await ctx.repository.getByRepository(repositoryRoot ?? "")).filter(
+    (task) => task.id !== first.id && task.pipeline,
+  );
+  if (others.length === 0) {
+    void vscode.window.showInformationMessage(
+      "There is no other task with a route to compare this one against.",
+    );
+    return;
+  }
+
+  const choice = await vscode.window.showQuickPick(
+    others.map((task) => ({
+      label: task.name,
+      // The arm shown in the picker, not only in the report: picking two runs from
+      // the same arm is the mistake that produces a number meaning nothing, and it
+      // is much cheaper to prevent here than to explain afterwards.
+      description: task.pipeline?.experiment
+        ? `arm: ${task.pipeline.experiment.arm}`
+        : "no experiment arm",
+      detail: task.pipeline?.routeLabel ?? task.pipeline?.routeId,
+      task,
+    })),
+    {
+      title: `Compare "${first.name}" against…`,
+      placeHolder: "The other run",
+    },
+  );
+  if (!choice) return;
+
+  const uri = ctx.reportProvider.comparisonUriFor(first, choice.task);
+  const document = await vscode.workspace.openTextDocument(uri);
+  try {
+    await vscode.commands.executeCommand("markdown.showPreview", uri);
+  } catch {
     await vscode.window.showTextDocument(document, { preview: true });
   }
 }

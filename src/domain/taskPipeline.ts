@@ -9,6 +9,7 @@
 
 import { StageKind } from "./taskRoute";
 import { InterventionRecord } from "./interventions";
+import { PipelineExperiment } from "./pipelineExperiment";
 
 export type TaskStageStatus =
   | "pending"
@@ -462,6 +463,15 @@ export interface TaskPipeline {
    * the number that matters is their sum per task. See `domain/interventions.ts`.
    */
   interventions?: InterventionRecord[];
+  /**
+   * Which side of a comparison this run is on; see `domain/pipelineExperiment.ts`.
+   *
+   * Persisted on the pipeline rather than held as a setting because a comparison is
+   * only worth anything if each run carries a durable record of the conditions it
+   * ran under. Two finished tasks with different totals say nothing at all unless
+   * something says which one had handoffs withheld.
+   */
+  experiment?: PipelineExperiment;
 }
 
 /** Refusals from one stage, waiting on a decision. */

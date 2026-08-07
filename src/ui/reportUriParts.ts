@@ -11,11 +11,20 @@ export interface ReportTarget {
   taskId: string;
   /** Absent for a whole-task report. */
   stageId?: string;
+  /**
+   * A second task to compare this one against, for a two-run comparison.
+   *
+   * Carried in the same target rather than given its own scheme so a comparison is
+   * a read-only virtual document like every other report — and so it re-renders from
+   * the same refresh signal, which matters while one of the two runs is still going.
+   */
+  compareWith?: string;
 }
 
 export function encodeReportTarget(target: ReportTarget): string {
   const parts = [`task=${encodeURIComponent(target.taskId)}`];
   if (target.stageId) parts.push(`stage=${encodeURIComponent(target.stageId)}`);
+  if (target.compareWith) parts.push(`vs=${encodeURIComponent(target.compareWith)}`);
   return parts.join("&");
 }
 
@@ -30,7 +39,12 @@ export function decodeReportTarget(query: string): ReportTarget | undefined {
   const taskId = fields.get("task");
   if (!taskId) return undefined;
   const stageId = fields.get("stage");
-  return stageId ? { taskId, stageId } : { taskId };
+  const compareWith = fields.get("vs");
+  return {
+    taskId,
+    ...(stageId ? { stageId } : {}),
+    ...(compareWith ? { compareWith } : {}),
+  };
 }
 
 /**

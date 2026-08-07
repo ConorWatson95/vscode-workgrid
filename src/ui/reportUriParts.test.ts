@@ -17,6 +17,11 @@ describe("report target round-trip", () => {
     expect(decodeReportTarget(encodeReportTarget(target))).toEqual(target);
   });
 
+  it("carries a second task for a comparison", () => {
+    const target = { taskId: "t1", compareWith: "t2" };
+    expect(decodeReportTarget(encodeReportTarget(target))).toEqual(target);
+  });
+
   it("rejects a query with no task", () => {
     expect(decodeReportTarget("stage=s1")).toBeUndefined();
     expect(decodeReportTarget("")).toBeUndefined();
