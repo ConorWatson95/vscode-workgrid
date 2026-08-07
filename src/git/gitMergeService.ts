@@ -75,6 +75,86 @@ export class GitMergeService {
     return ok(outcome);
   }
 
+  /**
+   * Stages everything, including untracked files, and commits it.
+   *
+   * Exists because the merge command refused a dirty worktree and then offered no way
+   * out: there is no commit UI in the extension, so "commit or stash them first" meant
+   * leaving for a terminal, and the refusal read as the feature being broken.
+   *
+   * `add -A` rather than `add -u`: the case that prompted this was a stage's untracked
+   * output, and a commit that silently left it behind would be worse than refusing —
+   * the merge would proceed and the work would still be uncommitted.
+   */
+  async commitAll(
+    worktreePath: string,
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void, WorktreeError>> {
+    if (!message.trim()) {
+      return err({ kind: "validation", message: "A commit message is required." });
+    }
+
+    const staged = await this.git.run(["add", "-A"], { cwd: worktreePath, signal });
+    if (!staged.ok) return err({ kind: "git", error: staged.error });
+
+    const committed = await this.git.run(["commit", "-m", message.trim()], {
+      cwd: worktreePath,
+      signal,
+    });
+    if (!committed.ok) return err({ kind: "git", error: committed.error });
+    return ok(undefined);
+  }
+
+  /**
+   * Sets uncommitted work aside, including untracked files.
+   *
+   * `-u` for the same reason `commitAll` uses `add -A`: a stash that leaves untracked
+   * files in the tree has not made the tree clean, so the merge it was meant to unblock
+   * is still blocked — and the user has been told their work was safely put away.
+   */
+  async stash(
+    worktreePath: string,
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void, WorktreeError>> {
+    const result = await this.git.run(["stash", "push", "-u", "-m", message], {
+      cwd: worktreePath,
+      signal,
+    });
+    if (!result.ok) return err({ kind: "git", error: result.error });
+    return ok(undefined);
+  }
+
+  /**
+   * Restores the most recent stash.
+   *
+   * A failure here is the one outcome of the whole flow that leaves work somewhere the
+   * user did not put it, so the error says where to find it rather than only that it
+   * went wrong. The stash still exists after a failed pop — that is what makes this
+   * recoverable at all.
+   */
+  async stashPop(
+    worktreePath: string,
+    signal?: AbortSignal,
+  ): Promise<Result<void, WorktreeError>> {
+    const result = await this.git.run(["stash", "pop"], {
+      cwd: worktreePath,
+      signal,
+      failureIsAnswer: true,
+    });
+    if (!result.ok) {
+      return err({
+        kind: "validation",
+        message:
+          `Your work is still safe in the stash, but it could not be restored ` +
+          `automatically (${result.error.stderr.trim() || result.error.message.trim()}). ` +
+          `Run "git stash pop" in ${worktreePath} and resolve it by hand.`,
+      });
+    }
+    return ok(undefined);
+  }
+
   private async abort(
     worktreePath: string,
     signal?: AbortSignal,

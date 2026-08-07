@@ -33,9 +33,35 @@ export async function mergeIntoTaskCommand(
   const branch = await chooseBranch(ctx, task);
   if (!branch) return;
 
+  // After the branch is chosen, not before. Committing or stashing is a real change to
+  // the worktree, and doing it in front of a picker the user then escapes would leave
+  // them having paid for a merge that never happened.
+  const live = await ctx.service.getLiveState(task);
+  const settlement = live.isDirty
+    ? await settleChanges(ctx, task, live.changedFileCount)
+    : "proceed";
+  if (settlement === "cancelled") return;
+
   const outcome = await withStatus(`Merging "${branch}" into "${task.name}"`, () =>
     ctx.merges.mergeInto(task.worktreePath, branch),
   );
+
+  // Restored whatever the merge did, including when it failed or conflicted. A stash
+  // the user was told about and then never got back is worse than any merge outcome,
+  // and a conflicted merge has already been aborted, so the tree is ready for it.
+  if (settlement === "stashed") {
+    const restored = await withStatus(`Restoring stashed changes in "${task.name}"`, () =>
+      ctx.merges.stashPop(task.worktreePath),
+    );
+    if (!restored.ok) {
+      const detail =
+        restored.error.kind === "git"
+          ? restored.error.error.stderr.trim() || restored.error.error.message
+          : restored.error.message;
+      void vscode.window.showWarningMessage(detail);
+      ctx.logger.warn(`Harness [${task.name}] stash could not be restored: ${detail}`);
+    }
+  }
 
   if (!outcome.ok) {
     const detail =
@@ -48,7 +74,7 @@ export async function mergeIntoTaskCommand(
   }
 
   ctx.tree.refresh();
-  report(ctx, task, branch, outcome.value);
+  report(ctx, task, branch, outcome.value, settlement);
 }
 
 /**
@@ -92,17 +118,105 @@ async function firstBlocker(
     return `"${task.name}" has no worktree on disk, so there is nothing to merge into.`;
   }
 
-  // A merge over uncommitted work cannot be cleanly undone: `--abort` restores the
-  // merge's changes, not the ones that were never committed. git would usually
-  // refuse anyway, but refusing here says why in terms of the task.
-  if (live.isDirty) {
-    return (
-      `"${task.name}" has ${live.changedFileCount} uncommitted change(s). ` +
-      "Commit or stash them first — a merge over them could not be undone."
-    );
-  }
+  // Uncommitted work is deliberately NOT a blocker any more — see `settleChanges`.
+  // A refusal telling the user to commit, in a UI with no way to commit, is a dead
+  // end: the only route forward was a terminal, and from inside the extension it read
+  // as the merge being broken.
 
   return undefined;
+}
+
+/** What to do about uncommitted work before merging. */
+type Settlement = "committed" | "stashed" | "proceed" | "cancelled";
+
+/**
+ * Clears the way for a merge, or gets permission to merge over the work.
+ *
+ * A merge over uncommitted work cannot be cleanly undone: `git merge --abort`
+ * restores the merge's changes, not the ones that were never committed. That is why
+ * this used to be a refusal. But the refusal said "commit or stash them first" in a
+ * UI that can do neither, so it was advice to leave the extension — and the three
+ * things a user actually wants are all safe to offer here.
+ *
+ * "Merge anyway" is genuinely available rather than a trapdoor: git itself refuses a
+ * merge that would overwrite local changes, and that refusal already arrives as the
+ * `blocked` outcome with the paths named. What it permits is the common, harmless
+ * case — local edits to files the merge does not touch.
+ */
+async function settleChanges(
+  ctx: CommandContext,
+  task: TaskWorkspace,
+  changedFileCount: number,
+): Promise<Settlement> {
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Commit them, then merge",
+        detail: "Commits everything, including untracked files, then merges.",
+        action: "commit" as const,
+      },
+      {
+        label: "Stash them, merge, then restore",
+        detail:
+          "Keeps the work uncommitted. If restoring conflicts with what the merge " +
+          "brought in, the work stays in the stash and you resolve it by hand.",
+        action: "stash" as const,
+      },
+      {
+        label: "Merge anyway",
+        detail:
+          "Leaves the changes where they are. git refuses if the merge would " +
+          "overwrite any of them, so this only proceeds when they are untouched.",
+        action: "proceed" as const,
+      },
+    ],
+    {
+      title: `"${task.name}" has ${changedFileCount} uncommitted change(s)`,
+      placeHolder: "What should happen to them?",
+      ignoreFocusOut: true,
+    },
+  );
+  if (!choice) return "cancelled";
+
+  if (choice.action === "proceed") return "proceed";
+
+  if (choice.action === "commit") {
+    const message = await vscode.window.showInputBox({
+      title: `Commit ${changedFileCount} change(s) in "${task.name}"`,
+      prompt: "Commit message",
+      value: `WIP: ${task.name}`,
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim().length === 0 ? "A commit message is required." : undefined,
+    });
+    if (!message) return "cancelled";
+
+    const result = await withStatus(`Committing in "${task.name}"`, () =>
+      ctx.merges.commitAll(task.worktreePath, message),
+    );
+    if (!result.ok) {
+      const detail =
+        result.error.kind === "git"
+          ? result.error.error.stderr.trim() || result.error.error.message
+          : result.error.message;
+      void vscode.window.showErrorMessage(`Could not commit: ${detail}`);
+      return "cancelled";
+    }
+    return "committed";
+  }
+
+  const result = await withStatus(`Stashing changes in "${task.name}"`, () =>
+    ctx.merges.stash(task.worktreePath, `task-workspaces: before merging into ${task.name}`),
+  );
+  if (!result.ok) {
+    const detail =
+      result.error.kind === "git"
+        ? result.error.error.stderr.trim() || result.error.error.message
+        : result.error.message;
+    void vscode.window.showErrorMessage(`Could not stash: ${detail}`);
+    return "cancelled";
+  }
+  return "stashed";
 }
 
 /**
@@ -166,7 +280,18 @@ function report(
   task: TaskWorkspace,
   branch: string,
   outcome: MergeOutcome,
+  settlement: Settlement,
 ): void {
+  // Said out loud on success. A commit the user asked for is still a commit they did
+  // not write themselves, and finding it later with no memory of it is how a "WIP"
+  // commit ends up pushed to a shared branch.
+  const settled =
+    settlement === "committed"
+      ? " Your changes were committed first."
+      : settlement === "stashed"
+        ? " Your stashed changes were restored."
+        : "";
+
   switch (outcome.kind) {
     case "up-to-date":
       ctx.logger.info(`Harness [${task.name}] already contains "${branch}".`);
@@ -181,7 +306,7 @@ function report(
           (outcome.fastForward ? " (fast-forward)." : "."),
       );
       void vscode.window.showInformationMessage(
-        `Merged "${branch}" into "${task.name}". Re-run the stage that failed.`,
+        `Merged "${branch}" into "${task.name}".${settled} Re-run the stage that failed.`,
       );
       return;
 
