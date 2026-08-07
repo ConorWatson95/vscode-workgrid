@@ -125,6 +125,39 @@ describe("approvalAdvice", () => {
     expect(approvalAdvice(pipe([implement, review]), review).action).toBe("sendBack");
   });
 
+  it("counts the work this stage declined, so it can be settled here", () => {
+    // The route only holds on deferrals in front of a stage that ships, which is
+    // right — but that hold used to be the only place they could be settled, so a
+    // real run accumulated declines from 08:40 onward and asked twelve questions at
+    // once immediately before a DEV push, about stages approved hours earlier.
+    const p = pipe([implement, stage({ id: "review" })]);
+    p.deferrals = [
+      { id: "d1", text: "the export structure does not exist on live", raisedByStage: "sc-change", raisedByStageName: "Make the change", at: "t" },
+      { id: "d2", text: "settled already", raisedByStage: "sc-change", raisedByStageName: "Make the change", at: "t", resolved: true, resolution: "publish does it" },
+      { id: "d3", text: "someone else's", raisedByStage: "review", raisedByStageName: "Review", at: "t" },
+    ] as TaskPipeline["deferrals"];
+
+    // Only this stage's, and only the unsettled ones.
+    expect(approvalAdvice(p, implement).declined).toBe(1);
+  });
+
+  it("names the declined work in the advice a reader sees", () => {
+    const p = pipe([implement]);
+    p.deferrals = [
+      { id: "d1", text: "no deploy folder", raisedByStage: "sc-change", raisedByStageName: "Make the change", at: "t" },
+    ] as TaskPipeline["deferrals"];
+
+    expect(formatApprovalAdvice(approvalAdvice(p, implement))).toMatch(
+      /1 item\(s\) this stage declined/,
+    );
+  });
+
+  it("says nothing about declined work when there is none", () => {
+    expect(formatApprovalAdvice(approvalAdvice(pipe([implement]), implement))).not.toMatch(
+      /declined/,
+    );
+  });
+
   it("respects a stated pass over blocking-looking prose", () => {
     // The reviewer read its own report; the parser only guessed at it.
     const review = withReply("### Critical: pre-existing, not introduced here", {

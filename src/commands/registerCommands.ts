@@ -1065,9 +1065,45 @@ async function approveStageCommand(
     return;
   }
 
+  let approved = result.value;
+
+  // Settled here, at the gate of the stage that raised them, rather than only at the
+  // deployment door. The hold stays where it is — in front of a stage that ships,
+  // for the reason it was put there — but the *settling* was only ever offered at
+  // that hold, so a route accumulated declines from 08:40 onwards and presented
+  // twelve of them at once, hours later, immediately before a DEV push. Every one of
+  // them had passed through a gate where the operator was already standing, had just
+  // read the stage's report, and knew the answer.
+  //
+  // Only this stage's own, and only after the approval has been decided: the
+  // question "who owns this?" is answerable because the report explaining it is the
+  // thing just read.
+  const declined = outstandingDeferrals(approved).filter(
+    (item) => item.raisedByStage === arg.stage.id,
+  );
+  for (const item of declined) {
+    const resolution = await vscode.window.showInputBox({
+      title: `"${arg.stage.name}" declined this as belonging elsewhere`,
+      prompt: item.text,
+      placeHolder:
+        "Who owns this, or why it needs nobody — e.g. the promote stage does it; live-only by design",
+      ignoreFocusOut: true,
+    });
+    // Escape leaves it outstanding rather than abandoning the approval. The approval
+    // is already decided by this point, and losing it because someone skipped an
+    // optional question would make the gate worse than it was.
+    if (resolution === undefined) break;
+    if (!resolution.trim()) continue;
+    const settled = resolveDeferral(approved, item.id, {
+      resolution: resolution.trim(),
+      at: new Date().toISOString(),
+    });
+    if (settled.ok) approved = settled.value;
+  }
+
   await ctx.repository.save({
     ...task,
-    pipeline: result.value,
+    pipeline: approved,
     updatedAt: new Date().toISOString(),
   });
   ctx.tree.refresh();

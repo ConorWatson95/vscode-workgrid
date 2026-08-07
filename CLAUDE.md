@@ -419,6 +419,18 @@ noticed it was missing.
   unsettled, returning `deferredWork`. Only a stage that ships: most deferrals are
   correct and harmless, and holding every stage on one is how a safety net gets
   switched off.
+- **Settled at the raising stage's own approval gate**, as well as at the hold. The
+  hold stays in front of a shipping stage — that part was right — but for a while
+  that hold was also the only *place* to settle, so a real run accumulated declines
+  from 08:40 onward and asked twelve questions at once immediately before a DEV push,
+  about stages read and approved hours earlier. Every one had passed a gate where the
+  operator was already standing with the report open. `approveStage` now asks for each
+  of that stage's own outstanding items; escape leaves one outstanding rather than
+  abandoning the approval, which is already decided by then.
+- **A stage answering "nothing" is not a deferral.** `DEFERRED: none — this is Nissan
+  GB only…` was recorded verbatim, became an outstanding item, and held a deployment on
+  the absence of work. `parseDeferrals` drops it, narrowly: "none of the migrations
+  carry a USE statement" is a real decline and still counts.
 - Settling one **requires a sentence**, not a tick. What was missing when every
   stage declined the work was the knowledge of who owns it, so silence would
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as

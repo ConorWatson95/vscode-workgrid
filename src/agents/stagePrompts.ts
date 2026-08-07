@@ -518,9 +518,32 @@ export function parseDeferrals(reply: string): string[] {
   const items: string[] = [];
   for (const match of reply.matchAll(/^[ \t]*DEFERRED:[ \t]*(.+)$/gim)) {
     const text = match[1].trim();
-    if (text) items.push(text);
+    if (text && !isNothingDeferred(text)) items.push(text);
   }
   return items;
+}
+
+/**
+ * Whether a `DEFERRED:` line is a stage saying it has nothing to defer.
+ *
+ * A stage asked to report declined work sometimes answers the question rather than
+ * skipping the line — `DEFERRED: none — this is Nissan GB only, so no
+ * second-manufacturer checks are needed`. Recorded as written, that became an
+ * outstanding item, and an outstanding item holds the route in front of the next
+ * deployment. So a stage saying "nothing" stopped a deploy on the absence of work.
+ *
+ * Matched on the opening word only, and only when the line either is that word or
+ * continues with an explanation. A genuine deferral never opens "none" — and one
+ * that mentions "n/a" later in a sentence is untouched, because the anchor is the
+ * start of the text.
+ */
+function isNothingDeferred(text: string): boolean {
+  return /^(none|nothing|n\/?a|not applicable|no deferrals?)\b[\s.,:;—–-]*/i.test(text)
+    ? // Guarded against a real item that happens to open with the word, e.g.
+      // "none of the migrations carry a USE statement" — that continues into a
+      // subject, where a nothing-answer continues into a justification or stops.
+      !/^(none|nothing)\s+(of|for|in|on)\b/i.test(text)
+    : false;
 }
 
 /**

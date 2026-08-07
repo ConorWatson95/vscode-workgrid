@@ -606,6 +606,29 @@ describe("declining work that belongs to another stage", () => {
     expect(parseDeferrals("I deferred to the existing convention here.")).toEqual([]);
   });
 
+  it("ignores a stage answering the question with nothing", () => {
+    // Seen in the wild, from a runtime-QA stage: `DEFERRED: none — this is Nissan GB
+    // only, so no second-manufacturer checks are needed`. Recorded as written it
+    // became an outstanding item, and an outstanding item holds the route in front of
+    // the next deployment — so a stage saying "nothing" stopped a DEV push.
+    expect(
+      parseDeferrals(
+        "DEFERRED: none — this is Nissan GB only with no other consumer of the proc",
+      ),
+    ).toEqual([]);
+    expect(parseDeferrals("DEFERRED: nothing")).toEqual([]);
+    expect(parseDeferrals("DEFERRED: N/A")).toEqual([]);
+    expect(parseDeferrals("DEFERRED: no deferrals.")).toEqual([]);
+  });
+
+  it("still reads a real item that happens to open with 'none of'", () => {
+    // The guard has to be narrow: "none of the migrations carry a USE statement" is a
+    // genuine decline, and dropping it would be the same silent loss in reverse.
+    expect(
+      parseDeferrals("DEFERRED: none of the migrations carry an explicit USE statement"),
+    ).toEqual(["none of the migrations carry an explicit USE statement"]);
+  });
+
   it("strips the lines from what a reader sees", () => {
     const stripped = stripDeferrals("Done.\nDEFERRED: something else\nAll good.");
     expect(stripped).not.toContain("DEFERRED:");

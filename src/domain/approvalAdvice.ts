@@ -1,3 +1,4 @@
+import { outstandingDeferrals } from "./pipelineEngine";
 import { parseReviewFindings, summariseFindings } from "./reviewFindings";
 import { sendBackTargets } from "./stageRefresh";
 import { StageEvidence, stageEvidence } from "./stageEvidence";
@@ -55,6 +56,16 @@ export interface ApprovalAdvice {
    * "finished and reported nothing outstanding".
    */
   evidence: StageEvidence;
+  /**
+   * Work this stage declined, still without an owner.
+   *
+   * Surfaced at this gate because this is where it can be settled cheaply. The route
+   * only *holds* on deferrals in front of a stage that ships, which is right — but
+   * for a long time that hold was also the only place they could be settled, so they
+   * accumulated silently and arrived as a dozen questions at the deployment door,
+   * hours after the stage that raised them had been read and approved.
+   */
+  declined: number;
 }
 
 export function approvalAdvice(
@@ -64,13 +75,19 @@ export function approvalAdvice(
   // Added around the judgement rather than inside it: what backs a stage does not
   // change which button to suggest — a blocking review is blocking whether or not a
   // build ran — it changes how much weight to put on the answer.
-  return { ...verdictAdvice(pipeline, stage), evidence: stageEvidence(stage) };
+  return {
+    ...verdictAdvice(pipeline, stage),
+    evidence: stageEvidence(stage),
+    declined: outstandingDeferrals(pipeline).filter(
+      (item) => item.raisedByStage === stage.id,
+    ).length,
+  };
 }
 
 function verdictAdvice(
   pipeline: TaskPipeline,
   stage: TaskStage,
-): Omit<ApprovalAdvice, "evidence"> {
+): Omit<ApprovalAdvice, "evidence" | "declined"> {
   const findings = parseReviewFindings(
     stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
   );
@@ -194,6 +211,17 @@ export function formatApprovalAdvice(advice: ApprovalAdvice): string {
     lines.push(
       "",
       `⚠ **Self-reported.** ${advice.evidence.summary}`,
+    );
+  }
+  // Said at this gate rather than saved for the deployment door. Answering costs a
+  // sentence each while the report is still in front of you; left alone they arrive
+  // together, much later, about stages nobody remembers.
+  if (advice.declined > 0) {
+    lines.push(
+      "",
+      `**${advice.declined} item(s) this stage declined** are still without an owner. ` +
+        "Approving will ask who owns each — a sentence apiece, and the route will " +
+        "otherwise stop for them in front of the next stage that ships.",
     );
   }
   return lines.join("\n");
