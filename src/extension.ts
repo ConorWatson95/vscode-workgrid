@@ -34,6 +34,7 @@ import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
+import { subagentLimitEnv } from "./domain/subagentLimits";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import { filterMcpConfig } from "./agents/mcpConfigFilter";
 import * as fs from "node:fs";
@@ -566,6 +567,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       contextStrategy: configuration.contextStrategy(repositoryUri),
       model: configuration.model(repositoryUri),
       taskName: task.name,
+      // Stage sessions only. A chat session the user is driving keeps the CLI's
+      // own defaults: this cap protects concurrent tasks from each other, and a
+      // hand-driven session has no concurrent tasks to protect.
+      env: subagentLimitEnv({
+        concurrency: configuration.stageSubagentConcurrency(repositoryUri),
+        depth: configuration.stageSubagentDepth(repositoryUri),
+      }),
     }),
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,

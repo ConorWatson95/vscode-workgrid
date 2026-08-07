@@ -25,6 +25,15 @@ export interface UsageTotals {
    * is the part a change to the harness can actually move.
    */
   elapsedMs: number;
+  /**
+   * Distinct models that actually ran, as the CLI resolved them.
+   *
+   * Recorded because a stage's requested model is not proof of what executed: an
+   * organisational policy that disallows one substitutes the parent's without
+   * failing. Two entries here on a stage that asked for one is the signal that a
+   * cost comparison is measuring a fallback rather than the choice being tested.
+   */
+  models: string[];
   /** Subtasks that ran and reported cost or tokens. */
   measured: number;
   /**
@@ -47,7 +56,14 @@ const NO_TOKENS: SessionTokenTotals = {
 };
 
 function emptyTotals(): UsageTotals {
-  return { costUsd: 0, tokens: { ...NO_TOKENS }, elapsedMs: 0, measured: 0, unmeasured: 0 };
+  return {
+    costUsd: 0,
+    tokens: { ...NO_TOKENS },
+    elapsedMs: 0,
+    measured: 0,
+    unmeasured: 0,
+    models: [],
+  };
 }
 
 /**
@@ -77,9 +93,14 @@ function elapsedOf(subtask: Subtask): number {
 
 export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
   const totals = emptyTotals();
+  const models = new Set<string>();
   for (const subtask of subtasks) {
     if (!hasRun(subtask)) continue;
     totals.elapsedMs += elapsedOf(subtask);
+    // What ran, not what was asked for. A model an org policy disallows falls
+    // back silently, and two runs compared on the requested name would then be
+    // two runs of the same model reported as a comparison between two.
+    if (subtask.activity?.actualModel) models.add(subtask.activity.actualModel);
 
     const activity = subtask.activity;
     const cost = activity?.costUsd;
@@ -97,6 +118,7 @@ export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
       totals.tokens.cacheCreation += tokens.cacheCreation;
     }
   }
+  totals.models = [...models].sort();
   return totals;
 }
 

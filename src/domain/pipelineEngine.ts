@@ -15,6 +15,11 @@ import {
 import { RouteDefinition, RouteStageDefinition } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
 import {
+  InterventionKind,
+  InterventionRecord,
+  appendIntervention,
+} from "./interventions";
+import {
   ReviewRule,
   RuleMatch,
   evaluateRules,
@@ -72,6 +77,26 @@ export type NextAction =
   /** No stages left. */
   | { kind: "done" };
 
+/**
+ * Adds one intervention to the pipeline, as a spreadable fragment.
+ *
+ * Returns nothing when the caller gave no timestamp, so a call site that has not
+ * been given a clock records nothing rather than an event dated `undefined`. The
+ * count is a measurement, and a measurement that invents its own data is worse
+ * than one that admits a gap — but the gap is per call site and visible in the
+ * code, not per event and invisible in the data.
+ */
+function counted(
+  pipeline: TaskPipeline,
+  record: { kind: InterventionKind; stageId?: string },
+  at: string | undefined,
+): { interventions?: InterventionRecord[] } {
+  if (!at) return {};
+  return {
+    interventions: appendIntervention(pipeline.interventions, { ...record, at }),
+  };
+}
+
 /** Instantiates a route into fresh pipeline state. */
 export function createPipeline(route: RouteDefinition): TaskPipeline {
   return {
@@ -115,6 +140,9 @@ function createStage(
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     ...(definition.verify ? { verify: definition.verify } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
+    ...(definition.requiredMcpServers && definition.requiredMcpServers.length > 0
+      ? { requiredMcpServers: [...definition.requiredMcpServers] }
+      : {}),
     // A non-splittable stage is its own single unit of work. Synthesizing that
     // subtask up front means every runnable stage has the same shape, so the
     // engine needs no special case for unsplit work.
@@ -883,6 +911,11 @@ export function resolveDeferral(
   }
   return ok({
     ...pipeline,
+    ...counted(
+      pipeline,
+      { kind: "deferral", stageId: items.find((i) => i.id === itemId)?.raisedByStage },
+      update.at,
+    ),
     deferrals: items.map((item) =>
       item.id === itemId
         ? {
@@ -972,6 +1005,8 @@ export function answerQuestion(
   pipeline: TaskPipeline,
   itemId: string,
   answer: string,
+  /** When the human answered. Optional so the count is opt-in per caller. */
+  at?: string,
 ): Result<TaskPipeline, PipelineError> {
   const pending = pipeline.pendingQuestion;
   if (!pending) {
@@ -986,6 +1021,7 @@ export function answerQuestion(
   const trimmed = answer.trim();
   return ok({
     ...pipeline,
+    ...counted(pipeline, { kind: "answer", stageId: pending.stageId }, at),
     pendingQuestion: {
       ...pending,
       items: pending.items.map((item) =>
@@ -1049,6 +1085,8 @@ export function recordDenials(
 export function grantDenial(
   pipeline: TaskPipeline,
   itemId: string,
+  /** When the rule was written. Optional so the count is opt-in per caller. */
+  at?: string,
 ): Result<TaskPipeline, PipelineError> {
   const pending = pipeline.pendingDenials;
   if (!pending) {
@@ -1062,6 +1100,7 @@ export function grantDenial(
   }
   return ok({
     ...pipeline,
+    ...counted(pipeline, { kind: "permission", stageId: pending.stageId }, at),
     pendingDenials: {
       ...pending,
       items: pending.items.map((item) =>
@@ -1093,6 +1132,8 @@ export function clearQuestion(pipeline: TaskPipeline): TaskPipeline {
 export function revertSubtask(
   pipeline: TaskPipeline,
   subtaskId: string,
+  /** When the revert was ordered. Optional so the count is opt-in per caller. */
+  at?: string,
 ): Result<TaskPipeline, PipelineError> {
   const found = locate(pipeline, subtaskId);
   if (!found) return err(unknownSubtask(subtaskId));
@@ -1125,6 +1166,7 @@ export function revertSubtask(
       status: anyProgress ? stage.status : "pending",
       subtasks,
     }),
+    ...counted(pipeline, { kind: "revert", stageId: stage.id }, at),
     currentStage: anyProgress ? pipeline.currentStage : undefined,
   });
 }
@@ -1215,6 +1257,7 @@ export function approveStage(
 
   return ok({
     ...replaceStage(pipeline, { ...stage, status: "passed", finishedAt: at }),
+    ...counted(pipeline, { kind: "approval", stageId: stage.id }, at),
     currentStage: undefined,
     guidance,
   });
@@ -1251,6 +1294,7 @@ export function skipStage(
       subtasks,
       finishedAt: at,
     }),
+    ...counted(pipeline, { kind: "skip", stageId: stage.id }, at),
     currentStage: undefined,
   });
 }
@@ -1263,6 +1307,8 @@ export function skipStage(
 export function retryStage(
   pipeline: TaskPipeline,
   stageId: string,
+  /** When the retry was ordered. Optional so the count is opt-in per caller. */
+  at?: string,
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
@@ -1286,6 +1332,7 @@ export function retryStage(
       startedAt: undefined,
       finishedAt: undefined,
     }),
+    ...counted(pipeline, { kind: "retry", stageId: stage.id }, at),
     currentStage: undefined,
   });
 }

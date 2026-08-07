@@ -65,6 +65,7 @@ const EMPTY_OUTCOME = (): ArmOutcome => ({
     elapsedMs: 0,
     measured: 0,
     unmeasured: 0,
+    models: [],
   },
   failedSubtasks: 0,
   heldStages: 0,
@@ -88,6 +89,13 @@ export function summariseArm(pipelines: readonly TaskPipeline[]): ArmOutcome {
     total.usage.tokens.output += usage.tokens.output;
     total.usage.tokens.cacheRead += usage.tokens.cacheRead;
     total.usage.tokens.cacheCreation += usage.tokens.cacheCreation;
+    // Merged as a set rather than summed. An arm that ran on two models is the
+    // signal that a comparison is measuring a silent policy fallback rather than
+    // the model choice it was set up to test.
+    for (const model of usage.models) {
+      if (!total.usage.models.includes(model)) total.usage.models.push(model);
+    }
+    total.usage.models.sort();
 
     for (const stage of pipeline.stages) {
       total.failedSubtasks += stage.subtasks.filter((s) => s.status === "failed").length;

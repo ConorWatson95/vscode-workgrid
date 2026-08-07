@@ -103,6 +103,12 @@ export interface StageSessionRunner {
        * the implementation — this fires per tool call, and a stage makes many.
        */
       onActivity?: (activity: SubtaskActivity) => void;
+      /**
+       * MCP servers the stage cannot work without. The implementation abandons the
+       * run if the CLI reports any of them unavailable at startup, before the model
+       * acts — see `domain/mcpReadiness.ts`.
+       */
+      requiredMcpServers?: readonly string[];
     },
   ): Promise<{
     ok: boolean;
@@ -715,7 +721,13 @@ export class PipelineRunner {
       task,
       splitPrompt(this.contextFor(task, action.stage.id), action.stage),
       `plan:${action.stage.id}`,
-      { model: this.modelFor(task, action.stage) },
+      {
+        model: this.modelFor(task, action.stage),
+        // Split too: a planner without the tracker invents the ticket's contents
+        // and produces a plausible list of subtasks for work nobody asked for,
+        // which every later stage then executes faithfully.
+        requiredMcpServers: action.stage.requiredMcpServers,
+      },
     );
     if (!reply.ok) {
       this.logger.error(
@@ -835,6 +847,7 @@ export class PipelineRunner {
     try {
       reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
         model: this.modelFor(task, stage),
+        requiredMcpServers: stage.requiredMcpServers,
         onDenial: (denial) => this.onDenial(task, denial),
         onActivity: (activity) =>
           this.liveActivities.set(taskId, {

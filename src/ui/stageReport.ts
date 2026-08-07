@@ -100,6 +100,9 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
     );
   }
 
+  // Named rather than assumed: the requested model is not evidence of what ran.
+  if (totals.models.length > 0) parts.push(`on ${totals.models.join(", ")}`);
+
   if (parts.length === 0) return undefined;
 
   // Said out loud rather than left to be inferred from a small-looking total. Two

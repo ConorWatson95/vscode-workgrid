@@ -7,6 +7,8 @@ import { SessionTokenTotals, SubtaskActivity } from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 import { redactSecrets } from "../domain/secretRedaction";
+import { assessMcpReadiness } from "../domain/mcpReadiness";
+import { McpServerError, McpServerStatus } from "../domain/mcpServerStatus";
 
 /** How often a running stage's progress is reported to whoever is watching. */
 export const ACTIVITY_INTERVAL_MS = 1500;
@@ -27,10 +29,23 @@ export interface StageSession {
    */
   readonly costUsd?: number;
   readonly tokenTotals?: SessionTokenTotals;
+  /**
+   * The model the CLI resolved, from its init event — which is not always the one
+   * asked for, since a disallowed model falls back silently.
+   */
+  readonly activeModel?: string;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
+  on(event: "mcp", listener: (report: McpStartupReport) => void): unknown;
   off(event: "status", listener: (status: string) => void): unknown;
   off(event: "item", listener: (item: ChatItem) => void): unknown;
+  off(event: "mcp", listener: (report: McpStartupReport) => void): unknown;
+}
+
+/** What the CLI said about MCP startup, once, before the first turn. */
+export interface McpStartupReport {
+  servers: McpServerStatus[];
+  errors: McpServerError[];
 }
 
 /**
@@ -104,6 +119,13 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       onDenial?: (denial: PermissionDenial) => void;
       /** Called as the run works, throttled to `ACTIVITY_INTERVAL_MS`. */
       onActivity?: (activity: SubtaskActivity) => void;
+      /**
+       * MCP servers this stage cannot do its job without. Checked against the
+       * CLI's init event and the stage is abandoned if any is unavailable —
+       * before the model acts, which is the only point at which abandoning it
+       * costs nothing.
+       */
+      requiredMcpServers?: readonly string[];
     },
   ): Promise<{
     ok: boolean;
@@ -160,6 +182,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         clearTimeout(timer);
         session.off("status", onStatus);
         session.off("item", onItem);
+        session.off("mcp", onMcp);
         // Every failing path logs here, so none can be added later that reports
         // nothing. The counts matter as much as the reason: "died having run no
         // tools" and "died after forty" are different problems, and the failure
@@ -240,7 +263,37 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           ...activityWatcher.result(),
           ...(session.costUsd !== undefined ? { costUsd: session.costUsd } : {}),
           ...(session.tokenTotals ? { tokens: session.tokenTotals } : {}),
+          // What ran, not what was asked for. A model an org policy disallows is
+          // substituted without failing, and a stage comparison against the
+          // requested name would then be comparing two runs of the same model.
+          ...(session.activeModel ? { actualModel: session.activeModel } : {}),
         };
+      };
+
+      // The environment check. It runs on the init event, which the CLI emits
+      // once its MCP servers have been connected and before the model acts, so a
+      // stage whose tools are missing is abandoned having spent startup time and
+      // no inference. Letting it proceed is worse than it sounds: the agent does
+      // not report that it lacked a tool, it does the job without it — reading a
+      // ticket it cannot fetch by inventing plausible contents.
+      const onMcp = (report: McpStartupReport) => {
+        const required = options?.requiredMcpServers ?? [];
+        if (required.length === 0) return;
+        const readiness = assessMcpReadiness(required, report.servers, report.errors);
+        if (readiness.ok) return;
+        this.logger.error(
+          `Harness [${task.name}] ${label} cannot start: ${readiness.reason}. ` +
+            "Check the project's MCP config and the route's requiredMcpServers.",
+        );
+        this.sessions.stop(task.id);
+        finish({
+          ok: false,
+          text: "",
+          sessionId: session.sessionId,
+          error: readiness.reason,
+          denials: denials(),
+          activity: activity(),
+        });
       };
 
       const lastAssistantText = (): string => {
@@ -290,6 +343,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
 
       session.on("status", onStatus);
       session.on("item", onItem);
+      session.on("mcp", onMcp);
       // Items already buffered before this listener attached still count.
       for (const item of session.items) onItem(item);
     });

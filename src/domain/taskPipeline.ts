@@ -8,6 +8,7 @@
  */
 
 import { StageKind } from "./taskRoute";
+import { InterventionRecord } from "./interventions";
 
 export type TaskStageStatus =
   | "pending"
@@ -94,6 +95,18 @@ export interface SubtaskActivity {
   costUsd?: number;
   /** Cumulative tokens for the session, once it reported a result. */
   tokens?: SessionTokenTotals;
+
+  /**
+   * The model the CLI actually resolved for this session, from its init event.
+   *
+   * Recorded next to the request rather than instead of it, because they can
+   * differ: an organisational policy that disallows a model falls back to the
+   * parent's, and the CLI reports the substitution without failing. A stage
+   * comparison — is haiku good enough here, did the cheaper model cost more in
+   * retries — is measuring nothing if the recorded model is the one that was
+   * asked for rather than the one that ran.
+   */
+  actualModel?: string;
 }
 
 /**
@@ -295,6 +308,12 @@ export interface TaskStage {
    */
   verify?: string;
   /**
+   * MCP servers this stage cannot run without; see the route definition. Refreshed
+   * for a stage that has not started, like `verify` — a stage that already ran keeps
+   * what it ran with, so the record of why it failed stays true.
+   */
+  requiredMcpServers?: readonly string[];
+  /**
    * What a review stage concluded, in its own words: `block` means it said the work
    * may not proceed.
    *
@@ -385,6 +404,16 @@ export interface TaskPipeline {
    * gate that ought to care.
    */
   deferrals?: DeferralItem[];
+  /**
+   * Every moment a human had to act on this route, in order.
+   *
+   * The one measure of the harness's actual goal that nothing else records.
+   * Cost, tokens and stage latency all fall out of what a run already persists;
+   * supervision does not — approving, answering, granting a permission and
+   * settling a deferral are four different records in four different places, and
+   * the number that matters is their sum per task. See `domain/interventions.ts`.
+   */
+  interventions?: InterventionRecord[];
 }
 
 /** Refusals from one stage, waiting on a decision. */

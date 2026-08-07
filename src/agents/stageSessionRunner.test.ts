@@ -258,3 +258,59 @@ describe("failure reasons", () => {
     expect((await promise).error).toBe("the agent reported an error");
   });
 });
+
+describe("required MCP servers", () => {
+  it("abandons the stage when a required server did not connect", async () => {
+    const { logger, errors } = capturingLogger();
+    const sessions = new FakeSessions();
+    const promise = runner(sessions, 1000, logger).run(TASK, "p", "stage:sub-1", {
+      requiredMcpServers: ["jira"],
+    });
+
+    sessions.session.emit("mcp", {
+      servers: [{ name: "jira", status: "failed" }],
+      errors: [],
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("jira (failed)");
+    // Stopped rather than left running: the point of checking at init is that
+    // nothing has been spent on inference yet, and letting it continue spends it.
+    expect(sessions.stopped).toEqual(["t1"]);
+    expect(errors[0]).toContain("cannot start");
+  });
+
+  it("lets the stage run when every required server connected", async () => {
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "stage:sub-1", {
+      requiredMcpServers: ["jira"],
+    });
+
+    sessions.session.emit("mcp", {
+      servers: [{ name: "jira", status: "connected" }],
+      errors: [],
+    });
+    sessions.session.reply("done");
+    sessions.session.settle("waiting");
+
+    expect((await promise).ok).toBe(true);
+    expect(sessions.stopped).toEqual([]);
+  });
+
+  // A route that declares nothing must behave exactly as it did before the gate.
+  it("ignores MCP startup entirely when the stage required nothing", async () => {
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "stage:sub-1");
+
+    sessions.session.emit("mcp", {
+      servers: [{ name: "jira", status: "failed" }],
+      errors: [{ name: "sftp", message: "bad config" }],
+    });
+    sessions.session.reply("done");
+    sessions.session.settle("waiting");
+
+    expect((await promise).ok).toBe(true);
+    expect(sessions.stopped).toEqual([]);
+  });
+});

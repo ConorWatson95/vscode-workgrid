@@ -14,6 +14,7 @@ import {
   sessionTokensOf,
   compactInfoOf,
   mcpServersOf,
+  mcpServerErrorsOf,
 } from "./streamJson";
 
 describe("sessionTokensOf", () => {
@@ -371,6 +372,42 @@ describe("encodeUserMessage", () => {
       type: "user",
       message: { role: "user", content: [{ type: "text", text: "hello" }] },
     });
+  });
+});
+
+describe("mcpServerErrorsOf", () => {
+  it("reads a name-keyed map of rejected config entries", () => {
+    const event = {
+      type: "system",
+      subtype: "init",
+      mcp_server_errors: { jira: "command not found" },
+    };
+    expect(mcpServerErrorsOf(event)).toEqual([
+      { name: "jira", message: "command not found" },
+    ]);
+  });
+
+  it("reads the list form, and an error nested under a message field", () => {
+    const event = {
+      type: "system",
+      subtype: "init",
+      mcp_server_errors: [{ name: "sftp", error: { message: "bad config" } }],
+    };
+    expect(mcpServerErrorsOf(event)).toEqual([{ name: "sftp", message: "bad config" }]);
+  });
+
+  it("still names the entry when the CLI gave no usable message", () => {
+    const event = { type: "system", subtype: "init", mcp_server_errors: { jira: null } };
+    expect(mcpServerErrorsOf(event)).toEqual([
+      { name: "jira", message: "rejected at startup" },
+    ]);
+  });
+
+  // Absent means "this build did not report", never "there were none" — the
+  // difference decides whether a missing server is a bug or a stale CLI.
+  it("returns undefined when the field is absent or the event is not init", () => {
+    expect(mcpServerErrorsOf({ type: "system", subtype: "init" })).toBeUndefined();
+    expect(mcpServerErrorsOf({ type: "assistant" })).toBeUndefined();
   });
 });
 

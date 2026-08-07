@@ -115,6 +115,77 @@ agent session); a **rules engine** appends conditional reviews based on what the
 diff touched; a **human-verification gate** refuses to pass while checklist items
 are outstanding.
 
+**What the harness is for.** It owns workflow, routing, stage lifecycle, evidence,
+approvals, durable task state, engineering policy, repository knowledge and stage
+environments. Execution engines own *reasoning*. How a stage executes — single-shot,
+a bounded loop, a graph, several agents, a deterministic process, a human — is an
+implementation detail the harness must not care about; it cares about the engineering
+outcome and the evidence for it. Keep it an engineering-harness runtime, not a Claude
+wrapper, not a workflow engine, not an agent framework.
+
+**The heuristic for what to add:** *the harness should eliminate high-confidence
+engineering uncertainty, not low-cost exploration.* Eliminate deterministic facts that
+are expensive or risky to rediscover — current work item, branch, worktree, stage,
+evidence requirements, deployment target, durable repository documentation. But when a
+fact is cheap for the model to discover and would cost real backend work to supply —
+forcing a specific MCP tool, pre-computing every capability — let Claude discover it.
+This is a build-cost trade, not a reason to tolerate slow stages: **stage startup
+latency stays a top optimisation target**, and anything that cuts it cheaply is still
+worth doing. Complexity is a cost and tokens are a cost; optimise the larger one. So
+`StageContext`
+is *the minimum set of verified engineering facts required to execute a stage*, not
+everything the model might want to know.
+
+**Skills are where execution protocol belongs — and a skill is per *engine*, not per
+project.** The runtime has two interfaces, not one: harness → engine is `StageContext`
+(verified engineering facts), engine → harness is the reply contract (`VERDICT`,
+`DEFERRED`, `HANDOFF`, `STEP <n>`, `NEEDS-INFO`). A skill is the adapter that teaches
+one execution engine to speak that contract, which is what makes adding a second engine
+a new skill rather than a change to the harness. It also explains why some prompt text
+resisted every attempt to move it into `StageContext`: it was never engineering
+bootstrapping, it was the protocol between engine and harness, and it had no home.
+
+How to interact with the runtime —
+asking via `ask_user` versus `NEEDS-INFO`, writing a handoff worth carrying, declining
+work as `DEFERRED`, accounting for plan steps, what a gate expects — is invariant
+across every task and every project, which is exactly the shape of a skill. Packaging
+it that way makes the protocol one versioned artifact instead of prose reassembled per
+stage, and lets a stage pull in only the protocol it actually uses. Skills must hold
+*protocol only*: project engineering knowledge belongs in `StageContext` and repository
+docs, or the harness stops being generic.
+
+Three layers, and the reason each sits where it does:
+
+- **Contract** — declared by the *adapter's* invariant preamble, because determinism
+  depends on it. `VERDICT`, `DEFERRED`, `HANDOFF`, `STEP <n>` must be stated in text
+  that is always present; a skill the model chooses not to load yields a reply parsing
+  as silence, which for deferrals and plan steps is precisely the failure those markers
+  exist to catch. Being invariant is also what keeps it in the cached prefix.
+- **Understanding** — taught by the skill, because it is engine-specific behavioural
+  guidance: when to ask rather than assume, `ask_user` versus `NEEDS-INFO`, what makes
+  a handoff worth carrying, how specific a checklist item must be.
+- **Correctness** — enforced by the parser, because the runtime owns orchestration.
+  Never trust the reply to be well-formed; `pipelineEngine`/`planSteps` decide what
+  actually happened.
+
+Note where the line falls: preamble *and* skill both belong to the engine adapter —
+only the parser is the harness's. Swapping in another engine replaces the first two and
+touches nothing else.
+
+**Where the skill lives — probed 7 Aug 2026, CLI 2.1.223.** A skills directory *can* be
+sourced from outside the worktree, via `--plugin-dir <abs path>` pointing at a directory
+holding `.claude-plugin/plugin.json` and `skills/<name>/SKILL.md`. Verified both ways
+from an unrelated cwd: with the flag the skill loads, without it the CLI reports no such
+skill. So the protocol skill goes under the **git common dir** beside `state.json` —
+harness-owned, one copy per repository shared by every worktree, and a branch cannot
+edit the protocol it is subject to. It follows the permission-gate rules exactly:
+absolute paths, content fixed, nothing derived from a task, a branch or a project file,
+and rewritten wholesale by the harness rather than merged.
+
+**The KPI is engineering throughput per engineer**, not time-to-complete one task. The
+harness exists to let one person supervise several concurrent tasks, which is why
+gates, evidence and durable state outrank per-task speed.
+
 - `domain/taskRoute.ts` — route + stage definitions, `StageKind`, built-in routes.
 - `domain/taskPipeline.ts` — live state; plain JSON, round-trips through the repo.
 - `domain/pipelineEngine.ts` — pure transitions. `nextAction()` reports what to do
@@ -290,6 +361,42 @@ rebuild — reached production as a scorecard reading 0.0%.
   shell verbatim, because that is real syntax in both shells. A check that cannot name
   its own ticket degrades into an existence check, which passes in the one case that
   matters.
+
+### The stage environment, and what it cannot start without
+
+Two checks that both exist because the failure they prevent is a stage *succeeding*.
+
+- **Required MCP servers** (`domain/mcpReadiness.ts`, `RouteStageDefinition.requiredMcpServers`).
+  The CLI connects `--mcp-config` servers before the first turn and reports the outcome
+  on its init event — statuses in `mcp_servers`, and separately the config entries it
+  rejected in `mcp_server_errors`, which appear in no status list. A stage declaring
+  servers is abandoned at that event if any is unavailable: before inference, so the
+  cost is startup time only. Declared **per stage**, because failing every stage on an
+  unrelated broken entry is how a check like this gets switched off. What it prevents is
+  not an error — an agent denied its ticket tooling does not stop, it substitutes a
+  plausible guess at the ticket and reports done.
+- **Subagent limits** (`domain/subagentLimits.ts`). `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`
+  and `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, set on stage processes only. The harness
+  owns concurrency at the *task* level; left at the CLI's defaults one stage's fan-out
+  starves the other tasks of a machine and a rate limit they share, and the loss reads as
+  "everything was slow today". Zero is clamped to one — the CLI treats zero as unset,
+  which is the opposite of what setting zero meant.
+
+### Measuring the thing the harness is actually for
+
+- **`domain/interventions.ts`** — every moment a human had to act, as events on the
+  pipeline. The only measure of throughput-per-engineer that does not fall out of
+  existing state: cost, tokens and latency are all derivable, but approving, answering,
+  granting a permission and settling a deferral are four records in four places and
+  nothing summed them. Kept per kind and per stage, because "twelve interventions" does
+  not distinguish a route that asks too many questions from one that fails too often,
+  and those have opposite fixes. **Timestamps are passed in, and a call site with no
+  clock records nothing** — which is also what keeps the runner's own automatic reverts
+  out of the count. A retry the harness performs is not supervision.
+- **`SubtaskActivity.actualModel`** — what the CLI resolved, not what was asked for. A
+  model an org policy disallows is substituted without failing, so a cost comparison
+  keyed on the requested name compares two runs of the same model. `UsageTotals.models`
+  carries the distinct set; two entries where a stage asked for one is the tell.
 
 ### Who holds which worktree
 

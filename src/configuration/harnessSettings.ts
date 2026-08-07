@@ -280,6 +280,35 @@ export class HarnessSettings {
   stageTimeoutMinutes(): number {
     return this.positive("stageTimeoutMinutes", 45);
   }
+
+  /**
+   * How many subagents one stage session may run at once.
+   *
+   * The harness owns concurrency, and it owns it at the *task* level: the point
+   * of the thing is one person supervising several tasks at once. Left at the
+   * CLI's own default a single stage may run twenty subagents, which does not
+   * make that stage twenty times faster — it makes the other tasks wait, on a
+   * machine and a rate limit they all share. Capping here converts an invisible
+   * loss of throughput into a slightly slower stage.
+   *
+   * Not zero-able: zero would read as "no subagents" but reaches the CLI as a
+   * limit it may treat as unset, which is the opposite of what was asked for.
+   */
+  stageSubagentConcurrency(): number {
+    return this.positive("stageSubagentConcurrency", 3);
+  }
+
+  /**
+   * How deep subagent spawning may nest within a stage.
+   *
+   * One level by default: a stage delegating to subagents is normal, a subagent
+   * delegating further is a tree whose cost and duration nothing in the harness
+   * predicted. Deep nesting is also the case where the CLI's own default (three)
+   * multiplies against the concurrency cap rather than adding to it.
+   */
+  stageSubagentDepth(): number {
+    return this.positive("stageSubagentDepth", 1);
+  }
 }
 
 /**

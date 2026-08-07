@@ -191,6 +191,14 @@ function parseStage(
     return undefined;
   }
 
+  const requiredMcpServers = strList(raw.requiredMcpServers);
+  if (raw.requiredMcpServers !== undefined && requiredMcpServers === undefined) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "requiredMcpServers" must be an array of MCP server names.`,
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -205,6 +213,7 @@ function parseStage(
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
+    ...(requiredMcpServers && requiredMcpServers.length > 0 ? { requiredMcpServers } : {}),
   };
 }
 

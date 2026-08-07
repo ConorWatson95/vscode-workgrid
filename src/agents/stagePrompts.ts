@@ -7,6 +7,7 @@ import {
   planStepInstruction,
   stripStepAccounts,
 } from "../domain/planSteps";
+import { invariantProtocolBlock } from "./claudeAdapter";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -112,63 +113,10 @@ export function stripVerdict(reply: string): string {
  */
 function preamble(context: StageContext, stage: TaskStage): string {
   return [
-    // Invariant text first, task-specific text last. Prompt caching matches on a
-    // *prefix*, so leading with "Task: <name>" made every stage's prompt differ from
-    // the first character and nothing was reusable across the dozen sessions a route
-    // spawns. This block is byte-identical for every stage of every task, which is
-    // the only way any of it can be cached.
-    "You are one stage of a defined workflow and have no memory of earlier stages.",
-    "",
-    // Without this a re-run redoes the whole stage. A stage is the unit of re-run —
-    // sending findings back, reverting, retrying after a refused tool all re-open
-    // one — and a cold session reading "write the migration and a paired rollback"
-    // duly writes them again, when the actual defect was a missing folder. Minutes
-    // of model time to change one thing, and the correct work churned on the way.
-    `This stage may have run before, and its earlier output may already be in the`,
-    `worktree. Look at what is there before creating anything. Change only what is`,
-    `actually wrong or missing; do not rewrite work that is already correct, and say`,
-    `what you found already in place and what you changed.`,
-    "",
-    `If the brief does not tell you enough to do this properly — it may be only a`,
-    `ticket reference — do NOT guess and do NOT proceed. First check whether the`,
-    `answer is already available to you: read the code, and use any ticket tooling`,
-    `this repository provides. Only ask for what you genuinely cannot find.`,
-    "",
-    // Two ways to ask, and the difference is what a question costs. The tool keeps
-    // the session alive, so the answer arrives mid-turn and everything worked out
-    // so far survives. The marker ends the session, so answering it re-runs the
-    // whole subtask from scratch. The tool is preferred whenever it is there.
-    `To ask, prefer the "ask_user" tool if you have it: it pauses you until a human`,
-    `answers, then you carry on with everything you have already worked out. Put`,
-    `every question you have into one call, each self-contained.`,
-    "",
-    `If you do not have that tool, reply with exactly "${NEEDS_INFO_MARKER}" followed`,
-    `by your questions as a numbered list, one question per line, and nothing else.`,
-    `Each line is answered separately, so ask one thing per line rather than`,
-    `combining several into a paragraph. The work will pause and a human will answer,`,
-    `but this stage will then start again from the beginning — so use the tool when`,
-    `you can.`,
-    "",
-    // Each shell call is a process launch, and on a Windows host with on-access
-    // scanning that costs of the order of a second — per process, so a four-stage
-    // pipeline pays four times before doing any work. Measured on a real route,
-    // shell calls averaged over ten seconds each while the file tools averaged
-    // zero. Same information, two orders of magnitude apart.
-    `Use the file search and file read tools to explore, not shell commands: they`,
-    `run in-process, while every shell call pays a process launch. Reserve the shell`,
-    `for work that genuinely needs it, and when you do use it, combine the steps`,
-    `into one command rather than issuing several.`,
-    "",
-    // In the invariant block, because it applies to every stage of every task and
-    // because the failure it prevents is silent: a stage that switched branches to
-    // look for something found the branch it switched to, reported the absence
-    // truthfully, and left a review that was about the wrong tree entirely.
-    `You are already in the worktree and on the branch for this task. Unless this`,
-    `stage is told otherwise below, do not run "git checkout", "git switch" or`,
-    `anything else that changes which branch is checked out here — the worktree is`,
-    `the task, and moving it makes every following stage report on the wrong tree.`,
-    `If what you need is on another branch, say so and stop rather than going to`,
-    `get it.`,
+    // The invariant half lives in the Claude adapter: it is this engine's
+    // declaration of the runtime protocol, not the harness's, and it must stay
+    // byte-identical across every stage so prompt caching can match on the prefix.
+    ...invariantProtocolBlock({ needsInfo: NEEDS_INFO_MARKER }),
     ...(context.docsPath ? ["", docsGuidance(context.docsPath)] : []),
 
     // Everything below varies per task and per stage, so it comes after the block

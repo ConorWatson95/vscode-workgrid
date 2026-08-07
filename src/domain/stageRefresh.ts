@@ -140,6 +140,15 @@ export function refreshPendingStages(
         (updates as Record<string, unknown>)[field] = next;
       }
     }
+    // Handled apart from the scalar fields because comparing arrays by `!==`
+    // compares references, so every refresh would report a change and rewrite the
+    // state file on every advance.
+    const requiredNext = definition.requiredMcpServers;
+    if (!sameNames(stage.requiredMcpServers, requiredNext)) {
+      updates.requiredMcpServers =
+        requiredNext && requiredNext.length > 0 ? [...requiredNext] : undefined;
+    }
+
     if (Object.keys(updates).length === 0) return stage;
 
     changed.push(stage.id);
@@ -384,13 +393,27 @@ function findDefinition(
   routeId: string,
   stage: Pick<TaskStage, "id" | "addedByRule">,
 ):
-  | { intent?: string; model?: string; handoff?: boolean; verify?: string; planFile?: string }
+  | {
+      intent?: string;
+      model?: string;
+      handoff?: boolean;
+      verify?: string;
+      planFile?: string;
+      requiredMcpServers?: readonly string[];
+    }
   | undefined {
   if (stage.addedByRule) {
     return source.rules.find((rule) => rule.stage.id === stage.id)?.stage;
   }
   const route = source.routes.find((r) => r.id === routeId);
   return route?.stages.find((s) => s.id === stage.id);
+}
+
+/** Order-insensitive: a reordered list of required servers is the same requirement. */
+function sameNames(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  const left = [...(a ?? [])].map((n) => n.trim()).filter(Boolean).sort();
+  const right = [...(b ?? [])].map((n) => n.trim()).filter(Boolean).sort();
+  return left.length === right.length && left.every((name, at) => name === right[at]);
 }
 
 /** Blank and absent mean the same thing in config, so compare them that way. */

@@ -7,6 +7,7 @@
  */
 
 import type { SessionTokenTotals } from "../domain/taskPipeline";
+import type { McpServerError, McpServerStatus } from "../domain/mcpServerStatus";
 
 /** A renderable entry in the chat transcript. */
 export type ChatItem =
@@ -200,12 +201,7 @@ export function modelOf(event: StreamEvent): string | undefined {
   return undefined;
 }
 
-/** An MCP server the CLI reported at startup, with how it ended up. */
-export interface McpServerStatus {
-  name: string;
-  /** The CLI's own word, e.g. "connected", "failed". */
-  status: string;
-}
+export type { McpServerError, McpServerStatus };
 
 /**
  * MCP servers named in the init event.
@@ -232,6 +228,48 @@ export function mcpServersOf(event: StreamEvent): McpServerStatus[] | undefined 
     });
   }
   return parsed;
+}
+
+/**
+ * `--mcp-config` entries the CLI rejected during startup validation.
+ *
+ * Separate from `mcpServersOf` because a rejected entry never becomes a server:
+ * it appears in no status list, so reading only the statuses reports it as a
+ * server nobody configured — which sends you to the wrong file. The CLI reports
+ * these as an object keyed by name; older builds emitted nothing at all, so an
+ * absent field means "not reported", never "none".
+ */
+export function mcpServerErrorsOf(event: StreamEvent): McpServerError[] | undefined {
+  if (event.type !== "system" || event.subtype !== "init") return undefined;
+  const errors = (event as { mcp_server_errors?: unknown }).mcp_server_errors;
+  if (!errors || typeof errors !== "object") return undefined;
+
+  const parsed: McpServerError[] = [];
+  // Tolerant of both shapes seen in the wild: a name→message map, and a list of
+  // objects. Getting this wrong loses the diagnosis rather than failing loudly.
+  if (Array.isArray(errors)) {
+    for (const entry of errors) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as { name?: unknown; message?: unknown; error?: unknown };
+      if (typeof record.name !== "string") continue;
+      parsed.push({ name: record.name, message: messageOf(record.message ?? record.error) });
+    }
+    return parsed;
+  }
+
+  for (const [name, value] of Object.entries(errors as Record<string, unknown>)) {
+    parsed.push({ name, message: messageOf(value) });
+  }
+  return parsed;
+}
+
+function messageOf(value: unknown): string {
+  if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  if (value && typeof value === "object") {
+    const message = (value as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim().length > 0) return message.trim();
+  }
+  return "rejected at startup";
 }
 
 /** Plan usage / rate-limit state, as the UI needs it. */

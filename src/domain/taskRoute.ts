@@ -216,6 +216,20 @@ export interface RouteStageDefinition {
    * written for the ticket it is running.
    */
   planFile?: string;
+  /**
+   * MCP servers this stage cannot do its job without, by config name.
+   *
+   * The CLI connects `--mcp-config` servers before the first turn and reports the
+   * outcome on its init event, so a stage can be abandoned there rather than run
+   * blind. It has to be declared per stage: a route's ticket-reading stage needs
+   * the tracker, its build stage does not, and failing every stage on an unrelated
+   * broken entry is how a check like this gets switched off.
+   *
+   * The failure it prevents is not a stage erroring — it is a stage succeeding.
+   * An agent denied a tool does not stop; it substitutes its own guess at what the
+   * tool would have said and reports done.
+   */
+  requiredMcpServers?: readonly string[];
 }
 
 export interface RouteDefinition {

@@ -331,7 +331,7 @@ async function grantDenialCommand(ctx: CommandContext, arg: unknown): Promise<vo
     );
   }
 
-  const granted = grantDenial(task.pipeline, item.id);
+  const granted = grantDenial(task.pipeline, item.id, new Date().toISOString());
   if (granted.ok) {
     await ctx.repository.save({
       ...task,
@@ -419,7 +419,7 @@ async function allowAllDenialsCommand(
   let pipeline = task.pipeline;
   for (const item of outstanding) {
     if (!item.rule) continue;
-    const granted = grantDenial(pipeline, item.id);
+    const granted = grantDenial(pipeline, item.id, new Date().toISOString());
     if (granted.ok) pipeline = granted.value;
   }
   // Everything grantable is granted, so the record has served its purpose.
@@ -492,7 +492,7 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
     answer: async (taskId, itemId, text) => {
       const latest = await ctx.repository.get(taskId);
       if (!latest?.pipeline) return;
-      const result = answerQuestion(latest.pipeline, itemId, text);
+      const result = answerQuestion(latest.pipeline, itemId, text, new Date().toISOString());
       if (!result.ok) return;
       await ctx.repository.save({
         ...latest,

@@ -9,11 +9,14 @@ import {
   toChatItems,
   sessionIdOf,
   mcpServersOf,
+  mcpServerErrorsOf,
   modelOf,
   shortModelName,
   rateLimitOf,
   costUsdOf,
   RateLimitStatus,
+  McpServerStatus,
+  McpServerError,
   isTurnComplete,
   encodeUserMessage,
   contextTokensOf,
@@ -63,6 +66,15 @@ export interface StreamSessionOptions {
   settingsPath?: string;
   /** Further MCP configs, e.g. the extension's own ask_user server. */
   extraMcpConfigPaths?: string[];
+  /**
+   * Environment overrides for this process, layered over the extension's own.
+   *
+   * Used to bound a stage's subagent fan-out (`domain/subagentLimits.ts`). Set per
+   * session rather than globally so a chat session the user is driving by hand
+   * keeps the CLI's defaults — the cap exists to protect *concurrent tasks* from
+   * each other, and a hand-driven session has no concurrent tasks to protect.
+   */
+  env?: Record<string, string>;
   /** Resume this existing Claude session id instead of starting a new one. */
   resumeSessionId?: string;
   /** Auto-compact once context exceeds this many tokens (0 = never). */
@@ -97,6 +109,12 @@ type SessionEvents = {
   model: [string];
   /** Plan usage / rate-limit state, pushed by the CLI as it changes. */
   usage: [{ rateLimit?: RateLimitStatus; costUsd?: number }];
+  /**
+   * MCP startup, as reported on the init event — fired once, before the first
+   * turn. A stage that declared required servers decides here whether to run at
+   * all, which is the only moment it can: after this the model is already acting.
+   */
+  mcp: [{ servers: McpServerStatus[]; errors: McpServerError[] }];
 };
 
 /**
@@ -220,6 +238,10 @@ export class ClaudeStreamSession {
       cwd: this.options.worktreePath,
       windowsHide: true,
       shell: useShell,
+      // Layered over the inherited environment, never replacing it: the CLI needs
+      // PATH, HOME and its own credential variables, and an env of only our
+      // overrides is a process that cannot find `claude` at all.
+      ...(this.options.env ? { env: { ...process.env, ...this.options.env } } : {}),
     }) as ChildProcessWithoutNullStreams;
 
     this.child.stdout.setEncoding("utf8");
@@ -317,6 +339,19 @@ export class ClaudeStreamSession {
       this.emitter.emit("model", this.activeModel);
 
       const servers = mcpServersOf(event);
+      const mcpErrors = mcpServerErrorsOf(event);
+      if (mcpErrors && mcpErrors.length > 0) {
+        // Distinct from a failed connection and reported separately: this entry
+        // was rejected as configuration, so the fix is in a file rather than in
+        // whatever the server talks to.
+        this.logger.error(
+          `${mcpErrors.length} MCP config entr(ies) rejected at startup: ` +
+            mcpErrors.map((e) => `${e.name} — ${e.message}`).join("; "),
+        );
+      }
+      // Emitted even when both are empty: a stage waiting on this needs to know
+      // the init event happened, and "no servers" is a legitimate answer to it.
+      this.emitter.emit("mcp", { servers: servers ?? [], errors: mcpErrors ?? [] });
       if (servers && servers.length > 0) {
         // Named individually: a server that failed still cost its whole
         // connection attempt, and it is the one worth removing from the config.

@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -747,6 +747,18 @@
           "default": 45,
           "scope": "resource",
           "markdownDescription": "Hard stop for a single route subtask, so a hung CLI cannot stall a route forever. A stage that hits this is recorded as **failed**, so prefer a generous value: planning or investigation stages on a large repository legitimately take tens of minutes, and per-process overhead on the machine (on-access virus scanning of every process launch, most often) multiplies that. Whatever the stage produced before the cap is kept in the log."
+        },
+        "taskWorkspaces.stageSubagentConcurrency": {
+          "type": "number",
+          "default": 3,
+          "scope": "resource",
+          "markdownDescription": "How many subagents a single route stage may run at once (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, set only for stage sessions).\n\nThe harness owns concurrency at the **task** level — the point of it is supervising several tasks at once. Left at the CLI's own default a single stage may run twenty subagents, which does not finish that stage twenty times sooner; it starves every other task of the machine and the rate limit they share, and the loss appears as \"everything was slow today\" rather than as anything attributable.\n\nChat sessions you drive by hand are unaffected."
+        },
+        "taskWorkspaces.stageSubagentDepth": {
+          "type": "number",
+          "default": 1,
+          "scope": "resource",
+          "markdownDescription": "How deep subagent spawning may nest inside a route stage (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, set only for stage sessions).\n\nOne level by default: a stage delegating to subagents is ordinary, a subagent delegating further is a tree whose cost and duration nothing in the harness predicted. Nesting multiplies against the concurrency cap rather than adding to it."
         },
         "taskWorkspaces.contextStrategy": {
           "type": "string",

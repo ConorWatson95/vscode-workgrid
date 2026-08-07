@@ -33,6 +33,7 @@ import {
   unansweredQuestions,
   setChecklistItem,
   skipStage,
+  revertSubtask,
   startSubtask,
   SubtaskSpec,
 } from "./pipelineEngine";
@@ -1518,5 +1519,48 @@ describe("plan-step accounting", () => {
     expect(restored?.stages[0].verify).toBe("dotnet build");
     expect(restored?.stages[0].verdict).toBe("block");
     expect(restored?.deferrals).toHaveLength(1);
+  });
+});
+
+describe("intervention counting", () => {
+  // The one measure of the harness's actual goal — supervision per task — that
+  // nothing else records. Cost, tokens and latency all fall out of existing state.
+  it("counts an approval against the stage approved", () => {
+    const pipeline = createPipeline(ROUTE);
+    const held = {
+      ...pipeline,
+      stages: pipeline.stages.map((s) =>
+        s.id === "review" ? { ...s, status: "awaiting-approval" as const } : s,
+      ),
+    };
+
+    const approved = must(approveStage(held, "review", "2026-08-07T09:00:00Z"));
+    expect(approved.interventions).toEqual([
+      { kind: "approval", stageId: "review", at: "2026-08-07T09:00:00Z" },
+    ]);
+  });
+
+  it("accumulates one record per human action, in order", () => {
+    const pipeline = createPipeline(ROUTE);
+    const skipped = must(skipStage(pipeline, "build", "2026-08-07T09:00:00Z"));
+    const held = {
+      ...skipped,
+      stages: skipped.stages.map((s) =>
+        s.id === "review" ? { ...s, status: "awaiting-approval" as const } : s,
+      ),
+    };
+    const approved = must(approveStage(held, "review", "2026-08-07T10:00:00Z"));
+
+    expect(approved.interventions?.map((i) => i.kind)).toEqual(["skip", "approval"]);
+  });
+
+  // A revert the runner performs by itself is not supervision, and counting it
+  // would make a route that retries cleanly look like one needing attention.
+  it("records nothing when the caller supplied no timestamp", () => {
+    const pipeline = createPipeline(ROUTE);
+    const started = must(startSubtask(pipeline, "review-1", "2026-08-07T09:00:00Z"));
+    const reverted = must(revertSubtask(started, "review-1"));
+
+    expect(reverted.interventions).toBeUndefined();
   });
 });

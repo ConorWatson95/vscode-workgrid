@@ -128,6 +128,14 @@ export class ExtensionConfiguration {
     return this.settings(scope).stageTimeoutMinutes();
   }
 
+  stageSubagentConcurrency(scope?: vscode.Uri): number {
+    return this.settings(scope).stageSubagentConcurrency();
+  }
+
+  stageSubagentDepth(scope?: vscode.Uri): number {
+    return this.settings(scope).stageSubagentDepth();
+  }
+
   /**
    * Persists the permission mode so subsequent chats default to it. Writes to
    * workspace settings when a workspace is open, else to global settings.
