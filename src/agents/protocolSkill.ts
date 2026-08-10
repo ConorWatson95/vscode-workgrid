@@ -126,6 +126,30 @@ explanation of why it could not be corrected, and a route that carried on.
 If the finding is simply wrong — the code already does what it says is missing — say
 that instead of changing something to satisfy it.
 
+## When the work should not be done, rather than cannot be
+
+Deciding that a fix is out of scope is real engineering work, and often the most
+valuable thing a stage produces. What loses it is the shape of the reply: a thorough
+root-cause analysis, then a heading like "Why I stopped", then prose. The runtime reads
+markers, so that reply is a stage that finished with nothing outstanding — and the route
+advances onto stages that assume the fix exists.
+
+It has happened. A stage traced a scorecard defect to the aggregation grain of a shared
+core proc used by every manufacturer, established that fixing it was a product decision
+rather than an inferable bug, and stopped. Correctly. The stage passed and the route
+carried on.
+
+So the rule is not "refuse less" — the refusal was right. It is that a refusal on
+*scope or authority* uses the same marker as a refusal on a missing prerequisite. Both
+mean the stage's objective went undone.
+
+Ask first where asking would settle it. "Should AR purchases fold into the franchise
+group total?" is one sentence for a person and returns into your session, letting you
+continue with everything you have already worked out. Stopping throws that away and
+makes someone reconstruct the question from your report. Stop when the decision is too
+large for that, or when you have no way to ask — not because stopping feels more
+rigorous.
+
 ## When you hand something forward
 
 A handoff is read by a stage that has never seen this repository. Write it for that

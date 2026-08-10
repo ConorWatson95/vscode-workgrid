@@ -534,13 +534,28 @@ function blockedInstruction(stage: TaskStage): string {
   if (stage.kind === "codeReview" || stage.kind === "domainReview") return "";
   return `
 
-If you cannot do this stage's work at all — a prerequisite is missing, an earlier
-stage's output never arrived, the thing you were told to act on does not exist —
-then do not do part of it and do not describe the problem only in prose. Say so
-with a line starting exactly "${BLOCKED_MARKER}" followed by one sentence naming
-what is missing. Then stop. Refusing is a correct outcome and it is recorded as
-one; what must not happen is this stage being marked done because the session
-ended tidily. Never use this line to report work you did complete.`;
+If this stage's work does not get done, say so with a line starting exactly
+"${BLOCKED_MARKER}" followed by one sentence naming why. Then stop. Two families of
+reason, and the second is the one people write prose about instead:
+
+- You **could not**: a prerequisite is missing, an earlier stage's output never
+  arrived, the thing you were told to act on does not exist.
+- You **should not**: the fix needs a change wider than this stage may make, it
+  turns on a product or design decision that is not yours, or doing it would
+  exceed what this stage was asked for. Concluding that the work is out of scope
+  is a legitimate and useful outcome — reporting it only in prose is not.
+
+Before you stop for the second reason, ask. If what stands between you and the work
+is a decision someone could give you in a sentence, use \`ask_user\`: the answer comes
+back into this same session and you carry on with everything you have worked out.
+Stopping costs the whole stage and a person has to read your report to reconstruct
+the question. Stop only when the decision is too large to be settled that way, or
+when you cannot ask.
+
+Either way: do not do part of the work, and do not describe the problem only in
+prose. Refusing is a correct outcome and it is recorded as one; what must not happen
+is this stage being marked done because the session ended tidily.
+Never use this line to report work you did complete.`;
 }
 
 /**

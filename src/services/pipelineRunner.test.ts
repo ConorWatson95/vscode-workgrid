@@ -1996,3 +1996,72 @@ describe("a correction the stage declines", () => {
     expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
   });
 });
+
+/**
+ * A stage that investigated and reported, without changing anything.
+ *
+ * The sixth instance of one disease, and the first caught without the reply's help. The
+ * stage traced a scorecard defect to the aggregation grain of a shared core proc,
+ * concluded the fix was a product decision out of scope for its route, wrote "Why I
+ * stopped" in prose, and passed. The route advanced onto stages assuming a fix that did
+ * not exist.
+ */
+describe("an implementation stage that wrote no files", () => {
+  const implRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Fix the defect.",
+        splittable: false,
+        gate: "auto",
+      },
+    ],
+  });
+
+  /** A session that reads and runs commands but writes nothing. */
+  const investigating = (text: string): StageSessionRunner => ({
+    async run() {
+      return {
+        ok: true,
+        text,
+        activity: { toolCounts: { Read: 8, Bash: 4 }, commands: ["sqlcmd -Q \"select 1\""] },
+      };
+    },
+  });
+
+  const REPORT =
+    "Root cause: the proc filters #AllDealers by the calling link type.\n" +
+    "Why I stopped: fixing it changes aggregation grain on a shared core proc, " +
+    "which is out of scope for this route and is a product decision.";
+
+  it("holds instead of passing, without needing a marker", () => {
+    // The whole point: every other defence depends on the stage saying so.
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(investigating(REPORT), { repo });
+    return (async () => {
+      await repo.save({ ...task(), pipeline: createPipeline(implRoute()) });
+      await runner.advance((await repo.get("t1"))!);
+
+      const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+      expect(stage.status).toBe("awaiting-approval");
+      expect(stage.blocked).toContain("changed no files");
+    })();
+  });
+
+  it("passes a stage that wrote something", async () => {
+    const writing: StageSessionRunner = {
+      async run() {
+        return { ok: true, text: "Fixed it.", activity: { pathsWritten: ["src/a.cs"] } };
+      },
+    };
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(writing, { repo });
+    await repo.save({ ...task(), pipeline: createPipeline(implRoute()) });
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});

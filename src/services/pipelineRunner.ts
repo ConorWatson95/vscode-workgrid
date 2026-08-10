@@ -28,6 +28,7 @@ import {
   startSubtask,
 } from "../domain/pipelineEngine";
 import { guidanceFor } from "../domain/stageRefresh";
+import { CHANGED_NOTHING_REASON, changedNothing } from "../domain/stageProductivity";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
@@ -1269,6 +1270,30 @@ export class PipelineRunner {
           `Harness [${task.name}] ${stage.name} declined a correction: ${correctionDeclined} ` +
             "Nothing was changed; holding the route rather than passing the stage.",
         );
+      }
+    }
+
+    // The one check that needs no cooperation from the reply. Every marker above
+    // depends on the stage saying it did not do its work; this observes that it did
+    // not. Read from the pipeline as it now stands, so it sees this subtask's activity
+    // and every earlier one's.
+    if (reply.ok) {
+      const settled = pipeline.stages.find((s) => s.id === stage.id);
+      if (
+        settled &&
+        !settled.subtasks.some((s) => s.status === "pending" || s.status === "active") &&
+        changedNothing(settled)
+      ) {
+        pipeline = recordStageBlocked(pipeline, stage.id, CHANGED_NOTHING_REASON);
+        const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+        if (held.ok) {
+          pipeline = held.value;
+          steps.push(`"${stage.name}" changed no files — held for you.`);
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
+              "no files. Holding rather than passing: read what it did before approving.",
+          );
+        }
       }
     }
 

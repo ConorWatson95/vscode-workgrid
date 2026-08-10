@@ -513,6 +513,38 @@ It is also what gives `DEFERRED` its meaning. The engine defines a deferral as w
 belonging to **no stage**, and until this existed no stage could tell that from work
 belonging to the next one — so the careful ones over-reported and the rest said nothing.
 
+### The stage that did nothing, and said so only in prose
+
+Every defence above depends on the model emitting a marker: `BLOCKED`, `DEFERRED`,
+`CORRECTION-DECLINED`, a plan step accounted `not done`. Each closed a real hole, and
+each shares one weakness — a stage that declines in prose is recorded as done, because a
+session ending tidily is all `finishSubtask(..., "done")` observes. Five widenings later
+the sixth case still passed: a stage traced a scorecard defect to the aggregation grain
+of a shared core proc, concluded the fix was a product decision out of scope for its
+route, wrote "Why I stopped", and the route advanced onto stages assuming a fix that did
+not exist.
+
+Two answers, and only the second needs no cooperation:
+
+- **`BLOCKED` now covers "should not", not only "could not".** The instruction enumerated
+  *a prerequisite is missing, an earlier stage's output never arrived, the thing you were
+  told to act on does not exist* — every item about being unable to start. A stage that
+  is perfectly able and declines on scope or authority reads that list, correctly
+  concludes it does not qualify, and writes prose. The instruction produced exactly the
+  behaviour it described and still lost the signal, because the list was narrower than
+  the situation. It also now says to **ask first**: a refusal turning on one product
+  question is a sentence through `ask_user`, which returns into the same session, against
+  a whole stage thrown away.
+- **`domain/stageProductivity.ts` — an implementation stage that wrote no files is
+  held.** Derived from `pathsWritten`, so it holds whatever the reply says. Narrow in
+  four ways, each load-bearing: implementation stages only (a review, a deployment and an
+  assessment all legitimately write nothing, and a check that fires constantly is one
+  people approve through without reading); **held, never failed** (there is nothing to
+  change here is a legitimate outcome); **absence of an activity record means unmeasured,
+  not zero**, the same rule `stageUsage` follows; and a **declared `verify` that exited 0
+  outranks it entirely**, because this is a substitute for `selfReported` evidence and
+  something other than the agent has certified the work.
+
 ### Work that belongs to no stage
 
 Every stage is told to stay within its objective and say so rather than reach
