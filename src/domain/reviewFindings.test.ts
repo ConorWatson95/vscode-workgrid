@@ -295,3 +295,96 @@ describe("a heading that carries its finding", () => {
     ]);
   });
 });
+
+/**
+ * A severity section written without bullets.
+ *
+ * The failure that prompted it: a SQL review headed a section "Critical" and listed
+ * three procedures on plain lines. `listItem` accepts only a bulleted line or one
+ * carrying its own severity marker, so all three were skipped and the review parsed to
+ * nothing — while the report, which shows the reply verbatim when nothing parses,
+ * displayed them. Three criticals on screen, an empty list in the decision, and a route
+ * that carried on to the next stage.
+ */
+describe("a section that uses no bullets", () => {
+  const UNBULLETED = [
+    "Critical",
+    "",
+    "p_Bespoke_TradeCampaign_DescriptionCode lines 171 and 194",
+    "_ByCustomer line 164",
+  ].join("\n");
+
+  it("reads the plain lines as findings rather than nothing", () => {
+    const findings = parseReviewFindings(UNBULLETED);
+    expect(findings).toHaveLength(2);
+    expect(findings.every((f) => f.severity === "critical")).toBe(true);
+    expect(findings[0].text).toContain("lines 171 and 194");
+  });
+
+  it("holds the route, which is the whole point", () => {
+    expect(hasBlockingFindings(parseReviewFindings(UNBULLETED))).toBe(true);
+  });
+
+  it("does not apply where the section already has bulleted items", () => {
+    // A reviewer who bulleted anything is writing prose in between, and reading each
+    // line of a wrapped paragraph as its own critical is the over-count that teaches
+    // people to click past the stop.
+    const mixed = [
+      "## Critical",
+      "",
+      "These both stem from the same missing predicate, verified against the procs:",
+      "",
+      "- p_DescriptionCode line 171",
+      "- _ByCustomer line 164",
+    ].join("\n");
+    const findings = parseReviewFindings(mixed);
+    expect(findings).toHaveLength(2);
+    expect(findings.map((f) => f.text)).not.toContain(
+      "These both stem from the same missing predicate, verified against the procs:",
+    );
+  });
+
+  it("does not apply where the heading carried its own finding", () => {
+    // The lines under it are that finding's explanation, not more findings.
+    const carried = [
+      "### Critical: the change is against the wrong stored procedure",
+      "",
+      "The ticket names p_Rewards, and the edit landed in p_RewardsSummary.",
+    ].join("\n");
+    expect(parseReviewFindings(carried)).toHaveLength(1);
+  });
+
+  it("still ignores a section answered with nothing", () => {
+    // "Critical" followed by a plain "none" is a section answered, and counting it
+    // would block a clean review on the absence of work.
+    expect(parseReviewFindings(["**Critical**", "", "none"].join("\n"))).toEqual([]);
+  });
+
+  it("gives plain lines outside any severity section no severity at all", () => {
+    // There is nothing to classify them as, and guessing is how a report becomes
+    // fourteen blockers.
+    expect(parseReviewFindings(["## Summary", "", "I read the two procs."].join("\n"))).toEqual([]);
+  });
+
+  it("still downgrades a plain line whose author says they are not blocking", () => {
+    const findings = parseReviewFindings(
+      ["Important", "", "index is missing, though I am not blocking on it"].join("\n"),
+    );
+    expect(findings[0].severity).toBe("suggestion");
+  });
+
+  it("ends the fallback at the next heading, not at the end of the reply", () => {
+    const two = [
+      "## Critical",
+      "",
+      "p_DescriptionCode line 171",
+      "",
+      "## Other review points",
+      "",
+      "The naming is consistent with the rest of the folder.",
+    ].join("\n");
+    const findings = parseReviewFindings(two);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].text).toContain("line 171");
+  });
+});

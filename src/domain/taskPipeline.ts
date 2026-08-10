@@ -152,6 +152,28 @@ export interface GuidanceNote {
   stageName: string;
   text: string;
   at: string;
+  /**
+   * Who the note is for.
+   *
+   * `route` — every stage from here on. What an approval note has always meant: a
+   * human has just read a stage's output and knows something the route does not.
+   *
+   * `stage` — the stage it names, and only while that stage is being redone. What a
+   * send-back's findings and a re-run's reason actually are: instructions about one
+   * stage's output, correct exactly once.
+   *
+   * The distinction was missing, and everything was `route`. So a send-back note aimed
+   * at an implementation stage reached a DEV deployment preview two stages later,
+   * ranked above its brief, describing defects that had been fixed before it started —
+   * that stage spent a paragraph of its report explaining it was not going to
+   * re-litigate them, which is the good outcome. The bad one arrived the same day: a
+   * correction's finding about a discarded build was handed to the stage's own re-run,
+   * which stopped to ask three questions about an exception that no longer existed.
+   *
+   * Optional, and absent means `route`: existing pipelines keep exactly the behaviour
+   * they had, and only notes written by a build that knows the difference are narrowed.
+   */
+  scope?: "route" | "stage";
 }
 
 /**
@@ -669,6 +691,10 @@ function normalizeGuidance(stored: unknown): GuidanceNote[] | undefined {
       stageName: note.stageName ?? note.stageId ?? "",
       text: note.text.trim(),
       at: note.at ?? "",
+      // Only a value we recognise survives a round trip. Anything else would reach
+      // the delivery filter as neither scope and be silently dropped from every
+      // stage, which is worse than the over-delivery this narrows.
+      ...(note.scope === "stage" || note.scope === "route" ? { scope: note.scope } : {}),
     }));
   return notes.length > 0 ? notes : undefined;
 }

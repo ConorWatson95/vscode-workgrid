@@ -27,6 +27,7 @@ import {
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
+import { guidanceFor } from "../domain/stageRefresh";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
@@ -399,9 +400,12 @@ export class PipelineRunner {
       branchName: task.branchName,
       baseBranch: task.baseBranch,
       docsPath: this.docsPath() || undefined,
-      // Every later stage sees it: guidance given at a gate is about the work that
-      // follows, so expiring it at the next stage boundary would waste it.
-      guidance: (task.pipeline?.guidance ?? []).map((note) => note.text),
+      // Every later stage sees an approval note: guidance given at a gate is about the
+      // work that follows, so expiring it at the next stage boundary would waste it.
+      // A send-back's findings and a re-run's reason are not that — they are about one
+      // stage's output, and `guidanceFor` keeps them there. See its comment for the two
+      // failures that produced the distinction.
+      guidance: guidanceFor(task.pipeline, stageId),
       // Withheld on the experiment's other arm, and withheld *here* rather than at
       // recording: the stages still write their handoff blocks and the pipeline still
       // stores them, so the two arms stay comparable on what the stages did and the

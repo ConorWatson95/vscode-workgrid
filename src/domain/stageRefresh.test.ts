@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  guidanceFor,
   refreshPendingStages,
   addMissingStages,
   revertToStage,
@@ -801,5 +802,81 @@ describe("syncHandoffs", () => {
   it("returns the same pipeline when nothing differs", () => {
     const p = existing();
     expect(syncHandoffs(p, source(false), "t1").pipeline).toBe(p);
+  });
+});
+
+/**
+ * Which stages a guidance note is actually handed to.
+ *
+ * Everything used to go to everything, which is right for an approval note and wrong
+ * for the two kinds that came later. Both failures happened on one route in a morning:
+ * a DEV deployment preview was given three reviews' findings that had been fixed two
+ * stages earlier and spent part of its report declining to re-litigate them, and a
+ * re-run was given a correction's bug report about the build it was replacing and
+ * stopped to ask three questions about an exception that no longer existed.
+ */
+describe("guidanceFor", () => {
+  const withNotes = (
+    notes: NonNullable<TaskPipeline["guidance"]>,
+    stages: TaskStage[] = [stage({ id: "build" }), stage({ id: "review" })],
+  ): TaskPipeline => ({ ...pipeline(stages), guidance: notes });
+
+  const note = (overrides: Partial<NonNullable<TaskPipeline["guidance"]>[number]>) => ({
+    id: "g1",
+    stageId: "build",
+    stageName: "Build",
+    text: "note",
+    at: "t",
+    ...overrides,
+  });
+
+  it("gives an approval note to every stage, as it always has", () => {
+    const p = withNotes([note({ text: "use -Project X", scope: "route" })]);
+    expect(guidanceFor(p, "review")).toEqual(["use -Project X"]);
+  });
+
+  it("treats a note with no scope as route-wide", () => {
+    // Pipelines written before the distinction existed keep the behaviour they had.
+    const p = withNotes([note({ text: "legacy" })]);
+    expect(guidanceFor(p, "review")).toEqual(["legacy"]);
+  });
+
+  it("keeps a stage-scoped note away from other stages", () => {
+    const p = withNotes([note({ text: "findings about the build", scope: "stage" })]);
+    expect(guidanceFor(p, "build")).toEqual(["findings about the build"]);
+    expect(guidanceFor(p, "review")).toEqual([]);
+  });
+
+  it("retires a stage-scoped note once its stage has passed", () => {
+    // By then it either worked or came back as a new finding. Either way it is no
+    // longer an instruction, and a re-run of a later stage must not inherit it.
+    const p = withNotes(
+      [note({ text: "fix the cast", scope: "stage" })],
+      [stage({ id: "build", status: "passed" })],
+    );
+    expect(guidanceFor(p, "build")).toEqual([]);
+  });
+
+  it("keeps it while the stage is being redone, which is the point", () => {
+    const p = withNotes(
+      [note({ text: "fix the cast", scope: "stage" })],
+      [stage({ id: "build", status: "active" })],
+    );
+    expect(guidanceFor(p, "build")).toEqual(["fix the cast"]);
+  });
+
+  it("gives a session with no stage only the route-wide notes", () => {
+    // A hand-driven chat is not a stage, and a correction aimed at one has no
+    // meaning there.
+    const p = withNotes([
+      note({ id: "g1", text: "route", scope: "route" }),
+      note({ id: "g2", text: "stage", scope: "stage" }),
+    ]);
+    expect(guidanceFor(p, undefined)).toEqual(["route"]);
+  });
+
+  it("is empty for a pipeline with no guidance", () => {
+    expect(guidanceFor(pipeline([stage({ id: "build" })]), "build")).toEqual([]);
+    expect(guidanceFor(undefined, "build")).toEqual([]);
   });
 });

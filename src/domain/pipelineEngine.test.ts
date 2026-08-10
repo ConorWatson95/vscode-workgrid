@@ -1198,6 +1198,46 @@ describe("work a stage declined", () => {
   const declined = (text = "the export structure is missing on live") =>
     recordDeferrals(route(), "build", [text], "t1");
 
+  /**
+   * An item whose own text names the stage that owns it.
+   *
+   * `DEFERRED` means work no stage owns — that is what makes the hold in front of a
+   * deployment worth stopping for. The prompt says so and nothing checked it, so a DEV
+   * preview declined "actually deploying these 3 files to DEV" while naming the
+   * "Live publish" stage in the same sentence, and settling it asked a human who owns
+   * work whose owner was quoted in the item.
+   */
+  describe("naming the stage that owns it", () => {
+    it("is recorded settled rather than held", () => {
+      const p = recordDeferrals(
+        route(),
+        "build",
+        ['actually publishing these files — the "Live publish" stage does it'],
+        "t1",
+      );
+      const item = (p.deferrals ?? [])[0];
+      expect(item.resolved).toBe(true);
+      expect(item.resolution).toContain("Live publish");
+      expect(nextAction(p).kind).not.toBe("deferredWork");
+    });
+
+    it("is still recorded, because the observation is real", () => {
+      // Dropped, it would vanish entirely: the marker line is stripped out of the
+      // report, so the item is the only place it survives.
+      const p = recordDeferrals(
+        route(),
+        "build",
+        ['the "Live publish" stage does it'],
+        "t1",
+      );
+      expect(p.deferrals).toHaveLength(1);
+    });
+
+    it("leaves an item that names no stage holding the route", () => {
+      expect(nextAction(declined()).kind).toBe("deferredWork");
+    });
+  });
+
   it("holds the route in front of the stage that ships", () => {
     // The reported failure: a live publish halted on a structure nobody created,
     // several stages after the first agent noticed it was missing.

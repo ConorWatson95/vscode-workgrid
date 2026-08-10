@@ -57,6 +57,47 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
   const findings: ReviewFinding[] = [];
   /** The heading a bare list item belongs under, e.g. "## Critical". */
   let heading: FindingSeverity | undefined;
+  /** How many findings the current severity section has produced. */
+  let inSection = 0;
+  /** Unbulleted lines seen in the current section, in case it produces nothing else. */
+  let plain: string[] = [];
+
+  /**
+   * Closes a severity section, falling back to its unbulleted lines if it gave
+   * nothing else.
+   *
+   * The case this exists for cost a real review its whole verdict. A SQL review wrote
+   * "Critical" as a heading and then listed three procedures on plain lines, no
+   * bullets — and `listItem` accepts only a bulleted line or one carrying its own
+   * severity marker, so every one was skipped and the review parsed to *nothing*. The
+   * report shows the reply verbatim when nothing parses, which is deliberate, so three
+   * criticals were on screen while `hasBlockingFindings` saw an empty list and the
+   * route walked past them. The display and the decision disagreed, and only one of
+   * them stops a route.
+   *
+   * Deliberately a *fallback*, not a general rule: it applies only to a section that
+   * would otherwise yield nothing at all. A reviewer who bulleted anything under the
+   * heading is writing prose in between, and reading each line of a wrapped paragraph
+   * as its own critical is the over-count that teaches people to click past the stop.
+   * So one shape or the other per section, never a mix.
+   *
+   * One finding per line rather than the lines joined: merging two real items is worse
+   * than listing one twice, which is the same trade `deferralKey` makes.
+   */
+  const closeSection = () => {
+    if (heading && inSection === 0) {
+      for (const text of plain) {
+        if (!isNothingReported(text)) {
+          findings.push({
+            severity: statedNonBlocking(text) ? "suggestion" : heading,
+            text,
+          });
+        }
+      }
+    }
+    inSection = 0;
+    plain = [];
+  };
 
   for (const rawLine of reply.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -73,12 +114,16 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     // one; otherwise it falls through to the list-item path below, which reports it
     // as its own finding without putting every following bullet under its severity.
     if (asHeading && (!asHeading.rest.trim() || isMarkedHeading(line))) {
+      closeSection();
       heading = asHeading.severity;
       const summary = asHeading.rest.trim();
       // Same guard as the list path below: "**Important**: none" is a section
       // answered, not a problem found.
       if (summary && !isNothingReported(summary)) {
         findings.push({ severity: heading, text: summary });
+        // A heading that carries its own finding has produced one, so the lines
+        // underneath it are that finding's explanation rather than more findings.
+        inSection += 1;
       }
       continue;
     }
@@ -90,12 +135,34 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     // with one blocker was counted as fourteen, which is exactly the direction that
     // matters now that findings hold the route.
     if (looksLikeHeading(line)) {
+      // Inside a severity section that has produced nothing, an *unmarked* heading is
+      // almost certainly a finding rather than a heading. `looksLikeHeading` is loose
+      // by necessity — it has to end a section spelt `**Other review points**` or as a
+      // bare short line — and "p_DescriptionCode line 171" satisfies it exactly: short,
+      // no trailing full stop, no comma. So the very lines this fallback exists to
+      // rescue were being read as section headings and dropped.
+      //
+      // Resolved in favour of keeping the content, because the two errors are not
+      // equal: a heading misread as a finding is visible noise, a critical finding
+      // misread as a heading is a route that does not stop. A marked heading (`##`,
+      // `**bold**`) is unambiguous and still closes the section.
+      if (heading && inSection === 0 && !isMarkedHeading(line)) {
+        plain.push(line);
+        continue;
+      }
+      closeSection();
       heading = undefined;
       continue;
     }
 
     const item = listItem(line);
-    if (item === undefined) continue;
+    if (item === undefined) {
+      // Kept rather than dropped, in case this section turns out to have no bulleted
+      // items at all. Only under a severity heading: a plain line elsewhere is prose,
+      // and there is no severity to give it.
+      if (heading) plain.push(line);
+      continue;
+    }
 
     // An inline marker wins over the heading: a "(minor)" inside a list under
     // "Critical" is the writer correcting themselves, and taking the heading
@@ -111,8 +178,13 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     // itself. See `isNothingReported` for why the guard is as narrow as it is.
     if (text && !isNothingReported(text)) {
       findings.push({ severity: statedNonBlocking(text) ? "suggestion" : severity, text });
+      // Counted only when the item belongs to the section: an inline "(minor)" under
+      // "Critical" is its own classification, but it still means this section is
+      // written as a list, which is what suppresses the plain-line fallback.
+      inSection += 1;
     }
   }
+  closeSection();
 
   return findings;
 }

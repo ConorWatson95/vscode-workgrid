@@ -20,6 +20,7 @@ import {
   producesChecklist,
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
+import { ownedByPendingStage, ownedByStageResolution } from "./deferralOwnership";
 import {
   InterventionKind,
   InterventionRecord,
@@ -1053,12 +1054,25 @@ export function recordDeferrals(
     const key = deferralKey(text);
     if (!text || seen.has(key)) continue;
     seen.add(key);
+    // An item whose own text names the stage that owns it is not a deferral. It is
+    // recorded, because the observation is real and belongs in the report, but settled
+    // on sight: holding the route to ask a human who owns work whose owner is quoted in
+    // the item is pure noise, and it is the noise that made a real task accumulate 40
+    // declined items, 27 of them the same four observations reworded.
+    const owner = ownedByPendingStage(text, pipeline, stageId);
     added.push({
       id: `d${existing.length + added.length + 1}`,
       text,
       raisedByStage: stageId,
       raisedByStageName: stage.name,
       at,
+      ...(owner
+        ? {
+            resolved: true,
+            resolution: ownedByStageResolution(owner),
+            resolvedAt: at,
+          }
+        : {}),
     });
   }
   if (added.length === 0) return pipeline;

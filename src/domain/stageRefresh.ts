@@ -304,6 +304,12 @@ export function revertToStage(
                 stageName: pipeline.stages[index].name,
                 text: note,
                 at: discard!.at,
+                // The reason this stage is being redone, which stops meaning anything
+                // once it has been. Delivered route-wide it outlived the run it
+                // described: a re-run inherited a correction's bug report about the
+                // build it was replacing and stopped to ask about an exception that no
+                // longer existed.
+                scope: "stage" as const,
               },
             ],
           }
@@ -311,6 +317,50 @@ export function revertToStage(
     },
     reopened,
   };
+}
+
+/**
+ * The guidance a given stage should actually be given.
+ *
+ * Everything used to reach every stage, which is right for an approval note and wrong
+ * for the two kinds that arrived later. A send-back's findings and a re-run's reason
+ * are about one stage's output; delivered to the whole route they become permanent,
+ * outrank each later stage's brief, and describe work that has since been redone.
+ *
+ * Both failures happened on the same route in one morning. A DEV deployment preview was
+ * handed three reviews' findings, already fixed two stages earlier, and spent part of
+ * its report declining to re-litigate them. Then a re-run of an implementation stage was
+ * handed a correction's finding about the build it had just replaced, and stopped to ask
+ * three questions about an exception that no longer existed.
+ *
+ * A stage-scoped note is delivered only to the stage it names, and only while that stage
+ * is unresolved: once it has passed, the note either worked or came back as a new
+ * finding, and in neither case is it an instruction any more.
+ *
+ * The UI has always agreed with this — `stageReport` filters guidance to the stage it
+ * was filed against — so what changed is that the runtime now matches what the report
+ * claims a stage was told.
+ */
+export function guidanceFor(
+  pipeline: TaskPipeline | undefined,
+  stageId: string | undefined,
+): string[] {
+  const notes = pipeline?.guidance ?? [];
+  if (!stageId) {
+    // No stage in hand — a plain chat session rather than a stage run. Route-wide
+    // notes only: a correction aimed at one stage has no meaning here.
+    return notes.filter((note) => note.scope !== "stage").map((note) => note.text);
+  }
+  const stage = pipeline?.stages.find((s) => s.id === stageId);
+  return notes
+    .filter((note) => {
+      if (note.scope !== "stage") return true;
+      if (note.stageId !== stageId) return false;
+      // A stage-scoped note that has already done its job. Kept on the pipeline for
+      // the record and for the report; simply not handed to a session again.
+      return stage?.status !== "passed" && stage?.status !== "skipped";
+    })
+    .map((note) => note.text);
 }
 
 /**
@@ -473,6 +523,11 @@ export function sendBackToStage(
           stageName: target.name,
           text,
           at: input.at,
+          // For the stage being redone, not for the route. These are findings about
+          // one stage's output: once it has been redone they are answered, and a
+          // deployment preview four stages later reading them as live instructions
+          // is how one stage spent its report declining to re-litigate them.
+          scope: "stage" as const,
         },
       ],
     },

@@ -202,6 +202,17 @@ gates, evidence and durable state outrank per-task speed.
 - `domain/taskPipeline.ts` — live state; plain JSON, round-trips through the repo.
 - `domain/pipelineEngine.ts` — pure transitions. `nextAction()` reports what to do
   next; callers report back what happened. The engine never runs anything.
+- **A severity section written without bullets still counts** (`parseReviewFindings`).
+  `listItem` accepts only a bulleted line or one carrying its own severity marker, so a
+  SQL review that headed a section "Critical" and listed three procedures on plain lines
+  parsed to *nothing* — while the report, which shows the reply verbatim when nothing
+  parses, displayed them. Three criticals on screen, an empty list in the decision, and a
+  route that carried straight on. A section that yields nothing else falls back to its
+  plain lines; a section with any bulleted item does not, because reading each line of a
+  wrapped paragraph as its own critical is the over-count that teaches people to click
+  past the stop. Inside such a section an *unmarked* heading is taken as a finding too:
+  `looksLikeHeading` is loose by necessity, and "p_DescriptionCode line 171" satisfies it
+  exactly.
 - `domain/reviewRules.ts` — the matcher. **The extension ships no rules of its
   own** (`NO_REVIEW_RULES` is empty): which changes oblige which reviews is a
   property of a specific codebase, so a project with no rules file requires
@@ -340,6 +351,19 @@ sessions are invisible":
   meaning is one the prompts have no way to rank against the first. Escape cancels the
   re-run rather than meaning "no reason" — the box is the first thing shown, so
   dismissal must not lead to a destructive confirmation.
+- **Guidance is scoped, because not all of it is advice** (`guidanceFor`,
+  `GuidanceNote.scope`). Everything used to reach every stage, which is what an approval
+  note means and not what the two later kinds are. A send-back's findings and a re-run's
+  reason are about *one stage's output*; delivered route-wide they become permanent and
+  outrank each later stage's brief. Both halves of that bit in one morning: a DEV
+  deployment preview was handed three reviews' findings fixed two stages earlier and
+  spent part of its report declining to re-litigate them, and a re-run inherited a
+  correction's bug report about the build it was replacing and stopped to ask three
+  questions about an exception that no longer existed. Stage-scoped notes go to their
+  stage only, and only while it is unresolved — once it has passed the note either worked
+  or came back as a new finding. Absent scope means route-wide, so existing pipelines are
+  unchanged. The UI had always agreed: `stageReport` filters guidance by stage for
+  display, so the report claimed a stage was told less than it was.
 - **Approval notes** (`TaskPipeline.guidance`) — approving asks for an optional
   note. It is cumulative, handed to every later stage via `StageContext.guidance`,
   and the prompt says it outranks the brief. The gate is the one moment a human has
@@ -540,6 +564,16 @@ noticed it was missing.
   owns it, the stage **asks** — at the moment it finds the gap, with the context that
   found it, at the cheapest point the work could simply be done — and only falls back to
   the marker if it cannot ask.
+- **An item that names its own owner is settled on sight** (`domain/deferralOwnership.ts`).
+  `DEFERRED` means work no stage owns; the prompt says so, and nothing checked it. A DEV
+  preview declined "actually deploying these 3 files to DEV" while naming the
+  `Deploy to DEV` stage in the same sentence — a stage the pipeline lists as pending two
+  rows below — so settling it asked a human who owns work whose owner was quoted in the
+  item. Recorded, never dropped: the marker line is stripped from the report, so the item
+  is the only place the observation survives. Deliberately narrow — the name must be
+  quoted or sit beside the word "stage", because auto-settling a genuinely ownerless item
+  is the failure the whole mechanism exists to prevent, while a redundant one costs a
+  sentence.
 - **Deduplicated on a normalised key, across every stage** (`deferralKey`). The item is
   the work; it does not become different work because another stage noticed it or a
   re-run reworded it. Backticks, parentheticals, digits and everything after an em-dash
