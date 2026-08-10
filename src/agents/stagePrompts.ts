@@ -382,7 +382,14 @@ still have the context that found it: use your question tool if you have one, an
 plainly — what you found, what you would do about it, and that no stage of this route
 covers it. Then do what the answer says, including doing the work here if that is the
 answer. Only if you cannot ask, write it as
-"${DEFERRED_MARKER} <what needs doing, and why no stage covers it>", one line per item.
+"${DEFERRED_MARKER} <the work that needs doing>", one line per item.
+
+Write that line as **the work, not the argument for it**: one short sentence naming
+the thing somebody has to do, under about twenty words, no evidence and no history.
+It is shown to a person in a single-line box asking who owns it, and a paragraph
+there is five lines of reasoning to read before answering a question they usually
+already know the answer to. Put the evidence in your report, where there is room for
+it — the two are shown together.
 
 The difference is the whole point, and getting it wrong the second way is expensive.
 Work that belongs to nobody, written down as declined, reads to the operator exactly

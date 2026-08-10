@@ -518,6 +518,14 @@ noticed it was missing.
   stage declined the work was the knowledge of who owns it, so silence would
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as
   that stage's checklist items are discarded.
+- **The item is a question's label, not the record** (`domain/deferralText.ts`). The
+  settlement box is a single-line input with the item as its prompt, so a stage that
+  wrote a paragraph turns "who owns this?" into five lines of argument to read first —
+  and the answer is usually already known. `deferralHeadline` shows the first sentence,
+  capped, and says where the rest is; truncating is only safe *because* the full text
+  is in the stage report, which is why the prompt and the skill now ask for the **work,
+  not the argument** — under about twenty words, evidence in the report where there is
+  room for it.
 
 ### Work a stage was told to do and didn't
 

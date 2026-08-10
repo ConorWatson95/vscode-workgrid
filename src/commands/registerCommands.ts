@@ -14,6 +14,7 @@ import {
   syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
+import { deferralHeadline, isAbridged } from "../domain/deferralText";
 import { rowTask } from "../ui/rowTask";
 import { HANDOFF_EXPERIMENT } from "../domain/pipelineExperiment";
 import {
@@ -1277,10 +1278,12 @@ async function approveStageCommand(
   const declined = outstandingDeferrals(approved).filter(
     (item) => item.raisedByStage === arg.stage.id,
   );
-  for (const item of declined) {
+  for (const [index, item] of declined.entries()) {
     const resolution = await vscode.window.showInputBox({
-      title: `"${arg.stage.name}" declined this as belonging elsewhere`,
-      prompt: item.text,
+      title:
+        `"${arg.stage.name}" declined this as belonging elsewhere` +
+        (declined.length > 1 ? ` (${index + 1} of ${declined.length})` : ""),
+      prompt: askingLine(item.text),
       placeHolder:
         "Who owns this, or why it needs nobody — e.g. the promote stage does it; live-only by design",
       ignoreFocusOut: true,
@@ -1880,6 +1883,17 @@ async function offerWorktreeCleanupCommand(
 }
 
 /**
+ * The label for a settlement box: one line, and a pointer to the rest when there is
+ * more. A single-line input with a paragraph attached is the operator reading an
+ * argument to answer a question they usually already know the answer to.
+ */
+function askingLine(text: string): string {
+  return isAbridged(text)
+    ? `${deferralHeadline(text)}  —  full text in the stage report`
+    : deferralHeadline(text);
+}
+
+/**
  * Works through the items every stage declined, one at a time.
  *
  * Each needs a sentence, not a tick. The reason a live publish halted on a
@@ -1896,10 +1910,13 @@ async function settleDeferralsCommand(
   if (!task?.pipeline) return;
 
   const pipeline = task.pipeline;
-  for (const item of outstandingDeferrals(pipeline)) {
+  const items = outstandingDeferrals(pipeline);
+  for (const [index, item] of items.entries()) {
     const resolution = await vscode.window.showInputBox({
-      title: `Declined by "${item.raisedByStageName}"`,
-      prompt: item.text,
+      title:
+        `Declined by "${item.raisedByStageName}"` +
+        (items.length > 1 ? ` (${index + 1} of ${items.length})` : ""),
+      prompt: askingLine(item.text),
       placeHolder:
         "Who owns this, or why it needs nobody — e.g. live-only by design; the publish stage creates it",
       ignoreFocusOut: true,

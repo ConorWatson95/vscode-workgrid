@@ -96,6 +96,11 @@ So: one line per item, describing the work rather than your reasoning about it. 
 export needs a matching staging table" is actionable. "This may be out of scope" is
 not.
 
+Keep it under about twenty words. That line is shown to a person in a single-line box
+asking who owns the work, so evidence, history and the three findings that led you
+here belong in your report instead — the two are shown together, and the box is a
+question, not the record.
+
 ## When you hand something forward
 
 A handoff is read by a stage that has never seen this repository. Write it for that
