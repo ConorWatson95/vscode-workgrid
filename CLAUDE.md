@@ -343,6 +343,34 @@ sessions are invisible":
   read and rewritten whole — and truncation is announced, since output that just
   stops reads as the command having stopped.
 
+### Correcting a stage instead of demolishing it
+
+The gear the harness was missing, and the reason acting on a review finding had
+become irrational. Every correction was stage-granular: `revertToStage` discards the
+stage and everything after it, so a one-line cast error and a wrong approach cost the
+same — on a real route, **$12.48 and 44 minutes and 15M cached tokens to change a
+type**. The only repair tool was demolition, so the cheapest response to a finding was
+to ignore it.
+
+`correctStage` (`pipelineEngine.ts`) appends a **correction subtask** carrying the
+finding, and **keeps everything the stage already produced** — replies, activity, cost.
+`Subtask.correction` marks it, so a stage fixed three times is distinguishable from one
+split into three units. The stage's `verdict` and `verification` are dropped, because
+both were about the version being corrected.
+
+`correctionPrompt` is where the saving is: the session is handed **the stage's own
+previous report** and told what is wrong with it, so it does not re-read the ticket,
+re-derive the codebase or re-decide an approach. The instruction is deliberately
+*narrowing* — left to itself a capable model treats a finding as an invitation to
+improve the surrounding code, and a correction that rewrites half the stage costs what
+the re-run cost *and* invalidates the reviews that had passed the rest. A fix that needs
+a change of approach is told to stop and say so: that is a re-run, and a human's call.
+
+Later stages are still re-opened, exactly as a revert re-opens them — they ran against
+output that just changed. That is affordable because those are the cheap ones: on
+`report-change`, 4 of 20 stages are implementation and carry nearly all the cost; the
+other 16 are gates, promotions and reviews, and the gates are free.
+
 ### Work that was already under way
 
 Three entry points, because pre-existing work arrives in three shapes and only one of

@@ -53,6 +53,15 @@ export interface Subtask {
   reply?: string;
   /** What the subtask actually did: tools, commands, files, output. */
   activity?: SubtaskActivity;
+  /**
+   * Set when this subtask is a repair of the stage rather than part of its plan.
+   *
+   * Kept so a stage that took three goes is distinguishable from one split into
+   * three units, and so the correction session can be given a different prompt —
+   * it is handed the stage's own previous report and told what is wrong with it,
+   * which is the entire reason a correction costs a fraction of a re-run.
+   */
+  correction?: { finding: string; at: string };
 }
 
 /**

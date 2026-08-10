@@ -46,6 +46,7 @@ import {
 import {
   StageContext,
   assessmentPrompt,
+  correctionPrompt,
   behaviourReviewPrompt,
   parseAssessments,
   parseChecklistReply,
@@ -842,8 +843,17 @@ export class PipelineRunner {
 
     // A behaviour review is asked for a checklist, an assessment for a reading of
     // what already exists; everything else does the work.
-    const prompt =
-      stage.kind === "assessment"
+    // A correction outranks the stage's kind. Even a review being corrected is being
+    // *repaired*, not re-run, and asking it for a fresh review would discard the
+    // reading that the correction is an amendment to.
+    const prompt = subtask.correction
+      ? correctionPrompt(
+          context,
+          stage,
+          subtask.correction.finding,
+          previousReport(stage, subtask.id),
+        )
+      : stage.kind === "assessment"
         ? assessmentPrompt(context, stage)
         : producesChecklist(stage.kind)
           ? behaviourReviewPrompt(context, stage)
@@ -1387,6 +1397,29 @@ function distilHandoff(block: string): string {
     // above decides what goes rather than a blind cut at the boundary.
     maxChars: MAX_HANDOFF_CHARS - 100,
   });
+}
+
+/**
+ * What the stage said before this correction, for the correction to start from.
+ *
+ * Every subtask except the correction itself, including earlier corrections — a
+ * stage fixed twice has to see the first fix, or the second undoes it.
+ *
+ * This is the whole economy of a correction: a re-run is expensive because it
+ * re-derives what the stage already worked out, and this is that working-out.
+ */
+function previousReport(stage: TaskStage, exceptSubtaskId: string): string {
+  return stage.subtasks
+    .filter((subtask) => subtask.id !== exceptSubtaskId)
+    .map((subtask) =>
+      subtask.reply?.trim()
+        ? stage.subtasks.length > 2
+          ? `**${subtask.title}:** ${subtask.reply.trim()}`
+          : subtask.reply.trim()
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /** Folds a verification into a subtask's activity, creating one if it had none. */

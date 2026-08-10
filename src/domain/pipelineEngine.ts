@@ -46,6 +46,7 @@ export type PipelineError =
   | { kind: "unknownStage"; message: string }
   | { kind: "unknownSubtask"; message: string }
   | { kind: "notSplittable"; message: string }
+  | { kind: "notCorrectable"; message: string }
   | { kind: "emptySplit"; message: string }
   | { kind: "alreadyPlanned"; message: string }
   | { kind: "alreadyResolved"; message: string }
@@ -510,6 +511,111 @@ export interface SubtaskSpec {
  * re-planning a stage that already has subtasks — retries go through
  * `retryStage`, which clears them explicitly.
  */
+/**
+ * Adds a targeted fix to a stage that has already run, instead of discarding it.
+ *
+ * The gear the harness was missing. Every correction was stage-granular: a one-line
+ * cast error and a fundamentally wrong implementation both cost a full re-run of the
+ * stage from cold — on one real route, $12.48 and 44 minutes and 15M tokens of
+ * re-derived context, to change a type. So the only repair tool was demolition, and
+ * the rational response to a review finding became "don't act on it".
+ *
+ * What makes this cheap is what it *keeps*. The stage's existing subtasks, replies
+ * and activity all stay: the correction session is given the stage's own previous
+ * report and told what is wrong with it, so it does not re-plan, re-read the ticket
+ * or rediscover the codebase. The cost of the original run stays on the record too,
+ * which a revert would have erased.
+ *
+ * Later stages are still re-opened, exactly as a revert re-opens them — they ran
+ * against output that has just changed, and their evidence is no longer about this
+ * work. That is affordable precisely because those stages are the cheap ones: on the
+ * route this came from, four implementation stages carried the cost and the other
+ * sixteen were gates, promotions and reviews.
+ */
+export function correctStage(
+  pipeline: TaskPipeline,
+  stageId: string,
+  correction: { finding: string; at: string; title?: string },
+): Result<TaskPipeline, PipelineError> {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) return err(unknownStage(stageId));
+
+  const stage = pipeline.stages[index];
+  if (!stage.subtasks.some((subtask) => subtask.reply || subtask.activity)) {
+    return err({
+      kind: "notCorrectable",
+      message:
+        `"${stage.name}" has not produced anything to correct. Run it first, or ` +
+        "send the findings back to a stage that has.",
+    });
+  }
+  const finding = correction.finding.trim();
+  if (!finding) {
+    return err({
+      kind: "notCorrectable",
+      message: "A correction needs to say what is wrong; there is nothing to act on.",
+    });
+  }
+
+  const corrections = stage.subtasks.filter((s) => s.correction).length;
+  const fix: Subtask = {
+    id: `${stage.id}-fix-${corrections + 1}`,
+    // Numbered, because a stage corrected twice is a signal in its own right: the
+    // second attempt at the same finding usually means the finding was misread.
+    title: correction.title?.trim() || `Correction ${corrections + 1}`,
+    prompt: finding,
+    status: "pending",
+    // Marks this as a repair rather than part of the stage's original plan, so a
+    // reader can tell a stage that took three goes from one split into three units.
+    correction: { finding, at: correction.at },
+  };
+
+  const stages = pipeline.stages.map((s, at) => {
+    if (at < index) return s;
+    if (at > index) {
+      // Re-opened like a revert: they ran against output that has just changed.
+      return {
+        ...s,
+        status: "pending" as const,
+        startedAt: undefined,
+        finishedAt: undefined,
+        checklist: undefined,
+        planSteps: undefined,
+        verification: undefined,
+        subtasks: s.subtasks.map((subtask) => ({
+          ...subtask,
+          status: "pending" as const,
+          startedAt: undefined,
+          finishedAt: undefined,
+          failureReason: undefined,
+          sessionId: undefined,
+          reply: undefined,
+          activity: undefined,
+        })),
+      };
+    }
+    // The corrected stage keeps everything it did. Only its own settlement is undone.
+    return {
+      ...s,
+      status: "pending" as const,
+      finishedAt: undefined,
+      // Its verdict and verification were about the version being corrected.
+      verdict: undefined,
+      verification: undefined,
+      blocked: undefined,
+      subtasks: [...s.subtasks, fix],
+    };
+  });
+
+  return ok({
+    ...pipeline,
+    stages,
+    currentStage: stage.id,
+    pendingQuestion: undefined,
+    pendingDenials: undefined,
+  });
+}
+
 export function planStage(
   pipeline: TaskPipeline,
   stageId: string,

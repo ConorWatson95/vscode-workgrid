@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
-import { ruleInsertionIndex } from "../domain/pipelineEngine";
+import { correctStage, ruleInsertionIndex } from "../domain/pipelineEngine";
 import {
   refreshPendingStages,
   addMissingStages,
@@ -124,6 +124,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
+    register("taskWorkspaces.correctStage", (arg) => correctStageCommand(ctx, arg)),
     register("taskWorkspaces.setExperimentArm", (arg) => setExperimentArmCommand(ctx, arg)),
     register("taskWorkspaces.compareRuns", (arg) => compareRunsCommand(ctx, arg)),
     register("taskWorkspaces.sendBackToStage", (arg) => sendBackToStageCommand(ctx, arg)),
@@ -644,6 +645,86 @@ async function showStageReportCommand(
     // The built-in markdown extension can be disabled. The document is still
     // read-only, so the fallback loses the rendering and nothing else.
     await vscode.window.showTextDocument(document, { preview: true });
+  }
+}
+
+/**
+ * Fixes one thing in a stage that has already run, instead of re-running it.
+ *
+ * The alternative was always demolition: `revertToStage` discards the stage and
+ * everything after it, so a one-line cast error cost the same as a wrong approach —
+ * on one real route, a $12.48 stage re-run from cold to change a type. Which made
+ * the rational response to a review finding "do not act on it".
+ */
+async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop it before correcting a stage.`,
+    );
+    return;
+  }
+
+  const stage = task.pipeline.stages.find((s) => s.id === arg.stage.id) ?? arg.stage;
+  const finding = await vscode.window.showInputBox({
+    title: `What needs fixing in "${stage.name}"?`,
+    prompt: "The stage keeps everything else it did and fixes only this.",
+    placeHolder:
+      'e.g. "Specified cast is not valid" opening the report — the grid reads TotalValue as int',
+    ignoreFocusOut: true,
+    validateInput: (value) =>
+      value.trim().length === 0 ? "Say what is wrong, or press Escape." : undefined,
+  });
+  if (!finding) return;
+
+  const later = task.pipeline.stages
+    .slice(task.pipeline.stages.findIndex((s) => s.id === stage.id) + 1)
+    .filter((s) => s.status !== "pending").length;
+  const confirmed = await vscode.window.showWarningMessage(
+    `Fix this in "${stage.name}"?`,
+    {
+      modal: true,
+      detail:
+        `"${stage.name}" keeps what it already produced — its report, its cost and its ` +
+        "work — and gets one more session that changes only what you named.\n\n" +
+        (later > 0
+          ? `${later} later stage(s) will be re-opened, because they ran against output that is about to change.`
+          : "No later stage has run yet, so nothing else is discarded."),
+    },
+    "Fix It",
+  );
+  if (confirmed !== "Fix It") return;
+
+  const corrected = correctStage(task.pipeline, stage.id, {
+    finding,
+    at: new Date().toISOString(),
+  });
+  if (!corrected.ok) {
+    void vscode.window.showWarningMessage(corrected.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: corrected.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(`Harness [${task.name}] correcting "${stage.name}": ${finding.trim()}`);
+
+  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+    return;
+  }
+  const next = await vscode.window.showInformationMessage(
+    `"${stage.name}" will fix that on the next advance.`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
   }
 }
 

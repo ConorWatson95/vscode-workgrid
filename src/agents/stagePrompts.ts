@@ -700,6 +700,58 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
 }
 
 /** How an assessment stage reports on one stage of the route. */
+/**
+ * Prompt for repairing a stage that has already run, rather than re-running it.
+ *
+ * The whole economy of this rests on one thing: the session is given the stage's own
+ * previous report. A re-run is expensive because it re-reads the ticket, re-derives
+ * the codebase and re-decides an approach that was already decided — on one route
+ * that was 15M cached tokens and 44 minutes to change a type. A correction starts
+ * from what was built and what is wrong with it.
+ *
+ * So the instruction is narrowing, not motivating. Left to itself a capable model
+ * treats a finding as an invitation to improve the surrounding code, and a
+ * correction that rewrites half the stage costs what the re-run cost and invalidates
+ * the reviews that had passed the rest.
+ */
+export function correctionPrompt(
+  context: StageContext,
+  stage: TaskStage,
+  finding: string,
+  previousReport: string,
+): string {
+  return [
+    preamble(context, stage),
+    "",
+    "## This stage has already run. You are fixing one thing in what it produced.",
+    "",
+    "You are not re-running the stage and not starting again. The work below exists;",
+    "something specific about it is wrong, and your job is the smallest change that",
+    "makes it right.",
+    "",
+    "### What is wrong",
+    "",
+    finding.trim(),
+    "",
+    "### What this stage reported when it ran",
+    "",
+    previousReport.trim() || "_It recorded no report._",
+    "",
+    "### How to do this",
+    "",
+    "Go straight to the code the finding names. Do not re-read the ticket, re-derive",
+    "the approach, or re-check work the finding does not mention — reviews have",
+    "already passed the rest of this stage, and changing it invalidates them for no",
+    "reason. If the fix turns out to need a change of approach rather than a change",
+    "of code, say so and stop: that is a re-run, and it is a decision for the person",
+    "who asked for this, not for you.",
+    "",
+    "Report what you changed and why, in a few lines. If the finding was wrong — the",
+    "code already does what it says is missing — say that instead of changing",
+    "something to satisfy it.",
+  ].join("\n");
+}
+
 export const ASSESSED_MARKER = "ASSESSED:";
 
 /**

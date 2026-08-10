@@ -10,6 +10,7 @@ import {
   ruleInsertionIndex,
   recordHandoff,
   handoffsBefore,
+  correctStage,
   recordDeferrals,
   recordActions,
   outstandingDeferrals,
@@ -1773,5 +1774,86 @@ describe("assessing work that already exists", () => {
     };
     const approved = must(approveStage(heldReview, "review", "2026-08-07T09:00:00Z"));
     expect(approved.stages.find((s) => s.id === "build")?.status).toBe("pending");
+  });
+});
+
+describe("correctStage", () => {
+  const ran = (): TaskPipeline =>
+    ({
+      routeId: "report-change",
+      stages: [
+        {
+          id: "implement", name: "Implement", kind: "implementation", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          verdict: "pass" as const,
+          verification: { command: "npm test", exitCode: 0, at: "t0" },
+          subtasks: [{
+            id: "implement-1", title: "Implement", prompt: "p", status: "done" as const,
+            reply: "Added the grid and the proc.",
+            activity: { costUsd: 12.48 },
+          }],
+        },
+        {
+          id: "review", name: "Code review", kind: "codeReview", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          subtasks: [{
+            id: "review-1", title: "Review", prompt: "p", status: "done" as const,
+            reply: "Looks fine.", activity: { costUsd: 2.49 },
+          }],
+        },
+      ],
+    }) as TaskPipeline;
+
+  it("keeps what the stage already did, including its cost", () => {
+    // The entire economy of a correction. A revert clears reply and activity, so the
+    // fix session rediscovers everything and the record of what the first run cost
+    // disappears with it.
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const stage = p.stages[0];
+    expect(stage.subtasks[0].reply).toBe("Added the grid and the proc.");
+    expect(stage.subtasks[0].activity?.costUsd).toBe(12.48);
+    expect(stage.subtasks).toHaveLength(2);
+  });
+
+  it("adds the fix as a pending subtask carrying the finding", () => {
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const fix = p.stages[0].subtasks[1];
+    expect(fix.status).toBe("pending");
+    expect(fix.correction).toEqual({ finding: "wrong cast", at: "t1" });
+    expect(p.stages[0].status).toBe("pending");
+  });
+
+  it("drops the stage's verdict and verification, which were about the old version", () => {
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    expect(p.stages[0].verdict).toBeUndefined();
+    expect(p.stages[0].verification).toBeUndefined();
+  });
+
+  it("re-opens later stages, which ran against output that is about to change", () => {
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    expect(p.stages[1].status).toBe("pending");
+    expect(p.stages[1].subtasks[0].reply).toBeUndefined();
+  });
+
+  it("numbers corrections, because a second go at one finding is a signal", () => {
+    let p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    p.stages[0].subtasks[1].status = "done";
+    p.stages[0].subtasks[1].reply = "Cast fixed.";
+    p = must(correctStage(p, "implement", { finding: "still wrong", at: "t2" }));
+    expect(p.stages[0].subtasks.map((s) => s.title)).toEqual([
+      "Implement", "Correction 1", "Correction 2",
+    ]);
+  });
+
+  it("refuses a stage that has produced nothing to correct", () => {
+    const fresh = ran();
+    fresh.stages[0].subtasks[0].reply = undefined;
+    fresh.stages[0].subtasks[0].activity = undefined;
+    const result = correctStage(fresh, "implement", { finding: "x", at: "t1" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses an empty finding, which gives the session nothing to act on", () => {
+    expect(correctStage(ran(), "implement", { finding: "   ", at: "t1" }).ok).toBe(false);
   });
 });
