@@ -461,11 +461,21 @@ noticed it was missing.
   severities: the heading is chosen once at the top, the sentence is the reviewer ruling
   on that item having done the work. Downgraded, never dropped — "watch the execution
   time on the first live run" must survive to the report.
-- **Ask when no stage owns it; decline only when one does.** The prompt used to ask for
-  `DEFERRED` in both cases, which made them indistinguishable to the operator confirming
-  them — and the second is the case that halted a live publish. A stage with `ask_user`
-  now asks at the moment it finds the gap, when it still has the context that found it
-  and is the cheapest point at which the work can just be done.
+- **`DEFERRED` is only for work no stage owns**, which is what the engine always meant
+  by it. A stage that can name the owning stage says so in its report and moves on: the
+  marker holds the route until a human writes a sentence about ownership, and asking
+  that when the stage has just established the route owns it is pure noise. A real task
+  reached **40 declined items, 27 of them four observations** reworded by each stage
+  that noticed them, every one naming the stage that already owned it. Where no stage
+  owns it, the stage **asks** — at the moment it finds the gap, with the context that
+  found it, at the cheapest point the work could simply be done — and only falls back to
+  the marker if it cannot ask.
+- **Deduplicated on a normalised key, across every stage** (`deferralKey`). The item is
+  the work; it does not become different work because another stage noticed it or a
+  re-run reworded it. Backticks, parentheticals, digits and everything after an em-dash
+  are dropped — that tail is the stage's guess at an owner, and two stages guessing
+  differently about one item is not two items. Deliberately *not* fuzzy matching:
+  merging two real items is worse than listing one twice.
 - Settling one **requires a sentence**, not a tick. What was missing when every
   stage declined the work was the knowledge of who owns it, so silence would
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as

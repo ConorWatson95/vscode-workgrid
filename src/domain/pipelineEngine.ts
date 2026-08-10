@@ -935,15 +935,18 @@ export function recordDeferrals(
   if (!stage) return pipeline;
 
   const existing = pipeline.deferrals ?? [];
-  const seen = new Set(
-    existing.filter((d) => d.raisedByStage === stageId).map((d) => d.text),
-  );
+  // Across every stage, not just this one. The item is the *work*; it does not become
+  // different work because a different stage noticed it. One task carried the same
+  // "the preview is stale" observation eleven times, raised by four stages and by
+  // three re-runs of two of them, and the one item nobody owned was lost among them.
+  const seen = new Set(existing.map((d) => deferralKey(d.text)));
 
   const added: DeferralItem[] = [];
   for (const raw of texts) {
     const text = raw.trim().slice(0, MAX_DEFERRAL_CHARS);
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
+    const key = deferralKey(text);
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
     added.push({
       id: `d${existing.length + added.length + 1}`,
       text,
@@ -954,6 +957,34 @@ export function recordDeferrals(
   }
   if (added.length === 0) return pipeline;
   return { ...pipeline, deferrals: [...existing, ...added] };
+}
+
+/**
+ * A deferral's identity, for telling the same observation from a second one.
+ *
+ * Exact text failed because each stage rewords what it saw, and a re-run reworded it
+ * again: "`ec-preview.md` is stale relative to the current artifact (Addendum 6 step
+ * 61)" and "…(Addendum 7 step 66)" are one fact, filed twice.
+ *
+ * So the volatile parts go: backticks and quoting, parenthetical asides, digits, and
+ * anything after an em-dash — which is where a stage puts its guess at who owns the
+ * work, and two stages guessing differently about one item is not two items.
+ *
+ * Deliberately not fuzzy matching. This normalises away the things that demonstrably
+ * varied; it does not try to judge whether two different sentences mean the same
+ * thing, because merging two real items is worse than listing one twice.
+ */
+function deferralKey(text: string): string {
+  return text
+    .toLowerCase()
+    // The owner guess, and the justification after it.
+    .split(/\s[—–]\s|\s--\s/)[0]
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[`'"*_]/g, "")
+    .replace(/\d+/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

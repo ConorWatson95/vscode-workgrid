@@ -370,16 +370,19 @@ If you find work that has not been done and is not yours, what to do depends ent
 on whether any stage of the workflow above owns it. Decide that first — the route is
 listed for you, with each stage's objective.
 
-**A later stage clearly owns it.** Do not do it, do not fold it into a checklist item,
-and do not ask about it. Write it on its own line as
-"${DEFERRED_MARKER} <what needs doing, and which stage you think owns it>", one line
-per item. This is routine and costs the operator nothing to confirm.
+**A later stage clearly owns it.** Say so in your report, in a sentence, and move on.
+Do **not** mark it "${DEFERRED_MARKER}". That marker holds the route until a human
+writes a sentence about who owns each item — and you have just established that the
+route already owns it, so the answer is on the screen and the question is noise. One
+task accumulated forty of these, thirty of them the same four observations reworded
+by each stage that noticed them, and the real item was somewhere in the middle.
 
-**No stage owns it.** Ask, now, while you still have the context that found it. Use
-your question tool if you have one; otherwise say so and stop rather than guessing.
-Ask plainly: what you found, what you would do about it, and that no stage of this
-route covers it. Then do what the answer says — including doing the work here, if
-that is the answer.
+**No stage owns it.** This is the only case the marker is for. Ask first, while you
+still have the context that found it: use your question tool if you have one, and ask
+plainly — what you found, what you would do about it, and that no stage of this route
+covers it. Then do what the answer says, including doing the work here if that is the
+answer. Only if you cannot ask, write it as
+"${DEFERRED_MARKER} <what needs doing, and why no stage covers it>", one line per item.
 
 The difference is the whole point, and getting it wrong the second way is expensive.
 Work that belongs to nobody, written down as declined, reads to the operator exactly

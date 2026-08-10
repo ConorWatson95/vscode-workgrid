@@ -585,7 +585,7 @@ describe("declining work that belongs to another stage", () => {
     // and the work surfaced at a live publish.
     const prompt = subtaskPrompt(CONTEXT, stage(), sub);
     expect(prompt).toContain("DEFERRED:");
-    expect(prompt).toContain("one line\nper item");
+    expect(prompt).toContain("one line per item");
   });
 
   it("tells a stage to ask when no stage owns the work, rather than decline it", () => {
@@ -596,7 +596,18 @@ describe("declining work that belongs to another stage", () => {
     const prompt = subtaskPrompt(CONTEXT, stage(), sub);
     expect(prompt).toContain("A later stage clearly owns it");
     expect(prompt).toContain("No stage owns it");
-    expect(prompt).toMatch(/Ask, now, while you still have the context/);
+    expect(prompt).toMatch(/Ask first, while you\s+still have the context/);
+  });
+
+  it("reserves the marker for work no stage owns", () => {
+    // The inflation this caused: one task carried forty declined items, thirty of
+    // them the same four observations reworded by each stage that noticed them —
+    // every one naming the stage that already owned it. A marker that holds the route
+    // until a human writes a sentence about ownership is noise when the stage has
+    // just established that the route owns it.
+    const prompt = subtaskPrompt(CONTEXT, stage(), sub);
+    expect(prompt).toMatch(/Say so in your report, in a sentence, and move on/);
+    expect(prompt).toMatch(/only case the marker is for/);
   });
 
   it("reads one item per line, verbatim", () => {

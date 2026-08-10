@@ -1234,6 +1234,53 @@ describe("work a stage declined", () => {
     expect(p.deferrals).toHaveLength(1);
   });
 
+  it("treats the same observation reworded as one item", () => {
+    // Verbatim from a real task, which carried this fact eleven times. Each stage
+    // reworded what it saw and each re-run reworded it again, so exact-text dedup
+    // filed every one — and the single item nobody owned was lost among them.
+    let p = declined();
+    p = recordDeferrals(
+      p,
+      "build",
+      ["`ec-preview.md` is stale relative to the current artifact (Addendum 6 step 61)"],
+      "t2",
+    );
+    const after = p.deferrals!.length;
+    p = recordDeferrals(
+      p,
+      "build",
+      ["`ec-preview.md` is stale relative to the current artifact (Addendum 7 step 66)"],
+      "t3",
+    );
+    expect(p.deferrals).toHaveLength(after);
+  });
+
+  it("treats one item noticed by two stages as one item", () => {
+    // Work does not become different work because a different stage noticed it. Four
+    // stages raised the missing verification.sql, each naming a different owner after
+    // the dash — which is a disagreement about ownership, not four problems.
+    let p = declined();
+    p = recordDeferrals(p, "build", ["this project ships no verification.sql"], "t2");
+    const after = p.deferrals!.length;
+    p = recordDeferrals(
+      p,
+      "review",
+      ["this project ships no verification.sql — owned by \"Runtime QA checklist\""],
+      "t3",
+    );
+    expect(p.deferrals).toHaveLength(after);
+  });
+
+  it("still records a genuinely different item", () => {
+    // The guard against over-merging: normalising away wording must not merge two
+    // real problems, which is worse than listing one twice.
+    let p = declined();
+    p = recordDeferrals(p, "build", ["the preview is stale"], "t2");
+    const after = p.deferrals!.length;
+    p = recordDeferrals(p, "build", ["the PRISM loader has the same defect"], "t3");
+    expect(p.deferrals).toHaveLength(after + 1);
+  });
+
   it("ignores an item raised by a stage that has been re-opened", () => {
     // Reverting discards what those stages produced, and an observation about a
     // run that no longer exists must not hold a deployment.
