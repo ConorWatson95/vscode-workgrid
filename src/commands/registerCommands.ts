@@ -13,6 +13,7 @@ import {
   syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
+import { rowTask } from "../ui/rowTask";
 import { HANDOFF_EXPERIMENT } from "../domain/pipelineExperiment";
 import {
   formatFindings,
@@ -620,13 +621,11 @@ async function showStageReportCommand(
   arg: unknown,
 ): Promise<void> {
   const stageItem = arg instanceof StageTreeItem ? arg : undefined;
-  const task = await ctx.repository.get(
-    stageItem?.task.id ?? (arg instanceof TaskWorkspaceTreeItem ? arg.task.id : ""),
-  );
-  if (!task) {
-    void vscode.window.showInformationMessage("No task selected.");
-    return;
-  }
+  // Re-read rather than trusting the row: a report opened on a running stage has to
+  // render what the task looks like now, not what it looked like when the tree drew.
+  const resolved = await resolveTaskOrAsk(ctx, arg, "Show what a task did");
+  const task = resolved ? ((await ctx.repository.get(resolved.id)) ?? resolved) : undefined;
+  if (!task) return;
 
   // A stage row reports that stage; the task row reports everything it has done.
   const uri = ctx.reportProvider.uriFor(
@@ -2188,9 +2187,51 @@ export async function resolveTask(
   ctx: CommandContext,
   arg: unknown,
 ): Promise<TaskWorkspace | undefined> {
-  if (arg instanceof TaskWorkspaceTreeItem) return arg.task;
   if (typeof arg === "string") return ctx.repository.get(arg);
-  return undefined;
+  // Every row in the tree carries its task — the stage rows, the checklist items,
+  // the questions, the refusals, the held calls. Only two of the six were recognised,
+  // so a command invoked from any of the others reported "No task selected" while
+  // pointing straight at one. Read structurally rather than by class, so a row type
+  // added later works without this list being remembered.
+  return rowTask(arg);
+}
+
+/**
+ * The task a command should act on, asking when the invocation carries none.
+ *
+ * Commands are contributed to the palette as well as to the tree, and from the
+ * palette there is no row and therefore no argument. Answering that with "No task
+ * selected" is a dead end for a command the user just deliberately chose — so it
+ * asks instead.
+ */
+async function resolveTaskOrAsk(
+  ctx: CommandContext,
+  arg: unknown,
+  title: string,
+): Promise<TaskWorkspace | undefined> {
+  const direct = await resolveTask(ctx, arg);
+  if (direct) return direct;
+
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  const tasks = repositoryRoot
+    ? await ctx.repository.getByRepository(repositoryRoot)
+    : [];
+  if (tasks.length === 0) {
+    void vscode.window.showInformationMessage("There are no tasks in this repository.");
+    return undefined;
+  }
+  if (tasks.length === 1) return tasks[0];
+
+  const picked = await vscode.window.showQuickPick(
+    tasks.map((task) => ({
+      label: task.name,
+      description: task.branchName,
+      detail: task.pipeline?.routeLabel ?? task.pipeline?.routeId,
+      task,
+    })),
+    { title, placeHolder: "Which task?" },
+  );
+  return picked?.task;
 }
 
 async function openCommand(ctx: CommandContext, arg: unknown): Promise<void> {
