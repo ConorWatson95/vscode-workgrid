@@ -472,6 +472,37 @@ export interface TaskPipeline {
    * something says which one had handoffs withheld.
    */
   experiment?: PipelineExperiment;
+  /**
+   * What runs that were thrown away had already cost.
+   *
+   * Re-opening a stage clears `reply` and `activity` on its subtasks, which is right
+   * — a report showing output from a discarded run is worse than showing none — but
+   * cost lives in `activity`, so every re-run also erased the record of what the
+   * previous one cost. A task sent back six times reported the price of its last
+   * attempt and looked calm, which is the opposite of what the operator was
+   * experiencing, and left the harness unable to measure the one thing it was
+   * making expensive.
+   *
+   * Kept as entries rather than a running total for the same reason interventions
+   * are: "$40 discarded" does not distinguish one costly stage re-run twice from a
+   * route that churns everywhere, and those have opposite fixes.
+   */
+  discarded?: DiscardedRun[];
+}
+
+/** One stage's runs, discarded by a re-open, and what they had cost. */
+export interface DiscardedRun {
+  stageId: string;
+  stageName: string;
+  /** When the run was discarded. */
+  at: string;
+  /** Why it was discarded — "sent back from X", "re-run by hand". */
+  reason?: string;
+  costUsd?: number;
+  tokens?: SessionTokenTotals;
+  elapsedMs?: number;
+  /** Sessions the discarded run had used, whether or not they reported cost. */
+  sessions: number;
 }
 
 /** Refusals from one stage, waiting on a decision. */

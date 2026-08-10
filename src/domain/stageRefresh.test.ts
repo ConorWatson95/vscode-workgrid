@@ -499,6 +499,34 @@ describe("sendBackToStage", () => {
     expect(note.text).toContain("The migration drops a column.");
   });
 
+  it("records what the discarded run had cost, and who sent it back", () => {
+    // The number that was disappearing. A revert clears `activity`, and cost lives
+    // there — so a task sent back six times reported the price of its last attempt
+    // and looked calm, which is the opposite of what it felt like to run.
+    const p = reviewed();
+    p.stages[0].subtasks[0].startedAt = "2026-08-04T11:00:00.000Z";
+    p.stages[0].subtasks[0].finishedAt = "2026-08-04T11:44:00.000Z";
+    p.stages[0].subtasks[0].activity = { costUsd: 12.48 };
+
+    const result = sendBackToStage(p, input)!;
+    const [entry] = result.pipeline.discarded!;
+    expect(entry.stageId).toBe("build");
+    expect(entry.costUsd).toBeCloseTo(12.48);
+    expect(entry.elapsedMs).toBe(44 * 60 * 1000);
+    // Attributed to the review that caused it: which reviews cost the route re-runs
+    // is the question the ledger exists to answer.
+    expect(entry.reason).toBe('sent back from "SQL review"');
+  });
+
+  it("does not record stages after the target that never ran", () => {
+    // They are re-opened too, but a zero entry each would fill the ledger with work
+    // that never happened and bury the run that actually cost something.
+    const result = sendBackToStage(reviewed(), input)!;
+    expect((result.pipeline.discarded ?? []).map((d) => d.stageId)).not.toContain(
+      "signoff",
+    );
+  });
+
   it("appends the operator's own note after the findings", () => {
     const result = sendBackToStage(reviewed(), { ...input, note: "Leave Motability alone." })!;
     expect(result.pipeline.guidance![0].text).toContain("Leave Motability alone.");

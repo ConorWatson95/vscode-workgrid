@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { Subtask, SubtaskActivity } from "./taskPipeline";
-import { hasUsage, subtasksUsage } from "./stageUsage";
+import { Subtask, SubtaskActivity, TaskPipeline, TaskStage } from "./taskPipeline";
+import {
+  discardedUsage,
+  hasUsage,
+  pipelineUsage,
+  rerunCounts,
+  subtasksUsage,
+  survivingUsage,
+} from "./stageUsage";
 
 function subtask(over: Partial<Subtask> = {}): Subtask {
   return {
@@ -102,5 +109,85 @@ describe("subtasksUsage", () => {
     expect(
       hasUsage(subtasksUsage([{ id: "b", title: "Later", prompt: "…", status: "pending" }])),
     ).toBe(false);
+  });
+});
+
+describe("cost that re-runs threw away", () => {
+  const ran = (id: string, cost: number): TaskStage =>
+    ({
+      id,
+      name: id,
+      kind: "implementation",
+      status: "passed",
+      intent: "",
+      splittable: false,
+      requiresApproval: false,
+      subtasks: [
+        {
+          id: `${id}-1`,
+          title: "t",
+          prompt: "p",
+          status: "done",
+          startedAt: "2026-08-10T10:00:00.000Z",
+          finishedAt: "2026-08-10T10:10:00.000Z",
+          activity: {
+            costUsd: cost,
+            tokens: { input: 10, output: 20, cacheRead: 30, cacheCreation: 0 },
+          },
+        },
+      ],
+    }) as TaskStage;
+
+  const withDiscards = (): TaskPipeline =>
+    ({
+      routeId: "report-change",
+      stages: [ran("rc-implement", 3)],
+      discarded: [
+        {
+          stageId: "rc-implement",
+          stageName: "Implement",
+          at: "t1",
+          reason: 'sent back from "SQL object review"',
+          costUsd: 12.48,
+          tokens: { input: 1310, output: 74241, cacheRead: 15254313, cacheCreation: 177415 },
+          elapsedMs: 2_624_000,
+          sessions: 1,
+        },
+        {
+          stageId: "rc-implement",
+          stageName: "Implement",
+          at: "t2",
+          costUsd: 9,
+          sessions: 1,
+        },
+        { stageId: "rc-review", stageName: "Code review", at: "t2", costUsd: 2, sessions: 1 },
+      ],
+    }) as TaskPipeline;
+
+  it("counts discarded runs in what the route cost", () => {
+    // What a route cost is what was spent on it, not what survives on it. A task sent
+    // back six times reported the price of its last attempt and looked calm.
+    expect(pipelineUsage(withDiscards()).costUsd).toBeCloseTo(26.48);
+    expect(survivingUsage(withDiscards()).costUsd).toBe(3);
+    expect(discardedUsage(withDiscards()).costUsd).toBeCloseTo(23.48);
+  });
+
+  it("adds discarded tokens too, since that is where the churn shows", () => {
+    expect(pipelineUsage(withDiscards()).tokens.cacheRead).toBe(15_254_313 + 30);
+  });
+
+  it("groups re-runs by stage, dearest first", () => {
+    // One costly stage re-run twice and a route that churns everywhere sum to the
+    // same money and need opposite fixes, so the total alone cannot be the report.
+    const counts = rerunCounts(withDiscards());
+    expect(counts[0]).toMatchObject({ stageId: "rc-implement", times: 2 });
+    expect(counts[0].costUsd).toBeCloseTo(21.48);
+    expect(counts[1]).toMatchObject({ stageId: "rc-review", times: 1 });
+  });
+
+  it("says nothing when a route never went backwards", () => {
+    const clean = { routeId: "r", stages: [ran("a", 1)] } as TaskPipeline;
+    expect(hasUsage(discardedUsage(clean))).toBe(false);
+    expect(pipelineUsage(clean).costUsd).toBe(1);
   });
 });

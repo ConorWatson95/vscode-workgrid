@@ -9,8 +9,10 @@ import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
 import {
   UsageTotals,
+  discardedUsage,
   hasUsage,
   pipelineUsage,
+  rerunCounts,
   stageUsage,
   subtasksUsage,
 } from "../domain/stageUsage";
@@ -121,6 +123,39 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
         : ` · no cost was recorded for ${totals.unmeasured} subtask(s)`;
   }
   return `**Cost:** ${parts.join(" · ")}${caveat}`;
+}
+
+/**
+ * What re-runs cost, and which stages they were.
+ *
+ * Undefined when nothing has been discarded, so a route that never went backwards
+ * says nothing rather than printing a zero.
+ *
+ * Two figures, because they answer different questions: the share of the total tells
+ * you whether the churn is the problem, and the per-stage list tells you *which*
+ * problem — one expensive stage re-run repeatedly needs splitting, a route that
+ * churns everywhere needs its reviews moving.
+ */
+export function formatRerunLine(pipeline: TaskPipeline): string | undefined {
+  const gone = discardedUsage(pipeline);
+  if (!hasUsage(gone)) return undefined;
+
+  const total = pipelineUsage(pipeline).costUsd;
+  const share = total > 0 ? Math.round((gone.costUsd / total) * 100) : 0;
+  const worst = rerunCounts(pipeline)
+    .slice(0, 3)
+    .map(
+      (entry) =>
+        `${entry.stageName} ×${entry.times}` +
+        (entry.costUsd > 0 ? ` ($${entry.costUsd.toFixed(2)})` : ""),
+    )
+    .join(", ");
+
+  return (
+    `**Discarded to re-runs:** $${gone.costUsd.toFixed(4)}` +
+    (share > 0 ? ` — ${share}% of the total above` : "") +
+    (worst ? ` · ${worst}` : "")
+  );
 }
 
 /** One stage's report. */
@@ -439,6 +474,11 @@ export function formatTaskReport(
   // got cheaper.
   const total = formatUsageLine(pipelineUsage(pipeline));
   if (total) parts.push("", total);
+  // Named separately, immediately under the total it is part of. A route that spent
+  // two thirds of its money on work it threw away has one problem, and it is not the
+  // one a single figure suggests.
+  const churn = formatRerunLine(pipeline);
+  if (churn) parts.push("", churn);
   // The proportion, which no per-stage line can give: "how much of this route
   // actually proved anything?" Omitted entirely when the answer is "all of it",
   // because a reassurance printed every time stops being read.

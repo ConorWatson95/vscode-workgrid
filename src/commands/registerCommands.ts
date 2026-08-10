@@ -841,11 +841,20 @@ async function revertToStageCommand(
   );
   if (confirmed !== "Re-run Stage") return;
 
+  // Re-computed now that it is going ahead, with the discard recorded. The preview
+  // above deliberately does not record: the ledger must not gain an entry for a
+  // re-run the user looked at and cancelled.
+  const reverted = revertToStage(task.pipeline, arg.stage.id, {
+    at: new Date().toISOString(),
+    reason: "re-run by hand",
+  });
+  if (!reverted) return;
+
   // Reloaded after reverting, not before: the stages that just became pending are
   // exactly the ones whose instructions should come from current config.
   const refreshed = ctx.stageDefinitions
-    ? refreshPendingStages(preview.pipeline, ctx.stageDefinitions())
-    : { pipeline: preview.pipeline, changed: [] as string[] };
+    ? refreshPendingStages(reverted.pipeline, ctx.stageDefinitions())
+    : { pipeline: reverted.pipeline, changed: [] as string[] };
 
   await ctx.repository.save({
     ...task,

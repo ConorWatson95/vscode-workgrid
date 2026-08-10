@@ -1,7 +1,13 @@
 import { ReviewRule } from "./reviewRules";
 import { RouteDefinition, sendBackEntryKind, StageKind } from "./taskRoute";
-import { TaskPipeline, TaskStage, truncateHandoff } from "./taskPipeline";
+import {
+  DiscardedRun,
+  TaskPipeline,
+  TaskStage,
+  truncateHandoff,
+} from "./taskPipeline";
 import { stageFromDefinition } from "./pipelineEngine";
+import { stageUsage } from "./stageUsage";
 
 /**
  * Reloads stage definitions from current project config, and re-opens a stage
@@ -182,9 +188,39 @@ export function refreshPendingStages(
 export function revertToStage(
   pipeline: TaskPipeline,
   stageId: string,
+  /**
+   * What is being discarded and why, recorded before it is thrown away.
+   *
+   * Optional so every existing caller keeps working, but a caller that omits it
+   * loses the cost of the run it is discarding — which is how a task sent back six
+   * times came to report the price of its last attempt and look calm.
+   */
+  discard?: { at: string; reason?: string },
 ): { pipeline: TaskPipeline; reopened: string[] } | undefined {
   const index = pipeline.stages.findIndex((s) => s.id === stageId);
   if (index === -1) return undefined;
+
+  // Captured before the map below clears it. Only stages that actually ran: a
+  // pending stage after the target is re-opened too, and recording a zero for it
+  // would fill the ledger with entries for work that never happened.
+  const discarded: DiscardedRun[] = discard
+    ? pipeline.stages
+        .slice(index)
+        .filter((stage) => stage.subtasks.some((subtask) => subtask.startedAt))
+        .map((stage) => {
+          const totals = stageUsage(stage);
+          return {
+            stageId: stage.id,
+            stageName: stage.name,
+            at: discard.at,
+            ...(discard.reason ? { reason: discard.reason } : {}),
+            costUsd: totals.costUsd,
+            tokens: totals.tokens,
+            elapsedMs: totals.elapsedMs,
+            sessions: totals.measured + totals.unmeasured,
+          };
+        })
+    : [];
 
   const reopened: string[] = [];
   const stages = pipeline.stages.map((stage, at) => {
@@ -225,6 +261,11 @@ export function revertToStage(
       // A question or refusal belonged to the run being discarded.
       pendingQuestion: undefined,
       pendingDenials: undefined,
+      // Appended, never replaced: the third time a stage is sent back, the first two
+      // are the point.
+      ...(discarded.length > 0
+        ? { discarded: [...(pipeline.discarded ?? []), ...discarded] }
+        : {}),
     },
     reopened,
   };
@@ -366,7 +407,12 @@ export function sendBackToStage(
   const target = pipeline.stages[targetIndex];
   const text = formatSendBackNote(from.name, input.findings, input.note);
 
-  const reverted = revertToStage(pipeline, input.targetStageId);
+  // Named by the stage that sent it back, because that is the question the ledger
+  // has to answer: which reviews are costing the route re-runs, and how much.
+  const reverted = revertToStage(pipeline, input.targetStageId, {
+    at: input.at,
+    reason: `sent back from "${from.name}"`,
+  });
   if (!reverted) return undefined;
 
   return {

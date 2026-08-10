@@ -126,9 +126,83 @@ export function stageUsage(stage: TaskStage): UsageTotals {
   return subtasksUsage(stage.subtasks);
 }
 
-/** Every stage of a route, for the figure a comparison is actually made on. */
+/**
+ * Every stage of a route, **including runs that were thrown away**.
+ *
+ * The discarded half is the whole reason this is not just a sum over the stages. A
+ * re-opened stage's `activity` is cleared, so a route sent back six times reported
+ * the cost of its last attempt — the number looked calm while the operator was
+ * paying for the same expensive stage five times over. What a route costs is what
+ * was spent on it, not what survives on it.
+ */
 export function pipelineUsage(pipeline: TaskPipeline): UsageTotals {
+  const live = subtasksUsage(pipeline.stages.flatMap((stage) => stage.subtasks));
+  return addDiscarded(live, pipeline);
+}
+
+/** What is currently on the stages, ignoring anything discarded. */
+export function survivingUsage(pipeline: TaskPipeline): UsageTotals {
   return subtasksUsage(pipeline.stages.flatMap((stage) => stage.subtasks));
+}
+
+/** What re-runs threw away, on its own. Empty totals when nothing was discarded. */
+export function discardedUsage(pipeline: TaskPipeline): UsageTotals {
+  const totals = emptyTotals();
+  for (const run of pipeline.discarded ?? []) {
+    totals.costUsd += run.costUsd ?? 0;
+    totals.elapsedMs += run.elapsedMs ?? 0;
+    totals.measured += run.sessions;
+    if (run.tokens) {
+      totals.tokens.input += run.tokens.input;
+      totals.tokens.output += run.tokens.output;
+      totals.tokens.cacheRead += run.tokens.cacheRead;
+      totals.tokens.cacheCreation += run.tokens.cacheCreation;
+    }
+  }
+  return totals;
+}
+
+function addDiscarded(live: UsageTotals, pipeline: TaskPipeline): UsageTotals {
+  const gone = discardedUsage(pipeline);
+  if (!hasUsage(gone)) return live;
+  return {
+    costUsd: live.costUsd + gone.costUsd,
+    elapsedMs: live.elapsedMs + gone.elapsedMs,
+    measured: live.measured + gone.measured,
+    unmeasured: live.unmeasured + gone.unmeasured,
+    models: live.models,
+    tokens: {
+      input: live.tokens.input + gone.tokens.input,
+      output: live.tokens.output + gone.tokens.output,
+      cacheRead: live.tokens.cacheRead + gone.tokens.cacheRead,
+      cacheCreation: live.tokens.cacheCreation + gone.tokens.cacheCreation,
+    },
+  };
+}
+
+/**
+ * How many times each stage has been re-run, worst first.
+ *
+ * The shape of the churn rather than its total: one costly stage re-run five times
+ * and a route that churns everywhere sum to the same money and need opposite fixes.
+ */
+export function rerunCounts(
+  pipeline: TaskPipeline,
+): { stageId: string; stageName: string; times: number; costUsd: number }[] {
+  const byStage = new Map<string, { stageName: string; times: number; costUsd: number }>();
+  for (const run of pipeline.discarded ?? []) {
+    const entry = byStage.get(run.stageId) ?? {
+      stageName: run.stageName,
+      times: 0,
+      costUsd: 0,
+    };
+    entry.times += 1;
+    entry.costUsd += run.costUsd ?? 0;
+    byStage.set(run.stageId, entry);
+  }
+  return [...byStage.entries()]
+    .map(([stageId, entry]) => ({ stageId, ...entry }))
+    .sort((a, b) => b.costUsd - a.costUsd || b.times - a.times);
 }
 
 /** True when there is a number worth showing. */

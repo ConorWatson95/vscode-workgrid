@@ -605,6 +605,17 @@ remove worktrees they never asked for by name.
   carried forward as before, since the block is asked for in a prompt and can be
   ignored. The verdict line moves after the block when a stage is asked for both,
   because contradictory instructions get one of them dropped at random.
+- **Discarded runs** (`TaskPipeline.discarded`, `revertToStage`'s `discard` argument) —
+  what re-runs threw away. Re-opening a stage clears `reply` and `activity`, which is
+  right, but **cost lives in `activity`** — so every send-back also erased the record of
+  what the previous attempt cost. A task sent back six times reported the price of its
+  last attempt and looked calm, which is the opposite of what running it felt like, and
+  left the harness blind to the one thing it was making expensive. `pipelineUsage` now
+  includes them: what a route cost is what was spent on it, not what survives on it.
+  Kept per entry with the stage that was discarded and the review that caused it, for
+  the same reason interventions are events — one costly stage re-run five times and a
+  route that churns everywhere sum to the same money and need opposite fixes. The
+  preview in the re-run command deliberately does *not* record; only the confirmed one.
 - **Usage** (`SubtaskActivity.costUsd`/`tokens`, `domain/stageUsage.ts`) — cost and
   cumulative tokens are read from the session's `result` event, which never becomes
   a transcript item, so the activity watcher cannot see them. **`sessionTokensOf`
