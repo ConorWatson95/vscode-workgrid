@@ -121,9 +121,12 @@ function verdictAdvice(
         headline,
         // Named rather than "an earlier stage": the whole point is that the reader
         // should not have to open a picker to find out what the recommendation means.
+        // Says what it now does by default. Describing the re-run — which is the
+        // option, not the default — made the cheap path invisible at the one moment
+        // somebody is deciding whether a finding is worth acting on.
         suggestion:
-          `Send the findings back to "${target.name}", which re-opens it and ` +
-          "everything after it with the findings attached as guidance.",
+          `Send the findings to "${target.name}" to fix. It keeps what it built and ` +
+          "changes only what these name; re-running it from scratch is offered too.",
         action: "sendBack",
         sendBackTo: { id: target.id, name: target.name },
         findings: summary,

@@ -371,6 +371,16 @@ output that just changed. That is affordable because those are the cheap ones: o
 `report-change`, 4 of 20 stages are implementation and carry nearly all the cost; the
 other 16 are gates, promotions and reviews, and the gates are free.
 
+**Sending findings back defaults to fixing them.** Most review findings are a thing to
+correct, not a reason to rebuild, so the send-back flow offers the correction first and
+the re-run as the deliberate choice — the reverse of how it started, which is what made
+acting on a review cost a whole stage. The fixing stage is given the *same* text it
+would have received as guidance (`formatSendBackNote`), naming the review that raised
+it: by the time the fix runs, the reviewing stage's own output has been cleared, so
+without the attribution the findings arrive from nowhere. The choice is only offered
+when the target has something to correct — a stage that never ran, or whose output an
+earlier revert discarded, gives a fix session nothing to start from.
+
 ### Work that was already under way
 
 Three entry points, because pre-existing work arrives in three shapes and only one of

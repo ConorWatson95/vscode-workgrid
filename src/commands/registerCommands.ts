@@ -9,6 +9,7 @@ import {
   revertToStage,
   sendBackTargets,
   sendBackToStage,
+  formatSendBackNote,
   repositionRuleStages,
   syncHandoffs,
 } from "../domain/stageRefresh";
@@ -649,6 +650,55 @@ async function showStageReportCommand(
 }
 
 /**
+ * Sends a review's findings to an earlier stage as a correction rather than a redo.
+ *
+ * Shares `formatSendBackNote` with the re-run path deliberately: the text the fixing
+ * stage reads is the same text it would have read as guidance, naming the review that
+ * raised it. By the time a fix session runs, the reviewing stage's own output has been
+ * cleared, so without the attribution the findings arrive from nowhere.
+ */
+async function applyCorrection(
+  ctx: CommandContext,
+  task: TaskWorkspace,
+  from: TaskStage,
+  target: TaskStage,
+  input: { findings: string; note?: string; summary: string },
+): Promise<void> {
+  const finding = formatSendBackNote(from.name, input.findings, input.note);
+  const corrected = correctStage(task.pipeline!, target.id, {
+    finding,
+    at: new Date().toISOString(),
+    title: `Fix: ${input.summary}`,
+  });
+  if (!corrected.ok) {
+    void vscode.window.showWarningMessage(corrected.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: corrected.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] "${target.name}" will fix ${input.summary} from "${from.name}".`,
+  );
+
+  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+    return;
+  }
+  const next = await vscode.window.showInformationMessage(
+    `"${target.name}" will fix ${input.summary} on the next advance.`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/**
  * Fixes one thing in a stage that has already run, instead of re-running it.
  *
  * The alternative was always demolition: `revertToStage` discards the stage and
@@ -1054,6 +1104,51 @@ async function sendBackToStageCommand(
   });
   // Escape means "no note", not "cancel": the findings are the payload, and
   // losing the whole action for want of an optional sentence would be worse.
+
+  // Most findings are a thing to fix, not a reason to rebuild — so fixing is the
+  // default and rebuilding is the deliberate choice. It used to be the other way
+  // round with no way out, which is what made acting on a review cost a whole stage.
+  //
+  // Offered only when the target has something to correct. A stage that never ran, or
+  // one whose output a previous revert already discarded, has nothing for a fix
+  // session to start from, so the question would be a false choice.
+  const correctable = target.subtasks.some((s) => s.reply || s.activity);
+  const how = correctable
+    ? await vscode.window.showQuickPick(
+        [
+          {
+            label: "Fix these findings",
+            description: "recommended",
+            detail:
+              `"${target.name}" keeps everything it did and gets one session that changes ` +
+              "only what the findings name. Cheaper, and the reviews that passed the rest " +
+              "of it stay meaningful.",
+            fix: true,
+          },
+          {
+            label: "Re-run the stage from scratch",
+            detail:
+              `Discards what "${target.name}" produced and does it again with the findings ` +
+              "as guidance. For when the approach was wrong, not the code.",
+            fix: false,
+          },
+        ],
+        {
+          title: `How should "${target.name}" deal with ${summary}?`,
+          placeHolder: "Fixing keeps its work; re-running discards it",
+        },
+      )
+    : { fix: false };
+  if (!how) return;
+
+  if (how.fix) {
+    await applyCorrection(ctx, task, stage, target, {
+      findings: parsed.length > 0 ? formatFindings(parsed) : findings.trim(),
+      note,
+      summary,
+    });
+    return;
+  }
 
   const preview = sendBackToStage(task.pipeline, {
     targetStageId: target.id,
