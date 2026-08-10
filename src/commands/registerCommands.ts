@@ -955,6 +955,28 @@ async function revertToStageCommand(
   const preview = revertToStage(task.pipeline, arg.stage.id);
   if (!preview) return;
 
+  // Asked before the confirmation, because it is the reason for the confirmation.
+  //
+  // Without it a re-run had no input the operator could change. Everything it reloads
+  // comes from `harness.json`, so steering one task meant editing the route every task
+  // shares — and the account of what went wrong was usually on the run being discarded,
+  // so the new session started cold with the same brief and reached the same answer.
+  // Optional, because the original case for this command stands: the instruction was
+  // wrong, it has been fixed in config, and there is nothing to add.
+  const note = await vscode.window.showInputBox({
+    title: `Why is "${arg.stage.name}" being re-run?`,
+    prompt:
+      "Handed to the new session, and to every stage after it, ranked above the brief. " +
+      "Leave empty if the fix was in harness.json.",
+    placeHolder:
+      'e.g. it copied Phase 2\'s layout; the shape comes from tab 3 of the wireframe',
+    ignoreFocusOut: true,
+  });
+  // Escape means "I have changed my mind", not "no note": the box is the first thing
+  // the command shows, so treating dismissal as an empty note would make the only way
+  // out of a mis-click a destructive confirmation dialog.
+  if (note === undefined) return;
+
   // Confirmed because it discards work: later stages were built on output that is
   // about to go, and their checklist items with them.
   const also = preview.reopened.length - 1;
@@ -967,7 +989,10 @@ async function revertToStageCommand(
           ? `${also} later stage(s) will be re-opened too, because they were built on output this discards. `
           : "") +
         "Recorded output and verification items for those stages are discarded. " +
-        "Your approval notes are kept, and stage instructions are reloaded from harness.json.",
+        "Your approval notes are kept, and stage instructions are reloaded from harness.json." +
+        (note.trim()
+          ? `\n\nThe new session is told: ${note.trim()}`
+          : "\n\nNo reason given, so the new session starts from the same brief as the run being discarded."),
     },
     "Re-run Stage",
   );
@@ -979,6 +1004,7 @@ async function revertToStageCommand(
   const reverted = revertToStage(task.pipeline, arg.stage.id, {
     at: new Date().toISOString(),
     reason: "re-run by hand",
+    note,
   });
   if (!reverted) return;
 

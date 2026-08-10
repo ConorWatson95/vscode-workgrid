@@ -377,6 +377,65 @@ describe("revertToStage", () => {
     expect(original.stages[0].status).toBe("passed");
     expect(original.stages[0].subtasks[0].reply).toBe("did it");
   });
+
+  /**
+   * The reason for the re-run, which a plain revert had nowhere to put.
+   *
+   * Everything a re-run reloads comes from project config, so steering one task meant
+   * editing the route every task shares — and the diagnosis of what went wrong was
+   * usually on the run being discarded. A cold re-run then reached the same answer for
+   * the same reasons, which is what made re-running look like it did nothing.
+   */
+  describe("the reason it is being re-run", () => {
+    it("becomes guidance the new session is given", () => {
+      const result = revertToStage(pipeline([ran("deploy")]), "deploy", {
+        at: "t2",
+        note: "the layout comes from tab 3, not Phase 2",
+      })!;
+      const guidance = result.pipeline.guidance ?? [];
+      expect(guidance).toHaveLength(1);
+      expect(guidance[0].text).toBe("the layout comes from tab 3, not Phase 2");
+      expect(guidance[0].stageId).toBe("deploy");
+    });
+
+    it("appends, so a stage re-run twice keeps both reasons", () => {
+      // The earlier reasons are what stop the third attempt repeating the first two.
+      const once = revertToStage(pipeline([ran("deploy")]), "deploy", {
+        at: "t2",
+        note: "first reason",
+      })!;
+      const twice = revertToStage(once.pipeline, "deploy", {
+        at: "t3",
+        note: "second reason",
+      })!;
+      expect((twice.pipeline.guidance ?? []).map((g) => g.text)).toEqual([
+        "first reason",
+        "second reason",
+      ]);
+    });
+
+    it("records nothing when no reason is given", () => {
+      // The original case for this command stands: the fix was in config, and an
+      // empty note must not become an empty instruction handed to the session.
+      const result = revertToStage(pipeline([ran("deploy")]), "deploy", {
+        at: "t2",
+        note: "   ",
+      })!;
+      expect(result.pipeline.guidance).toBeUndefined();
+    });
+
+    it("keeps a derived id, so a replay produces the same pipeline", () => {
+      const first = revertToStage(pipeline([ran("deploy")]), "deploy", {
+        at: "t2",
+        note: "same",
+      })!;
+      const second = revertToStage(pipeline([ran("deploy")]), "deploy", {
+        at: "t2",
+        note: "same",
+      })!;
+      expect(first.pipeline.guidance).toEqual(second.pipeline.guidance);
+    });
+  });
 });
 
 describe("sendBackTargets", () => {

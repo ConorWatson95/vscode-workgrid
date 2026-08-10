@@ -329,6 +329,17 @@ sessions are invisible":
   `revertToStage` re-opens a stage *and everything after it*, discarding those runs
   (including their checklist items, which otherwise gate the task on evidence about
   work that no longer exists) but **keeping the operator's guidance**.
+- **A re-run takes a reason, and the reason is guidance.** `revertToStage` had no input
+  the operator could change: everything it reloads comes from project config, so
+  steering one task meant editing the route every task shares — and the account of what
+  went wrong was usually written by the run being discarded, so it went out with it. A
+  cold re-run then reached the same answer for the same reasons, which is what made
+  re-running look like it did nothing. The command now asks why, before confirming,
+  and files it as guidance: cumulative, passed to every stage, ranked above the brief.
+  Guidance rather than a field of its own, because a second channel with the same
+  meaning is one the prompts have no way to rank against the first. Escape cancels the
+  re-run rather than meaning "no reason" — the box is the first thing shown, so
+  dismissal must not lead to a destructive confirmation.
 - **Approval notes** (`TaskPipeline.guidance`) — approving asks for an optional
   note. It is cumulative, handed to every later stage via `StageContext.guidance`,
   and the prompt says it outranks the brief. The gate is the one moment a human has
@@ -370,6 +381,27 @@ Later stages are still re-opened, exactly as a revert re-opens them — they ran
 output that just changed. That is affordable because those are the cheap ones: on
 `report-change`, 4 of 20 stages are implementation and carry nearly all the cost; the
 other 16 are gates, promotions and reviews, and the gates are free.
+
+**A correction may refuse, and refusing had to become a fact the parser reads.**
+`correctionPrompt` has always told the session to stop and say so when a finding needs a
+change of approach — and gave it nothing to say it *with*. So the reply came back as
+prose, the session had not errored, `finishSubtask(..., "done")` recorded a process
+exiting tidily, the stage settled and the route advanced: later stages built on output
+the correction had just confirmed was wrong, and the finding was marked dealt with. The
+prompt asked for a behaviour the parser did not look for, which is exactly what "never
+trust the reply to be well-formed" is a rule against — the fifth instance of that one
+disease, after `DEFERRED`, `BLOCKED`, `ACTION` and the plan step. It cost a grid rebuilt
+from the wrong wireframe tab, with an eloquent explanation attached.
+
+`CORRECTION_DECLINED_MARKER` closes it, held on the same machinery as `BLOCKED` —
+recorded, then `holdStageForFindings` — because it is the same shape of fact: the stage
+did not do what it was asked and must not be recorded as having done it. Kept a separate
+marker from `BLOCKED` because **the remedy differs and the remedy is the point**:
+`BLOCKED` says a prerequisite is missing and someone must supply it; this says the
+output is wrong in a way no targeted edit reaches, and the answer is `revertToStage`,
+which only a human may choose. Honoured **only on a correction subtask** — an ordinary
+run has no correction to decline, so the line there is a model quoting the protocol
+rather than using it, and the marker's first visible effect must not be a false stop.
 
 **Sending findings back defaults to fixing them.** Most review findings are a thing to
 correct, not a reason to rebuild, so the send-back flow offers the correction first and

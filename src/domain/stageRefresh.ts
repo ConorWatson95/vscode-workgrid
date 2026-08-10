@@ -195,7 +195,28 @@ export function revertToStage(
    * loses the cost of the run it is discarding — which is how a task sent back six
    * times came to report the price of its last attempt and look calm.
    */
-  discard?: { at: string; reason?: string },
+  discard?: {
+    at: string;
+    reason?: string;
+    /**
+     * Why it is being re-run, in the operator's words, kept as guidance.
+     *
+     * The channel a plain re-run had no way to offer. Everything a re-run reloads
+     * comes from project config — `intent` from `harness.json` — so steering one
+     * task meant editing the route every task shares, and the knowledge that
+     * *this* attempt got it wrong reached the new session nowhere at all. Worse,
+     * the session that diagnosed it was usually the correction being discarded, so
+     * the diagnosis went out with the run. A cold re-run then reached the same
+     * answer for the same reasons, which is the behaviour that makes re-running
+     * look like it does nothing.
+     *
+     * Guidance rather than a field of its own, because guidance already is this:
+     * cumulative, passed to every stage, and stated in the prompt to outrank the
+     * brief. A second channel with the same meaning would be one the prompts do
+     * not know how to rank against the first.
+     */
+    note?: string;
+  },
 ): { pipeline: TaskPipeline; reopened: string[] } | undefined {
   const index = pipeline.stages.findIndex((s) => s.id === stageId);
   if (index === -1) return undefined;
@@ -221,6 +242,8 @@ export function revertToStage(
           };
         })
     : [];
+
+  const note = discard?.note?.trim();
 
   const reopened: string[] = [];
   const stages = pipeline.stages.map((stage, at) => {
@@ -265,6 +288,25 @@ export function revertToStage(
       // are the point.
       ...(discarded.length > 0
         ? { discarded: [...(pipeline.discarded ?? []), ...discarded] }
+        : {}),
+      // Attached to the stage being re-run, like a send-back's note, and appended
+      // rather than replacing: a stage re-run three times accumulates three reasons,
+      // and the earlier two are what stop the fourth attempt repeating them.
+      ...(note
+        ? {
+            guidance: [
+              ...(pipeline.guidance ?? []),
+              {
+                // Derived, not random, so the transition stays pure and a replay
+                // produces the same pipeline.
+                id: `rerun-${stageId}-${discard!.at}`,
+                stageId,
+                stageName: pipeline.stages[index].name,
+                text: note,
+                at: discard!.at,
+              },
+            ],
+          }
         : {}),
     },
     reopened,
