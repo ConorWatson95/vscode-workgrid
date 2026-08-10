@@ -916,12 +916,24 @@ async function sendBackToStageCommand(
     return;
   }
 
-  const findings = stageFindings(stage);
+  // A human-verification gate has no agent reply, so it recorded nothing — and it is
+  // the one stage where the *operator* is the source of the finding. Refusing here
+  // meant the gate that exists for a person to exercise the work was the only place
+  // a person could not report what they saw: "Specified cast is not valid" on the
+  // report, at DEV sign-off, with no way to send it anywhere.
+  let findings = stageFindings(stage);
   if (!findings.trim()) {
-    void vscode.window.showInformationMessage(
-      `"${stage.name}" recorded nothing to send back.`,
-    );
-    return;
+    const observed = await vscode.window.showInputBox({
+      title: `What went wrong at "${stage.name}"?`,
+      prompt: "This becomes the finding the re-opened stage is given.",
+      placeHolder:
+        'e.g. "Specified cast is not valid" opening the report on DEV, after picking a period',
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim().length === 0 ? "Say what happened, or press Escape." : undefined,
+    });
+    if (!observed) return;
+    findings = observed.trim();
   }
 
   // Even with one candidate the choice is shown, because the cost is not obvious
