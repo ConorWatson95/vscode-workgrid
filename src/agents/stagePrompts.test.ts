@@ -18,6 +18,9 @@ import {
   splitStageHandoff,
   parseDeferrals,
   parseBlocked,
+  correctionPrompt,
+  parseCorrectionDeclined,
+  stripCorrectionDeclined,
   parseActions,
   readStageReply,
   stripBlocked,
@@ -907,5 +910,78 @@ describe("assessing work that lives outside the repository", () => {
     const prompt = assessmentPrompt(CONTEXT, stage({ kind: "assessment" }));
     expect(prompt).toContain("not done");
     expect(prompt).toContain("absent from the repository");
+  });
+});
+
+/**
+ * A correction saying the finding needs a re-run, not a fix.
+ *
+ * The prompt asked for this behaviour long before anything parsed it, which is the
+ * one arrangement the harness treats as a bug by definition: a stage did what it was
+ * told, and the runtime read a tidy session exit as a completed repair.
+ */
+describe("a correction declining to be a correction", () => {
+  const PREVIOUS = "Built the grid with four stacked rows per Description Code.";
+
+  it("asks for the marker rather than only for prose", () => {
+    const prompt = correctionPrompt(CONTEXT, stage(), "Wrong layout.", PREVIOUS);
+    expect(prompt).toContain("CORRECTION-DECLINED:");
+  });
+
+  it("says what happens if the decline is only described", () => {
+    // The instruction has to name the consequence, because the failure is silent:
+    // nothing looks wrong at the moment the stage is recorded as fixed.
+    const prompt = correctionPrompt(CONTEXT, stage(), "Wrong layout.", PREVIOUS);
+    expect(prompt).toContain("recorded as fixed");
+  });
+
+  it("still tells the session to narrow rather than improve", () => {
+    // The decline route must not become an invitation to rebuild: that costs what a
+    // re-run costs and invalidates the reviews that passed the rest.
+    const prompt = correctionPrompt(CONTEXT, stage(), "Wrong layout.", PREVIOUS);
+    expect(prompt).toContain("smallest change");
+    expect(prompt).toContain(PREVIOUS);
+  });
+
+  it("reads the reason from the marker line", () => {
+    const reply =
+      "Tab 3 is one row per code with metrics as columns.\n" +
+      "CORRECTION-DECLINED: the proc must return metrics as columns";
+    expect(parseCorrectionDeclined(reply)).toBe(
+      "the proc must return metrics as columns",
+    );
+  });
+
+  it("ignores the words in prose", () => {
+    expect(
+      parseCorrectionDeclined("I declined the wider correction and fixed the cast."),
+    ).toBeUndefined();
+  });
+
+  it("takes only the first, since a correction has one answer", () => {
+    const reply =
+      "CORRECTION-DECLINED: needs a new proc\nCORRECTION-DECLINED: and a new view";
+    expect(parseCorrectionDeclined(reply)).toBe("needs a new proc");
+  });
+
+  it("strips the marker but keeps the reasoning", () => {
+    const reply = "The shapes differ.\nCORRECTION-DECLINED: needs a new proc";
+    expect(stripCorrectionDeclined(reply)).toBe("The shapes differ.");
+  });
+
+  it("comes off the report in readStageReply", () => {
+    const reply = "The shapes differ.\nCORRECTION-DECLINED: needs a new proc";
+    const read = readStageReply(reply);
+    expect(read.correctionDeclined).toBe("needs a new proc");
+    expect(read.report).toBe("The shapes differ.");
+  });
+
+  it("is not confused with a stage that could not start", () => {
+    // BLOCKED means a prerequisite is missing and someone must supply it; this means
+    // the output is wrong and the remedy is a re-run. Different remedies, so the
+    // parsers must not answer for each other.
+    const reply = "CORRECTION-DECLINED: needs a new proc";
+    expect(parseBlocked(reply)).toBeUndefined();
+    expect(parseCorrectionDeclined("BLOCKED: nothing committed")).toBeUndefined();
   });
 });

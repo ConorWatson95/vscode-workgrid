@@ -447,6 +447,8 @@ export interface StageReply {
   blocked: string | undefined;
   /** Steps only the operator can take. */
   actions: string[];
+  /** Why a correction refused to be a correction, when it says so. */
+  correctionDeclined: string | undefined;
   /** What the stage said about each numbered step of the plan it was given. */
   stepAccounts: StepAccount[];
   /** What a human and every later stage should read: markers removed. */
@@ -469,6 +471,9 @@ export function readStageReply(text: string): StageReply {
   const actions = parseActions(report);
   report = stripActions(report);
 
+  const correctionDeclined = parseCorrectionDeclined(report);
+  report = stripCorrectionDeclined(report);
+
   // Read from the report half like the three above, and for the same reason: a
   // handoff that says "step 4 is still outstanding" is telling the next stage about
   // an account, not making a second one.
@@ -484,6 +489,7 @@ export function readStageReply(text: string): StageReply {
     deferrals,
     blocked,
     actions,
+    correctionDeclined,
     stepAccounts,
     report,
   };
@@ -708,6 +714,50 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
 
 /** How an assessment stage reports on one stage of the route. */
 /**
+ * How a correction says it is the wrong tool for the finding it was given.
+ *
+ * The fifth instance of the failure this whole family of markers exists for, and the
+ * most expensive so far, because the reply *sounded* like a refusal and the route
+ * treated it as a repair. `correctionPrompt` already told the session to "say so and
+ * stop" if the fix needed a change of approach — but there was nothing to say it
+ * *with*. So a correction that declined ended its session without an error,
+ * `finishSubtask(..., "done")` recorded a process exiting tidily, the stage settled,
+ * and later stages ran on output the correction had just confirmed was wrong. The
+ * prompt asked for a behaviour the parser did not look for, which is precisely what
+ * "never trust the reply to be well-formed" is a rule against.
+ *
+ * Distinct from `BLOCKED`, which it otherwise resembles, because the remedy is
+ * different and the remedy is the whole point of telling anyone. `BLOCKED` says a
+ * prerequisite is missing and someone must supply it; this says the stage's output is
+ * wrong in a way no targeted edit reaches, and the answer is `revertToStage` — which
+ * only a human may choose, since it discards work. A single "held" state would leave
+ * the operator to re-derive that distinction from prose, which is the position they
+ * were in before the marker existed.
+ */
+export const CORRECTION_DECLINED_MARKER = "CORRECTION-DECLINED:";
+
+/**
+ * Why a correction refused, if it refused.
+ *
+ * First occurrence only, like `BLOCKED` and unlike `DEFERRED`: a correction is given
+ * one finding and has one answer to it, so a second mention is the reply restating
+ * itself rather than declining twice.
+ */
+export function parseCorrectionDeclined(reply: string): string | undefined {
+  const match = /^[ \t]*CORRECTION-DECLINED:[ \t]*(.+)$/im.exec(reply);
+  const text = match?.[1]?.trim();
+  return text ? text : undefined;
+}
+
+/** The reply without its decline line. See `stripBlocked` on the newline collapse. */
+export function stripCorrectionDeclined(reply: string): string {
+  return reply
+    .replace(/^[ \t]*CORRECTION-DECLINED:[ \t]*.*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+/**
  * Prompt for repairing a stage that has already run, rather than re-running it.
  *
  * The whole economy of this rests on one thing: the session is given the stage's own
@@ -749,9 +799,17 @@ export function correctionPrompt(
     "Go straight to the code the finding names. Do not re-read the ticket, re-derive",
     "the approach, or re-check work the finding does not mention — reviews have",
     "already passed the rest of this stage, and changing it invalidates them for no",
-    "reason. If the fix turns out to need a change of approach rather than a change",
-    "of code, say so and stop: that is a re-run, and it is a decision for the person",
-    "who asked for this, not for you.",
+    "reason.",
+    "",
+    "If the fix turns out to need a change of approach rather than a change of code,",
+    "do not make it: that is a re-run, and it is a decision for the person who asked",
+    `for this. Say so with a line starting exactly "${CORRECTION_DECLINED_MARKER}"`,
+    "followed by one sentence naming what would have to change, and then stop. Put",
+    "your reasoning in the report below it, at whatever length it needs. Declining",
+    "is a correct outcome and it is recorded as one — the route is held for a person",
+    "to decide. Describing the problem only in prose is not: without that line this",
+    "stage is recorded as fixed, and everything after it is built on the version you",
+    "have just said is wrong.",
     "",
     "Report what you changed and why, in a few lines. If the finding was wrong — the",
     "code already does what it says is missing — say that instead of changing",

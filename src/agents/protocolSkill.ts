@@ -101,6 +101,31 @@ asking who owns the work, so evidence, history and the three findings that led y
 here belong in your report instead — the two are shown together, and the box is a
 question, not the record.
 
+## When you are fixing one thing in a stage that already ran
+
+You are repairing, not rebuilding. You have the stage's own previous report so that you
+do not re-read the ticket, re-derive the approach or re-check work the finding does not
+mention — reviews have already passed the rest of the stage, and changing it invalidates
+them for nothing.
+
+Which makes the boundary the important judgement, in both directions:
+
+- **A change of code** — a wrong cast, a missing filter, a column read from the wrong
+  place. Make it, narrowly, and report what you changed.
+- **A change of approach** — the shape of the output is wrong, the fix re-opens work
+  other stages have already signed off, the finding is really a different design. Do
+  not make it. Decline in the form the runtime reads and stop.
+
+Declining is a correct outcome and it is recorded as one: the route holds, and a person
+chooses whether to re-run the stage. Declining *only in prose* is not. That reply reads
+to the runtime as a completed fix, so the stage is recorded as repaired, later stages
+are built on the version you have just said is wrong, and the finding is marked dealt
+with. That has happened: a grid rebuilt from the wrong wireframe tab, with an eloquent
+explanation of why it could not be corrected, and a route that carried on.
+
+If the finding is simply wrong — the code already does what it says is missing — say
+that instead of changing something to satisfy it.
+
 ## When you hand something forward
 
 A handoff is read by a stage that has never seen this repository. Write it for that

@@ -902,6 +902,7 @@ export class PipelineRunner {
       deferrals: deferred,
       blocked,
       actions,
+      correctionDeclined,
       stepAccounts,
       report: reportText,
     } = readStageReply(reply.text);
@@ -1233,6 +1234,36 @@ export class PipelineRunner {
         this.logger.warn(
           `Harness [${task.name}] ${stage.name} did not do its work: ${blocked} ` +
             "Holding the route rather than passing the stage.",
+        );
+      }
+    }
+
+    // A correction that says the finding needs a re-run. Held on exactly the machinery
+    // a refusal uses, because it is the same shape of fact — the stage did not do what
+    // it was asked and must not be recorded as having done it — and the alternative was
+    // the bug this marker exists for: the session declined, ended tidily, and the route
+    // read a clean exit as a completed fix.
+    //
+    // Honoured only on a correction subtask. An ordinary run has no correction to
+    // decline, so the line there is a model quoting the protocol rather than using it,
+    // and holding a route on that would make the marker's first cost a false stop.
+    //
+    // The reason is prefixed rather than stored raw: `blocked` is read by the tree, the
+    // notification and the stage report, all of which say "could not proceed", and the
+    // operator's next move here is a specific and destructive one they have to choose.
+    if (reply.ok && correctionDeclined && subtask.correction) {
+      const reason = `correction declined — this needs a re-run, not a fix: ${correctionDeclined}`;
+      pipeline = recordStageBlocked(pipeline, stage.id, reason);
+      const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+      if (held.ok) {
+        pipeline = held.value;
+        steps.push(
+          `"${stage.name}" declined the correction: ${correctionDeclined} — held for you. ` +
+            "Re-run the stage if you agree.",
+        );
+        this.logger.warn(
+          `Harness [${task.name}] ${stage.name} declined a correction: ${correctionDeclined} ` +
+            "Nothing was changed; holding the route rather than passing the stage.",
         );
       }
     }

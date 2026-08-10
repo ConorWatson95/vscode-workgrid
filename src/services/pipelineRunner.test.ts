@@ -3,7 +3,7 @@ import { PipelineRunner, StageSessionRunner } from "./pipelineRunner";
 import { ReviewPlanService, ChangedPathsSource } from "./reviewPlanService";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { createPipeline } from "../domain/pipelineEngine";
+import { correctStage, createPipeline } from "../domain/pipelineEngine";
 import { RouteDefinition } from "../domain/taskRoute";
 import { ReviewRule } from "../domain/reviewRules";
 import { Logger } from "../logging/logger";
@@ -1885,5 +1885,114 @@ describe("worktree claims", () => {
 
     await runner.advance(subject);
     expect(listed).toBe(0);
+  });
+});
+
+/**
+ * A correction that says it is the wrong tool for the job.
+ *
+ * The bug: `correctionPrompt` told the session to stop and say so if the finding
+ * needed a change of approach, and gave it nothing to say it with. So the reply came
+ * back as prose, the session had not errored, the subtask was recorded "done", the
+ * stage settled and the route advanced — building every later stage on output the
+ * correction had just confirmed was wrong. On a real task that was a grid rebuilt from
+ * the wrong wireframe tab, with the fix reported as applied.
+ */
+describe("a correction the stage declines", () => {
+  const oneStageRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Build it.",
+        splittable: false,
+        gate: "auto",
+      },
+    ],
+  });
+
+  const DECLINE = [
+    "The mock-up's tab 3 is one row per code with the metrics as columns, not the",
+    "stacked RowOrder shape that was built.",
+    "",
+    "CORRECTION-DECLINED: the stored procedure must return metrics as columns, which",
+    "re-opens the proc, the helper and the grid column definitions",
+  ].join("\n");
+
+  /** Runs the stage, then appends a correction to it, and returns the repository. */
+  async function corrected(fixReply: { ok?: boolean; text: string }) {
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(fakeSessions({ "build:": { text: "Built it." } }), {
+      repo,
+    });
+    await repo.save({ ...task(), pipeline: createPipeline(oneStageRoute()) });
+    await runner.advance((await repo.get("t1"))!);
+
+    const before = (await repo.get("t1"))!;
+    const fixed = correctStage(before.pipeline!, "build", {
+      finding: "The layout was copied from Phase 2.",
+      at: "2026-08-10T09:00:00.000Z",
+    });
+    if (!fixed.ok) throw new Error(fixed.error.message);
+    await repo.save({ ...before, pipeline: fixed.value });
+
+    // The fix key first: `fakeSessions` matches on the first registered prefix, and
+    // "build:" would otherwise swallow the correction's own label.
+    const { runner: second } = makeRunner(
+      fakeSessions({ "build:build-fix": fixReply, "build:": { text: "Built it." } }),
+      { repo },
+    );
+    const report = await second.advance((await repo.get("t1"))!);
+    return { repo, report };
+  }
+
+  it("holds the stage instead of recording it as fixed", async () => {
+    const { repo } = await corrected({ text: DECLINE });
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    // "passed" is what it used to be, which is the whole defect: nothing changed and
+    // the route said the finding had been dealt with.
+    expect(stage.status).toBe("awaiting-approval");
+  });
+
+  it("says the remedy is a re-run, not just that it stopped", async () => {
+    // A held stage with no remedy leaves the operator where the bug left them:
+    // reading prose to work out what the harness wants them to do next.
+    const { repo, report } = await corrected({ text: DECLINE });
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    expect(stage.blocked).toContain("re-run");
+    expect(stage.blocked).toContain("metrics as columns");
+    expect(report.steps.join(" ")).toContain("declined the correction");
+  });
+
+  it("keeps the marker out of the reply the report shows", async () => {
+    const { repo } = await corrected({ text: DECLINE });
+
+    const fix = (await repo.get("t1"))!.pipeline!.stages[0].subtasks.find(
+      (s) => s.correction,
+    );
+    expect(fix?.reply).toContain("one row per code");
+    expect(fix?.reply).not.toContain("CORRECTION-DECLINED:");
+  });
+
+  it("passes a correction that actually made the change", async () => {
+    const { repo } = await corrected({ text: "Changed the cast to decimal." });
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+
+  it("ignores the line on a subtask that is not a correction", async () => {
+    // An ordinary run has no correction to decline, so the marker there is a model
+    // quoting the protocol rather than using it. Holding on that would make this
+    // marker's first visible effect a route stopped for no reason.
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(fakeSessions({ "build:": { text: DECLINE } }), { repo });
+    await repo.save({ ...task(), pipeline: createPipeline(oneStageRoute()) });
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
   });
 });
