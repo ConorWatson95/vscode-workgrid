@@ -15,6 +15,7 @@ import {
   rerunCounts,
   stageUsage,
   subtasksUsage,
+  workingMs,
 } from "../domain/stageUsage";
 import { correctionCost } from "../domain/correctionCost";
 
@@ -92,7 +93,18 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
 
   const parts: string[] = [];
   if (totals.costUsd > 0) parts.push(`$${totals.costUsd.toFixed(4)}`);
-  if (totals.elapsedMs > 0) parts.push(`${formatElapsed(totals.elapsedMs)} in session`);
+  if (totals.elapsedMs > 0) {
+    // Split when a wait was recorded, and only then. Absence of a wait means
+    // unmeasured rather than zero, so printing "0s waiting" on every stage that ran
+    // before this existed would state something the record cannot support — and a
+    // number shown always is a number read never.
+    parts.push(
+      totals.blockedOnHumanMs > 0
+        ? `${formatElapsed(workingMs(totals))} working, ` +
+          `${formatElapsed(totals.blockedOnHumanMs)} waiting on you`
+        : `${formatElapsed(totals.elapsedMs)} in session`,
+    );
+  }
 
   const { input, output, cacheRead, cacheCreation } = totals.tokens;
   if (input + output + cacheRead + cacheCreation > 0) {

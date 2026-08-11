@@ -712,6 +712,62 @@ Two checks that both exist because the failure they prevent is a stage *succeedi
   model an org policy disallows is substituted without failing, so a cost comparison
   keyed on the requested name compares two runs of the same model. `UsageTotals.models`
   carries the distinct set; two entries where a stage asked for one is the tell.
+- **`ask_user` time was being counted as the model working** (`domain/humanWait.ts`,
+  `SubtaskActivity.blockedOnHumanMs`, `UsageTotals.blockedOnHumanMs` + `workingMs`).
+  The tool returns its answer into the waiting turn — the whole reason it beats
+  `NEEDS-INFO` — so the operator's thinking time sits inside the subtask's own
+  `startedAt`/`finishedAt` span. Nothing separated them, which made the harness's own
+  KPI unmeasurable in the direction that flatters it: the first real latency
+  measurement of a route reported **4% idle**, concluded it was not
+  supervision-bound, and sent the effort at execution — while its 32-minute
+  implementation stage had called `ask_user` twice. `AskUserService` keeps a
+  cumulative per-task tally and the runner samples it either side of each session,
+  keeping the difference, exactly as it snapshots the worktree list around a stage
+  that may create one. Three rules: the tally **survives `release`**, because
+  `release` runs inside `StageSessionRunner.run` *before* the runner's closing
+  reading and clearing it there would make the difference negative; an **abandoned**
+  wait counts, or a stopped task looks like its stages ran fast; and **absence means
+  unmeasured, not zero**, so the wait is reported beside the elapsed time rather than
+  only subtracted from it.
+
+### The first latency measurement, and what it ruled out
+
+Taken 11 Aug 2026 against a live 23-stage `report-change` route. Recorded here because
+every plausible guess about harness latency was wrong, and re-deriving that costs a
+morning.
+
+**65.4 min wall clock, 62.6 min execution, 4% idle** — so not supervision-bound (with
+the `ask_user` caveat above). 77% of execution was **two subtasks**. Across the route,
+**151,381 output tokens over 62.6 min = 40 tok/s**, against 59–62 tok/s on the fastest
+stages. Generation is serial, so at achievable throughput generation alone accounts for
+~42 of the 62.6 minutes, leaving at most ~21 for *all* tool execution and *all* harness
+overhead across 271 tool calls — and that residual includes real SQL against DEV and two
+full solution builds.
+
+What that rules out, and the reason each is not worth building:
+
+- **Parallelising read-only review stages.** Worth ~3 of 65 min (4.7%) here, and it is
+  not a small change: `sessions.create`, `gate.prepare` (which *empties* the ask/gate
+  inbox), `gate.release`, `sessions.stop`, `liveActivities` and the `running`
+  `AbortController` are **all keyed by task id, not subtask**. `AgentSessionManager.create`
+  stops the task's existing session, so stage two would kill stage one, and two
+  concurrent stages would wipe each other's pending questions. Re-keying five modules
+  for 5% fails the test; the per-task inbox directory is load-bearing elsewhere.
+- **The `PreToolUse` gate hook's per-call process spawn, MCP connection time, and cold
+  session start.** Bounded small by the token arithmetic above, and unquantified —
+  measure before spending. The gate passing by emitting nothing means most spawns do
+  nothing, so it *looks* wasteful; the arithmetic says it cannot be more than a slice of
+  the residual.
+
+Where the time actually goes, and both fixes are **project config, not harness code**:
+the SQL stage spent a large part of 71,002 output tokens authoring an ad-hoc query
+harness inline — then deleted it and wrote five of its files again — and the app stage
+ran two full solution builds while the `Build` stage that follows compiles in 0.6 min.
+Fixed in `qubeautoapp` by checking in `tools/sql/Invoke-SqlQuery.ps1` and
+`Compare-QueryResults.ps1`, naming them in seven stages' intents, and telling
+implementation stages not to build. **Output tokens are wall-clock time** is the general
+lesson: the cheapest latency win is a stage not having to write something the repository
+could have held.
 
 ### Keeping a worktree the checkout it claims to be
 

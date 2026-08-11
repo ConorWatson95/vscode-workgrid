@@ -1,4 +1,5 @@
 import { SessionTokenTotals, Subtask, TaskPipeline, TaskStage } from "./taskPipeline";
+import { humanWaitOf } from "./humanWait";
 
 /**
  * Adds up what a stage or a route actually spent.
@@ -25,6 +26,19 @@ export interface UsageTotals {
    * is the part a change to the harness can actually move.
    */
   elapsedMs: number;
+  /**
+   * Of `elapsedMs`, how much was spent blocked on a human via `ask_user`.
+   *
+   * Carried beside the elapsed total rather than subtracted out of it, because absence
+   * means **unmeasured, not zero**: anything that ran before this was recorded reports
+   * nothing, and a reader who can see which is which can discount it. `workingMs` is
+   * the difference, and is the part a change to the harness can actually move.
+   *
+   * The failure it corrects: a 23-stage route reported 4% idle — apparently not
+   * supervision-bound — while its 32-minute implementation stage had called `ask_user`
+   * twice, so however long those answers took was counted as the model working.
+   */
+  blockedOnHumanMs: number;
   /**
    * Distinct models that actually ran, as the CLI resolved them.
    *
@@ -60,10 +74,21 @@ function emptyTotals(): UsageTotals {
     costUsd: 0,
     tokens: { ...NO_TOKENS },
     elapsedMs: 0,
+    blockedOnHumanMs: 0,
     measured: 0,
     unmeasured: 0,
     models: [],
   };
+}
+
+/**
+ * Time inside sessions that was not spent waiting on a human.
+ *
+ * Clamped, because the two numbers come from different clocks: a recorded wait longer
+ * than the span it sits inside would otherwise produce negative work.
+ */
+export function workingMs(totals: UsageTotals): number {
+  return Math.max(0, totals.elapsedMs - totals.blockedOnHumanMs);
 }
 
 /**
@@ -97,6 +122,7 @@ export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
   for (const subtask of subtasks) {
     if (!hasRun(subtask)) continue;
     totals.elapsedMs += elapsedOf(subtask);
+    totals.blockedOnHumanMs += humanWaitOf(subtask);
     // What ran, not what was asked for. A model an org policy disallows falls
     // back silently, and two runs compared on the requested name would then be
     // two runs of the same model reported as a comparison between two.
@@ -168,6 +194,12 @@ function addDiscarded(live: UsageTotals, pipeline: TaskPipeline): UsageTotals {
   return {
     costUsd: live.costUsd + gone.costUsd,
     elapsedMs: live.elapsedMs + gone.elapsedMs,
+    // A discarded run contributes no wait, so its `elapsedMs` still includes whatever
+    // it spent blocked on a human. Left that way deliberately: `DiscardedRun` records
+    // one elapsed total and separating it would mean re-deriving a number from subtasks
+    // that no longer exist. It makes `workingMs` an over-estimate on a churning route,
+    // in the direction that does not flatter the harness.
+    blockedOnHumanMs: live.blockedOnHumanMs + gone.blockedOnHumanMs,
     measured: live.measured + gone.measured,
     unmeasured: live.unmeasured + gone.unmeasured,
     models: live.models,

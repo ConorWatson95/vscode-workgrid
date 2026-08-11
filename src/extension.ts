@@ -782,6 +782,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     },
     worktreeClaims,
+    // How long this task's stages have been held waiting on an answer. Sampled either
+    // side of each subtask, so the operator's thinking time stops being recorded as
+    // the model working — see `domain/humanWait.ts`.
+    (taskId) => askUser.humanWaitMs(taskId),
   );
 
   // Lets an open report show a stage's commands as they run, rather than nothing

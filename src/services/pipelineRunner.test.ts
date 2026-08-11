@@ -107,6 +107,14 @@ function makeRunner(
     verify?: Record<string, { exitCode: number; output?: string; spawnError?: string }>;
     /** Canned worktree files, keyed by path relative to the worktree. */
     files?: Record<string, string>;
+    /**
+     * Cumulative human-wait readings, consumed one per call.
+     *
+     * A list rather than a number because the runner samples the total either side of
+     * each session and keeps the difference — so a test has to be able to move it
+     * while the session is notionally running.
+     */
+    humanWaits?: number[];
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -143,12 +151,97 @@ function makeRunner(
       options.files === undefined
         ? undefined
         : async (_worktreePath, relativePath) => options.files?.[relativePath],
+      undefined,
+      options.humanWaits === undefined
+        ? undefined
+        : () => {
+            const readings = options.humanWaits!;
+            // The last reading stands once the list runs out, so a run with more
+            // subtasks than readings reports no further waits rather than throwing.
+            return readings.length > 1 ? readings.shift()! : readings[0];
+          },
     ),
     verified,
   };
 }
 
 const PLAN_REPLY = "1. Part one — do one.\n2. Part two — do two.";
+
+/**
+ * Time an operator spent answering must not be recorded as the model working.
+ *
+ * `ask_user` returns its answer into the waiting turn, so the wait sits inside the
+ * subtask's own span. A real 23-stage route reported 4% idle — apparently not
+ * supervision-bound — while its 32-minute implementation stage had asked two
+ * questions. The runner samples a cumulative total either side of the session, the
+ * way it snapshots the worktree list, because the wait ends several layers below here.
+ */
+describe("human wait attribution", () => {
+  it("records what a subtask waited, as the difference between two readings", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "1. Only one — do it." } });
+    // Read before the first session, then after: 0 -> 90s.
+    const { repo, runner } = makeRunner(sessions, { humanWaits: [0, 90_000] });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const saved = await repo.get("t1");
+    const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.subtasks[0].activity?.blockedOnHumanMs).toBe(90_000);
+  });
+
+  it("attributes a wait to the subtask it held up, not to its siblings", async () => {
+    const sessions = fakeSessions({ "plan:": { text: PLAN_REPLY } });
+    // Splitting takes no reading. Subtask one reads 0 then 60s; subtask two reads 60s
+    // both times, because the total has not moved since.
+    const { repo, runner } = makeRunner(sessions, {
+      humanWaits: [0, 60_000, 60_000, 60_000],
+    });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.subtasks[0].activity?.blockedOnHumanMs).toBe(60_000);
+    // The second subtask waited on nothing, and must not inherit the first's wait.
+    expect(build?.subtasks[1].activity?.blockedOnHumanMs).toBeUndefined();
+  });
+
+  // A route where nobody asked anything must round-trip unchanged rather than gaining
+  // a zero field on every subtask.
+  it("records nothing when no question was asked", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "1. Only one — do it." } });
+    const { repo, runner } = makeRunner(sessions, { humanWaits: [4_000] });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.subtasks[0].activity?.blockedOnHumanMs).toBeUndefined();
+  });
+
+  it("behaves exactly as before when no wait source is injected", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "1. Only one — do it." } });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({ kind: "awaitingApproval" });
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.subtasks[0].activity?.blockedOnHumanMs).toBeUndefined();
+  });
+
+  it("says so in the step list, so the report explains a long stage", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "1. Only one — do it." } });
+    const { repo, runner } = makeRunner(sessions, { humanWaits: [0, 125_000] });
+    await repo.save(task());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.steps.some((step) => /125s waiting on an answer/.test(step))).toBe(true);
+  });
+});
 
 describe("advance", () => {
   it("does nothing for an unharnessed task", async () => {

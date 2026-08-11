@@ -217,3 +217,116 @@ describe("answering", () => {
     expect(service.waiting("t2")).toHaveLength(1);
   });
 });
+
+/**
+ * The measurement `ask_user` was quietly breaking.
+ *
+ * The answer returns into the waiting turn, which is why the tool is cheaper than
+ * `NEEDS-INFO` — and the side effect is that the operator's thinking time sits inside
+ * the running subtask's span. A real 23-stage route reported 4% idle while its
+ * 32-minute implementation stage had asked two questions, so supervision was being
+ * counted as execution.
+ */
+describe("time spent waiting on a human", () => {
+  let fs: ReturnType<typeof memoryFs>;
+  let service: AskUserService;
+  let clock: string;
+
+  beforeEach(() => {
+    fs = memoryFs();
+    clock = "2026-08-11T09:00:00.000Z";
+    service = new AskUserService("asks", fs, logger, () => "node", () => clock);
+    service.prepare("t1");
+  });
+
+  function raise(id: string, questions: string[]) {
+    fs.writeFile(`${INBOX}/${id}.ask.json`, ask(questions));
+    service.sweep("t1", INBOX);
+  }
+
+  function at(time: string) {
+    clock = time;
+  }
+
+  it("starts at nothing", () => {
+    expect(service.humanWaitMs("t1")).toBe(0);
+  });
+
+  it("counts how long an answered question was waiting", () => {
+    raise("c1", ["Which environment?"]);
+    at("2026-08-11T09:03:20.000Z");
+    service.answer("c1", ["UAT"]);
+    expect(service.humanWaitMs("t1")).toBe(200_000);
+  });
+
+  // A stage that asked twice waited twice, and a real one did.
+  it("accumulates across several questions", () => {
+    raise("c1", ["First?"]);
+    at("2026-08-11T09:01:00.000Z");
+    service.answer("c1", ["a"]);
+
+    raise("c2", ["Second?"]);
+    at("2026-08-11T09:04:00.000Z");
+    service.answer("c2", ["b"]);
+
+    expect(service.humanWaitMs("t1")).toBe(4 * 60_000);
+  });
+
+  // Abandoned time is still time the stage was blocked and not working. Counting only
+  // answers would make a stopped task look as though its stages ran fast.
+  it("counts a wait that was abandoned rather than answered", () => {
+    raise("c1", ["Q?"]);
+    at("2026-08-11T09:02:00.000Z");
+    service.abandon("t1");
+    expect(service.humanWaitMs("t1")).toBe(2 * 60_000);
+  });
+
+  /**
+   * The ordering that makes this work at all.
+   *
+   * `release` is called from inside `StageSessionRunner.run` as the session ends,
+   * which is *before* the runner takes its closing reading. Clearing the total there
+   * would make the runner's difference negative and discard the wait `release` had
+   * just recorded through `abandon`.
+   */
+  it("keeps the total after release, so the runner's closing reading still sees it", () => {
+    raise("c1", ["Q?"]);
+    at("2026-08-11T09:05:00.000Z");
+    service.release("t1");
+    expect(service.humanWaitMs("t1")).toBe(5 * 60_000);
+  });
+
+  it("attributes waits to the task that waited", () => {
+    service.prepare("t2");
+    raise("c1", ["Q?"]);
+    fs.writeFile("/abs/asks/t2/questions/c9.ask.json", ask(["Other?"]));
+    service.sweep("t2", "/abs/asks/t2/questions");
+
+    at("2026-08-11T09:01:00.000Z");
+    service.answer("c1", ["a"]);
+    expect(service.humanWaitMs("t1")).toBe(60_000);
+    expect(service.humanWaitMs("t2")).toBe(0);
+  });
+
+  it("does not count a question that is still outstanding", () => {
+    raise("c1", ["Q?"]);
+    at("2026-08-11T09:07:00.000Z");
+    expect(service.humanWaitMs("t1")).toBe(0);
+    // Reported separately, because a stage blocked right now is where the wait matters
+    // most and it has not ended yet.
+    expect(service.waitingForMs("c1")).toBe(7 * 60_000);
+  });
+
+  it("reports no current wait for an id nothing is waiting under", () => {
+    expect(service.waitingForMs("nope")).toBe(0);
+  });
+
+  it("ignores an answer for a question that is no longer waiting", () => {
+    raise("c1", ["Q?"]);
+    at("2026-08-11T09:01:00.000Z");
+    service.answer("c1", ["a"]);
+    at("2026-08-11T09:09:00.000Z");
+    expect(service.answer("c1", ["again"])).toBe(false);
+    expect(service.humanWaitMs("t1")).toBe(60_000);
+  });
+});

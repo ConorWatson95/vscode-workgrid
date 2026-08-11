@@ -107,6 +107,22 @@ export interface SubtaskActivity {
   tokens?: SessionTokenTotals;
 
   /**
+   * Of this subtask's span, how long it sat blocked on a human via `ask_user`.
+   *
+   * `ask_user` returns its answer into the waiting turn, which is the whole reason it
+   * is cheaper than `NEEDS-INFO` — and the side effect is that the operator's
+   * thinking time is recorded inside `startedAt`/`finishedAt` as though the model
+   * were working. A real route reported 4% idle while its 32-minute implementation
+   * stage had asked two questions, so supervision was being counted as execution:
+   * the one number the harness exists to move, folded into the one it cannot.
+   *
+   * Absent means **unmeasured, not zero** — anything that ran before this existed
+   * records nothing — which is why `stageUsage` reports it beside the elapsed time
+   * rather than only subtracting it. See `domain/humanWait.ts`.
+   */
+  blockedOnHumanMs?: number;
+
+  /**
    * The model the CLI actually resolved for this session, from its init event.
    *
    * Recorded next to the request rather than instead of it, because they can

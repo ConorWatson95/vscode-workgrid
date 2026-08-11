@@ -5,6 +5,7 @@ import {
 } from "../agents/askUserProtocol";
 import { ASK_USER_SERVER_SCRIPT } from "../agents/askUserServerScript";
 import { GateFileSystem } from "./permissionGateService";
+import { HumanWaitTally, waitedMs } from "../domain/humanWait";
 import { Logger } from "../logging/logger";
 
 /**
@@ -51,6 +52,15 @@ export class AskUserService {
 
   private readonly pending = new Map<string, PendingAsk>();
   private readonly settled = new Set<string>();
+  /**
+   * How long stages have sat blocked on a human, per task.
+   *
+   * Cumulative and sampled by the runner either side of a subtask, because the wait
+   * ends here — several layers below the code that owns the subtask record — and
+   * there is no return path from an answered question back to the session it
+   * unblocked. See `domain/humanWait.ts`.
+   */
+  private readonly waits = new HumanWaitTally();
   private readonly inboxes = new Map<string, string>();
   private readonly watchers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly listeners = new Set<(ask: PendingAsk) => void>();
@@ -72,6 +82,29 @@ export class AskUserService {
   /** The question waiting under a given id, if it still is. */
   get(callId: string): PendingAsk | undefined {
     return this.pending.get(callId);
+  }
+
+  /**
+   * Cumulative time this task's stages have spent blocked on a human, in ms.
+   *
+   * Read by the runner before and after a subtask; the difference is what that
+   * subtask waited. Includes waits that ended while nothing was running — those
+   * cannot be attributed to a subtask, and discarding them would under-report
+   * supervision, which is the error this exists to fix.
+   */
+  humanWaitMs(taskId: string): number {
+    return this.waits.total(taskId);
+  }
+
+  /**
+   * Time a question has been waiting *so far*, for one still outstanding.
+   *
+   * Separate from the tally, which only counts settled waits: a stage blocked right
+   * now is the case where knowing the wait matters most, and it has not ended yet.
+   */
+  waitingForMs(callId: string, at: string = this.now()): number {
+    const ask = this.pending.get(callId);
+    return ask ? waitedMs(ask.waitingSince, at) : 0;
   }
 
   /**
@@ -135,8 +168,14 @@ export class AskUserService {
     if (!ask) return false;
     this.write(ask.taskId, callId, { answers: [...answers] });
     this.pending.delete(callId);
+    // Counted here rather than left to the elapsed span: this whole wait is inside
+    // the running subtask's start and finish, and without it the operator's thinking
+    // time is recorded as the model working.
+    const waited = waitedMs(ask.waitingSince, this.now());
+    this.waits.add(ask.taskId, waited);
     this.logger.info(
-      `Ask-user: answered ${ask.request.questions.length} question(s) for a live stage.`,
+      `Ask-user: answered ${ask.request.questions.length} question(s) for a live stage ` +
+        `after ${Math.round(waited / 1000)}s.`,
     );
     return true;
   }
@@ -153,6 +192,10 @@ export class AskUserService {
     for (const ask of waiting) {
       this.write(taskId, ask.request.id, { answers: [], abandoned: true });
       this.pending.delete(ask.request.id);
+      // Abandoned time is still time the stage was blocked and not working. Counting
+      // only answered questions would make a stopped task look like its stages ran
+      // fast, which is the opposite of what happened.
+      this.waits.add(taskId, waitedMs(ask.waitingSince, this.now()));
     }
     if (waiting.length > 0) {
       this.logger.info(
@@ -170,6 +213,10 @@ export class AskUserService {
    * is what makes the agent's next turn immediate.
    */
   release(taskId: string): void {
+    // The wait tally deliberately survives this. `release` is called from inside
+    // `StageSessionRunner.run` as the session ends, which is *before* the runner takes
+    // its closing reading — so clearing the total here would make the difference
+    // negative and throw away the wait it had just recorded in `abandon`.
     this.abandon(taskId);
     const timer = this.watchers.get(taskId);
     if (timer) {

@@ -63,6 +63,7 @@ const EMPTY_OUTCOME = (): ArmOutcome => ({
     costUsd: 0,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
     elapsedMs: 0,
+    blockedOnHumanMs: 0,
     measured: 0,
     unmeasured: 0,
     models: [],
@@ -83,6 +84,11 @@ export function summariseArm(pipelines: readonly TaskPipeline[]): ArmOutcome {
     const usage = pipelineUsage(pipeline);
     total.usage.costUsd += usage.costUsd;
     total.usage.elapsedMs += usage.elapsedMs;
+    // Carried through, because this is the number a comparison is most easily wrong
+    // about: two arms whose stages asked a different number of questions differ in
+    // elapsed time by however long a human took to answer, which is not a property of
+    // either arm. Reported separately so the working time can be compared on its own.
+    total.usage.blockedOnHumanMs += usage.blockedOnHumanMs;
     total.usage.measured += usage.measured;
     total.usage.unmeasured += usage.unmeasured;
     total.usage.tokens.input += usage.tokens.input;

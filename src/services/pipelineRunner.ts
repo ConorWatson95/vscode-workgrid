@@ -28,6 +28,7 @@ import {
   startSubtask,
 } from "../domain/pipelineEngine";
 import { guidanceFor } from "../domain/stageRefresh";
+import { withHumanWait } from "../domain/humanWait";
 import { CHANGED_NOTHING_REASON, changedNothing } from "../domain/stageProductivity";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
@@ -281,6 +282,18 @@ export class PipelineRunner {
      * nothing to claim, and a runner built without this behaves exactly as before.
      */
     private readonly claims?: WorktreeClaimService,
+    /**
+     * Cumulative time this task's stages have spent blocked on a human, in ms.
+     *
+     * Sampled either side of the session and the difference kept, exactly as the
+     * worktree list is snapshotted around a stage that may create one — because the
+     * wait ends deep inside `AskUserService`, and there is no return path from an
+     * answered question back to the subtask it unblocked.
+     *
+     * Optional like the rest: a runner built without it records no waits, and a route
+     * whose stages never ask anything has none to record.
+     */
+    private readonly humanWaitMs?: (taskId: string) => number,
   ) {}
 
   /**
@@ -879,6 +892,11 @@ export class PipelineRunner {
     }
 
     const taskId = task.id;
+    // Read before the session, for the same reason `claimsBefore` is: what this
+    // subtask waited on a human is the difference between two readings of a
+    // cumulative total, and there is nothing else that can attribute a wait to the
+    // subtask it held up.
+    const waitBefore = this.humanWaitMs?.(taskId) ?? 0;
     let reply;
     try {
       reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
@@ -896,6 +914,18 @@ export class PipelineRunner {
       // The finished activity is on the subtask from here on, and a live copy that
       // outlived its run would keep overriding it in the report.
       this.liveActivities.delete(taskId);
+    }
+
+    // Folded in here, before anything reads the activity, so every path that persists
+    // it carries the wait. Without this the time an operator took to answer sits
+    // inside the subtask's span recorded as the model working — which is how a route
+    // came to report 4% idle while one of its stages had asked two questions.
+    const waitedOnHuman = (this.humanWaitMs?.(taskId) ?? 0) - waitBefore;
+    if (waitedOnHuman > 0) {
+      reply = { ...reply, activity: withHumanWait(reply.activity, waitedOnHuman) };
+      steps.push(
+        `"${subtask.title}" spent ${Math.round(waitedOnHuman / 1000)}s waiting on an answer.`,
+      );
     }
 
     // One ordered read of every protocol marker. The order between them is
