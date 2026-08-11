@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.83.0",
+  "version": "0.83.1",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -69,7 +69,7 @@
       },
       {
         "command": "taskWorkspaces.sessionHistory",
-        "title": "Session Historyâ€¦",
+        "title": "Session History…",
         "category": "Task Workspaces",
         "icon": "$(history)"
       },
@@ -122,13 +122,13 @@
       },
       {
         "command": "taskWorkspaces.checkoutTaskBranch",
-        "title": "Check Out This Taskâ€™s Branch",
+        "title": "Check Out This Task’s Branch",
         "category": "Task Workspaces",
         "icon": "$(git-branch)"
       },
       {
         "command": "taskWorkspaces.mergeIntoTask",
-        "title": "Merge Branch Into Taskâ€¦",
+        "title": "Merge Branch Into Task…",
         "category": "Task Workspaces",
         "icon": "$(git-merge)"
       },
@@ -152,7 +152,7 @@
       },
       {
         "command": "taskWorkspaces.verifyAllChecklist",
-        "title": "Verify All Checklist Itemsâ€¦",
+        "title": "Verify All Checklist Items…",
         "category": "Task Workspaces",
         "icon": "$(checklist)"
       },
@@ -199,13 +199,13 @@
       },
       {
         "command": "taskWorkspaces.adoptBranch",
-        "title": "Create Task from Existing Branchâ€¦",
+        "title": "Create Task from Existing Branch…",
         "category": "Task Workspaces",
         "icon": "$(git-branch)"
       },
       {
         "command": "taskWorkspaces.attachRoute",
-        "title": "Attach a Routeâ€¦",
+        "title": "Attach a Route…",
         "category": "Task Workspaces",
         "icon": "$(list-ordered)"
       },
@@ -277,7 +277,7 @@
       },
       {
         "command": "taskWorkspaces.decideHeldCall",
-        "title": "Decideâ€¦",
+        "title": "Decide…",
         "category": "Task Workspaces",
         "icon": "$(question)"
       },
@@ -307,31 +307,31 @@
       },
       {
         "command": "taskWorkspaces.correctStage",
-        "title": "Fix One Thing in This Stageâ€¦",
+        "title": "Fix One Thing in This Stage…",
         "category": "Task Workspaces",
         "icon": "$(wrench)"
       },
       {
         "command": "taskWorkspaces.revertToStage",
-        "title": "Re-run This Stageâ€¦",
+        "title": "Re-run This Stage…",
         "category": "Task Workspaces",
         "icon": "$(debug-restart)"
       },
       {
         "command": "taskWorkspaces.sendBackToStage",
-        "title": "Send Findings Back to an Earlier Stageâ€¦",
+        "title": "Send Findings Back to an Earlier Stage…",
         "category": "Task Workspaces",
         "icon": "$(reply)"
       },
       {
         "command": "taskWorkspaces.setExperimentArm",
-        "title": "Set Experiment Armâ€¦",
+        "title": "Set Experiment Arm…",
         "category": "Task Workspaces",
         "icon": "$(beaker)"
       },
       {
         "command": "taskWorkspaces.compareRuns",
-        "title": "Compare With Another Runâ€¦",
+        "title": "Compare With Another Run…",
         "category": "Task Workspaces",
         "icon": "$(diff)"
       }
@@ -687,7 +687,7 @@
               }
             ]
           },
-          "markdownDescription": "Files and directories copied into each new worktree after it is created. A fresh worktree contains only tracked files, so untracked local config (for example `.claude/settings.local.json`) has to be brought across.\n\nEntries are either a repository-relative path â€” copied to the same relative path â€” or `{ \"from\": \"...\", \"to\": \"...\" }` where `to` is relative to the worktree. Destinations that escape the worktree are refused. A missing source is logged and skipped, never fatal.\n\nExample: `[\".claude/settings.local.json\", { \"from\": \"C:/shared/.env.local\", \"to\": \".env.local\" }]`"
+          "markdownDescription": "Files and directories copied into each new worktree after it is created. A fresh worktree contains only tracked files, so untracked local config (for example `.claude/settings.local.json`) has to be brought across.\n\nEntries are either a repository-relative path — copied to the same relative path — or `{ \"from\": \"...\", \"to\": \"...\" }` where `to` is relative to the worktree. Destinations that escape the worktree are refused. A missing source is logged and skipped, never fatal.\n\nExample: `[\".claude/settings.local.json\", { \"from\": \"C:/shared/.env.local\", \"to\": \".env.local\" }]`"
         },
         "taskWorkspaces.harnessConfigPath": {
           "type": "string",
@@ -699,7 +699,7 @@
           "type": "string",
           "default": "",
           "scope": "resource",
-          "markdownDescription": "**Deprecated** â€” use `#taskWorkspaces.harnessConfigPath#`, which covers routes as well as rules. Still honoured when set and the newer setting is empty."
+          "markdownDescription": "**Deprecated** — use `#taskWorkspaces.harnessConfigPath#`, which covers routes as well as rules. Still honoured when set and the newer setting is empty."
         },
         "taskWorkspaces.claudeCommand": {
           "type": "string",
@@ -739,19 +739,19 @@
           "type": "number",
           "default": 0,
           "scope": "resource",
-          "markdownDescription": "When a chat session's context grows beyond this many tokens, `#taskWorkspaces.contextStrategy#` is applied automatically at the end of the current turn (no prompt). Set to `0` to disable. Recommended to set this higher than `#taskWorkspaces.compactPromptThreshold#` so you are warned first and only acted on if you keep going â€” e.g. `160000`."
+          "markdownDescription": "When a chat session's context grows beyond this many tokens, `#taskWorkspaces.contextStrategy#` is applied automatically at the end of the current turn (no prompt). Set to `0` to disable. Recommended to set this higher than `#taskWorkspaces.compactPromptThreshold#` so you are warned first and only acted on if you keep going — e.g. `160000`."
         },
         "taskWorkspaces.pauseOnPermissionDenial": {
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "Stop a route when the CLI's permission layer refuses a tool call, so the permission can be granted before the stage runs again.\n\nA headless stage session has nobody to approve anything, so any call not covered by `permissions.allow` is refused. The agent then rewords the command, retries, and eventually works around it â€” and a stage that could not run a command it judged necessary has not done its job, so carrying on buries that behind whatever it did instead. The subtask is left pending, so granting the rule and advancing runs it again.\n\nTurn this off to be told about refusals without stopping the route."
+          "markdownDescription": "Stop a route when the CLI's permission layer refuses a tool call, so the permission can be granted before the stage runs again.\n\nA headless stage session has nobody to approve anything, so any call not covered by `permissions.allow` is refused. The agent then rewords the command, retries, and eventually works around it — and a stage that could not run a command it judged necessary has not done its job, so carrying on buries that behind whatever it did instead. The subtask is left pending, so granting the rule and advancing runs it again.\n\nTurn this off to be told about refusals without stopping the route."
         },
         "taskWorkspaces.interactivePermissions": {
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "Hold a refused tool call open until you approve or deny it, instead of letting it fail.\n\nA headless stage session has nobody to approve anything, so any call not covered by `permissions.allow` is refused; the agent then rewords it several times and works around it, and the stage has to be re-run once a rule is added. With this on, the extension installs a `PreToolUse` hook that pauses the CLI and puts the call in the task tree. Approving lets the agent carry on **mid-turn** â€” no re-run, and no rule needed just to unblock it.\n\nThe first attempt at a capability is still refused by the CLI: that refusal is what tells the extension a human is needed, and it is an attempt the agent made anyway. Its retry is what gets held."
+          "markdownDescription": "Hold a refused tool call open until you approve or deny it, instead of letting it fail.\n\nA headless stage session has nobody to approve anything, so any call not covered by `permissions.allow` is refused; the agent then rewords it several times and works around it, and the stage has to be re-run once a rule is added. With this on, the extension installs a `PreToolUse` hook that pauses the CLI and puts the call in the task tree. Approving lets the agent carry on **mid-turn** — no re-run, and no rule needed just to unblock it.\n\nThe first attempt at a capability is still refused by the CLI: that refusal is what tells the extension a human is needed, and it is an attempt the agent made anyway. Its retry is what gets held."
         },
         "taskWorkspaces.gatedTools": {
           "type": "array",
@@ -779,7 +779,7 @@
           "type": "string",
           "default": "docs/",
           "scope": "resource",
-          "markdownDescription": "Where this project keeps its own documentation â€” business rules, data flows, structure. Named to every route stage, which is told to **read** it before exploring the code and to **update** it when the work establishes durable knowledge of that kind.\n\nThis is the harness's only lasting memory. Each subtask runs in a fresh session, so a stage otherwise re-derives whatever the previous one worked out and discards it when the session ends; a document in the repository is the one place a finding survives.\n\nStages are told not to record progress notes, change summaries, or anything the code already states plainly. Set to empty to disable â€” a project with no documentation convention should not be told to invent one mid-task.",
+          "markdownDescription": "Where this project keeps its own documentation — business rules, data flows, structure. Named to every route stage, which is told to **read** it before exploring the code and to **update** it when the work establishes durable knowledge of that kind.\n\nThis is the harness's only lasting memory. Each subtask runs in a fresh session, so a stage otherwise re-derives whatever the previous one worked out and discards it when the session ends; a document in the repository is the one place a finding survives.\n\nStages are told not to record progress notes, change summaries, or anything the code already states plainly. Set to empty to disable — a project with no documentation convention should not be told to invent one mid-task.",
           "examples": [
             "docs/",
             "docs/architecture",
@@ -790,7 +790,7 @@
           "type": "string",
           "default": ".mcp.json",
           "scope": "resource",
-          "markdownDescription": "MCP server config loaded explicitly into every agent session, via the CLI's `--mcp-config`. Relative to the repository root, or absolute. Set to empty to disable.\n\nEach task worktree is a directory the CLI has never seen, so a project-scoped `.mcp.json` inside it is unapproved â€” `enabledMcpjsonServers` stays empty and none of its servers start. Non-interactive sessions skip the trust *dialog*, which is not the same as granting trust, and a route's headless sessions have nobody to answer a prompt. Passing the config explicitly is what actually loads the servers.\n\nRead from the **repository root**, never a task worktree, so a branch cannot grant itself new tool access. Existing user-scope MCP servers are unaffected (`--strict-mcp-config` is not used)."
+          "markdownDescription": "MCP server config loaded explicitly into every agent session, via the CLI's `--mcp-config`. Relative to the repository root, or absolute. Set to empty to disable.\n\nEach task worktree is a directory the CLI has never seen, so a project-scoped `.mcp.json` inside it is unapproved — `enabledMcpjsonServers` stays empty and none of its servers start. Non-interactive sessions skip the trust *dialog*, which is not the same as granting trust, and a route's headless sessions have nobody to answer a prompt. Passing the config explicitly is what actually loads the servers.\n\nRead from the **repository root**, never a task worktree, so a branch cannot grant itself new tool access. Existing user-scope MCP servers are unaffected (`--strict-mcp-config` is not used)."
         },
         "taskWorkspaces.stageTimeoutMinutes": {
           "type": "number",
@@ -802,7 +802,7 @@
           "type": "array",
           "default": [],
           "scope": "resource",
-          "markdownDescription": "Sibling repositories to link **beside** the worktrees, so relative paths committed into a project keep resolving.\n\nA project that references a sibling as `..\\..\\QubeData\\QubeData.csproj` resolves it correctly from a checkout next to that sibling, and incorrectly from a worktree parked one level deeper. A `Directory.Build.props` can probe for the sibling and fix *project* references, but a `.sln` cannot â€” solution files take no MSBuild properties, so the path written in them is the path that must exist.\n\nEach entry is either a target path (`\"C:\\\\Dev\\\\qubedata\"` â€” the link takes the folder's own name) or `{ \"name\": \"QubeUtils\", \"target\": \"C:\\\\Dev\\\\qube-utils-c\" }` when the reference spells it differently from the clone. Relative targets resolve against the repository root.\n\nCreated as junctions on Windows, which need no elevation. Idempotent, and **a path that is not already a link is never touched** â€” if a real folder is in the way, it is reported and left alone.",
+          "markdownDescription": "Sibling repositories to link **beside** the worktrees, so relative paths committed into a project keep resolving.\n\nA project that references a sibling as `..\\..\\QubeData\\QubeData.csproj` resolves it correctly from a checkout next to that sibling, and incorrectly from a worktree parked one level deeper. A `Directory.Build.props` can probe for the sibling and fix *project* references, but a `.sln` cannot — solution files take no MSBuild properties, so the path written in them is the path that must exist.\n\nEach entry is either a target path (`\"C:\\\\Dev\\\\qubedata\"` — the link takes the folder's own name) or `{ \"name\": \"QubeUtils\", \"target\": \"C:\\\\Dev\\\\qube-utils-c\" }` when the reference spells it differently from the clone. Relative targets resolve against the repository root.\n\nCreated as junctions on Windows, which need no elevation. Idempotent, and **a path that is not already a link is never touched** — if a real folder is in the way, it is reported and left alone.",
           "items": {
             "type": [
               "string",
@@ -814,7 +814,7 @@
           "type": "number",
           "default": 3,
           "scope": "resource",
-          "markdownDescription": "How many subagents a single route stage may run at once (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, set only for stage sessions).\n\nThe harness owns concurrency at the **task** level â€” the point of it is supervising several tasks at once. Left at the CLI's own default a single stage may run twenty subagents, which does not finish that stage twenty times sooner; it starves every other task of the machine and the rate limit they share, and the loss appears as \"everything was slow today\" rather than as anything attributable.\n\nChat sessions you drive by hand are unaffected."
+          "markdownDescription": "How many subagents a single route stage may run at once (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, set only for stage sessions).\n\nThe harness owns concurrency at the **task** level — the point of it is supervising several tasks at once. Left at the CLI's own default a single stage may run twenty subagents, which does not finish that stage twenty times sooner; it starves every other task of the machine and the rate limit they share, and the loss appears as \"everything was slow today\" rather than as anything attributable.\n\nChat sessions you drive by hand are unaffected."
         },
         "taskWorkspaces.stageSubagentDepth": {
           "type": "number",
@@ -834,7 +834,7 @@
           ],
           "default": "compact",
           "scope": "resource",
-          "markdownDescription": "What to do when a session crosses `#taskWorkspaces.autoCompactThreshold#`. `compact` summarises in place, so context regrows from the summary. `checkpoint` writes a handoff (decisions, remaining work, next step), starts a fresh session from it, and keeps the carried-forward brief size-capped â€” slower to trigger, but context does not accumulate across the whole task."
+          "markdownDescription": "What to do when a session crosses `#taskWorkspaces.autoCompactThreshold#`. `compact` summarises in place, so context regrows from the summary. `checkpoint` writes a handoff (decisions, remaining work, next step), starts a fresh session from it, and keeps the carried-forward brief size-capped — slower to trigger, but context does not accumulate across the whole task."
         },
         "taskWorkspaces.model": {
           "type": "string",
@@ -847,7 +847,7 @@
           ],
           "default": "",
           "scope": "resource",
-          "markdownDescription": "Default model for agent sessions, passed to the CLI's `--model`. These are family aliases â€” each resolves to the *latest* model in that family, so they stay current as new versions ship. Empty uses the CLI default. You can also set a specific model id (e.g. `claude-opus-5`) by editing this value directly, or switch per-session from the chat panel header.\n\nA route stage can override this with its own `\"model\"` in `harness.json`, which is usually the better lever: once per-process overhead is dealt with, model time dominates a route, and stages differ enormously in what they need. Reading files to decide where a change belongs is not the same work as writing a migration that will run against a live database."
+          "markdownDescription": "Default model for agent sessions, passed to the CLI's `--model`. These are family aliases — each resolves to the *latest* model in that family, so they stay current as new versions ship. Empty uses the CLI default. You can also set a specific model id (e.g. `claude-opus-5`) by editing this value directly, or switch per-session from the chat panel header.\n\nA route stage can override this with its own `\"model\"` in `harness.json`, which is usually the better lever: once per-process overhead is dealt with, model time dominates a route, and stages differ enormously in what they need. Reading files to decide where a change belongs is not the same work as writing a migration that will run against a live database."
         },
         "taskWorkspaces.permissionMode": {
           "type": "string",
@@ -860,7 +860,7 @@
           "enumDescriptions": [
             "Prompt according to your normal Claude settings.",
             "Auto-accept file edits; prompt for other actions.",
-            "Planning only â€” no changes are made.",
+            "Planning only — no changes are made.",
             "Skip all permission checks (use with care)."
           ],
           "default": "acceptEdits",
@@ -871,7 +871,7 @@
           "type": "string",
           "default": "node",
           "scope": "resource",
-          "markdownDescription": "Program used to run the permission gate hook script. Must be able to run a CommonJS file passed as its first argument.\n\nSet an absolute path if `node` is not on the PATH the CLI inherits. If it cannot run, the gate quietly does nothing and refusals behave as they did before â€” check the Task Workspaces log for `Permission gate`."
+          "markdownDescription": "Program used to run the permission gate hook script. Must be able to run a CommonJS file passed as its first argument.\n\nSet an absolute path if `node` is not on the PATH the CLI inherits. If it cannot run, the gate quietly does nothing and refusals behave as they did before — check the Task Workspaces log for `Permission gate`."
         },
         "taskWorkspaces.stageMcpServers": {
           "type": "array",
@@ -879,7 +879,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Servers from the project MCP config that sessions this extension starts will load â€” route stages and task chats alike. Empty means all of them.\n\nEvery subtask runs a fresh CLI, and the CLI starts every server in the config before doing any work. A stage pays that cost per subtask, twice over: the startup wait, and the tool definitions each server injects into the context of a session that will never use them. A build stage does not need a set of database servers to compile something.\n\nThe cost is worth naming even when everything is healthy â€” but it is severe when a server *cannot* connect, because the CLI waits out a timeout per server. One project measured nine servers, eight of them unreachable, at over three minutes before the first token of work.\n\nNames are matched case-insensitively. A name matching no server is treated as a mistake and the project config is used unchanged, so a typo cannot silently strip every tool.\n\nApplies to task chat as well as stages. It was stages only, on the reasoning that a chat is exploratory and might want any tool â€” but the wait is identical, and a person sitting in front of it notices three minutes far more than a subtask does. Clear this list to get all of them back.\n\nNarrowing the set also passes `--strict-mcp-config`, without which the worktree's own approved config starts every server anyway and the reduction achieves nothing. That *also* drops your user-scope servers, which is more likely to be missed in a chat than in a stage.\n\nOnly ever *removes* servers, so it cannot widen what a task branch can reach â€” which is why it is safe alongside reading the config from the repository root."
+          "markdownDescription": "Servers from the project MCP config that sessions this extension starts will load — route stages and task chats alike. Empty means all of them.\n\nEvery subtask runs a fresh CLI, and the CLI starts every server in the config before doing any work. A stage pays that cost per subtask, twice over: the startup wait, and the tool definitions each server injects into the context of a session that will never use them. A build stage does not need a set of database servers to compile something.\n\nThe cost is worth naming even when everything is healthy — but it is severe when a server *cannot* connect, because the CLI waits out a timeout per server. One project measured nine servers, eight of them unreachable, at over three minutes before the first token of work.\n\nNames are matched case-insensitively. A name matching no server is treated as a mistake and the project config is used unchanged, so a typo cannot silently strip every tool.\n\nApplies to task chat as well as stages. It was stages only, on the reasoning that a chat is exploratory and might want any tool — but the wait is identical, and a person sitting in front of it notices three minutes far more than a subtask does. Clear this list to get all of them back.\n\nNarrowing the set also passes `--strict-mcp-config`, without which the worktree's own approved config starts every server anyway and the reduction achieves nothing. That *also* drops your user-scope servers, which is more likely to be missed in a chat than in a stage.\n\nOnly ever *removes* servers, so it cannot widen what a task branch can reach — which is why it is safe alongside reading the config from the repository root."
         },
         "taskWorkspaces.advanceAfterAnswering": {
           "type": "boolean",
@@ -891,7 +891,7 @@
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "Let a stage ask you a question without ending its session.\n\nThe extension runs a small MCP server exposing an `ask_user` tool. When a stage lacks information it calls the tool, pauses, and your question panel opens; answering hands the answer straight back and the agent carries on **mid-turn** with everything it had already worked out.\n\nWithout this, a stage that needs information replies `NEEDS-INFO` and ends. Answering then appends to the brief and the subtask **runs again from the beginning** â€” so the information costs a stage rather than a pause. That path remains the fallback whenever the tool is unavailable.\n\nRequires `node` (see `#taskWorkspaces.gateInterpreter#`). The extension grants itself one permission rule, `mcp__taskworkspaces__ask_user`, in a settings file it owns; without it the CLI refuses the call and the agent reports that it cannot ask."
+          "markdownDescription": "Let a stage ask you a question without ending its session.\n\nThe extension runs a small MCP server exposing an `ask_user` tool. When a stage lacks information it calls the tool, pauses, and your question panel opens; answering hands the answer straight back and the agent carries on **mid-turn** with everything it had already worked out.\n\nWithout this, a stage that needs information replies `NEEDS-INFO` and ends. Answering then appends to the brief and the subtask **runs again from the beginning** — so the information costs a stage rather than a pause. That path remains the fallback whenever the tool is unavailable.\n\nRequires `node` (see `#taskWorkspaces.gateInterpreter#`). The extension grants itself one permission rule, `mcp__taskworkspaces__ask_user`, in a settings file it owns; without it the CLI refuses the call and the agent reports that it cannot ask."
         }
       }
     }

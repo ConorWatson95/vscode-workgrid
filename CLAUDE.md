@@ -72,6 +72,14 @@ list rather than discovering the breakage later.
   never mutate their input; there's a test asserting it.
 - **Comments explain why, not what.** Match the surrounding density.
 - Two-space indent, double quotes, trailing commas. No linter configured.
+- **Never round-trip a source file through PowerShell to edit it.** `Get-Content -Raw`
+  in Windows PowerShell 5.1 decodes with the system ANSI codepage unless the file has a
+  BOM, and no JSON or TypeScript file here has one — so reading and rewriting
+  double-encodes every non-ASCII character: `—` becomes `â€”`, `…` becomes `â€¦`. It cost
+  a released build. A one-line version bump done that way silently corrupted 34
+  characters across 28 lines of `package.json`, and every command title containing an
+  ellipsis shipped as mojibake in the VS Code menu. Use the editing tools, which preserve
+  encoding; the tell that it has happened is a diff far larger than the edit.
 
 ## Invariants — breaking these loses user data
 
