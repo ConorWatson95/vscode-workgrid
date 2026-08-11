@@ -19,6 +19,7 @@ import {
   parseDeferrals,
   parseBlocked,
   correctionPrompt,
+  correctionMedium,
   parseCorrectionDeclined,
   stripCorrectionDeclined,
   parseActions,
@@ -960,6 +961,60 @@ describe("assessing work that lives outside the repository", () => {
  * one arrangement the harness treats as a bug by definition: a stage did what it was
  * told, and the runtime read a tidy session exit as a completed repair.
  */
+/**
+ * A correction must stay in its own stage's medium.
+ *
+ * A finding is written about where the problem was noticed, which is almost always the
+ * code. Told "go straight to the code the finding names", a planning stage handed a
+ * controller defect went and fixed the controller — competently, narrowly, and in the
+ * wrong stage. The plan then still omitted the work, so the implementation stages were
+ * about to re-run cold against a document that never mentioned it and no STEP would
+ * have accounted for it.
+ */
+describe("what a correction is allowed to change", () => {
+  const PREVIOUS = "Wrote the plan for the report.";
+
+  it("tells a planning stage it is correcting the plan, not the code", () => {
+    const prompt = correctionPrompt(
+      CONTEXT,
+      stage({ kind: "planning" }),
+      "The controller does not reset all session context variables.",
+      PREVIOUS,
+    );
+    expect(prompt).toContain("the plan this stage produced");
+    expect(prompt).not.toContain("Go straight to the code");
+  });
+
+  it("still points an implementation stage at the code", () => {
+    const prompt = correctionPrompt(CONTEXT, stage(), "Wrong cast.", PREVIOUS);
+    expect(prompt).toContain("the code this stage wrote");
+  });
+
+  it("says not to do the owning stage's work here", () => {
+    // The whole failure in one sentence: the fix belonged to a later stage, and doing
+    // it early hid it from every check that asks whether a stage did its own work.
+    const prompt = correctionPrompt(CONTEXT, stage({ kind: "planning" }), "x", PREVIOUS);
+    expect(prompt).toContain("do not do that stage's work here");
+  });
+
+  it("gives every stage kind a medium", () => {
+    const kinds = [
+      "planning",
+      "implementation",
+      "deployment",
+      "test",
+      "codeReview",
+      "domainReview",
+      "behaviourReview",
+      "humanVerification",
+      "assessment",
+    ] as const;
+    for (const kind of kinds) {
+      expect(correctionMedium(kind).trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("a correction declining to be a correction", () => {
   const PREVIOUS = "Built the grid with four stacked rows per Description Code.";
 

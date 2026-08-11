@@ -1,4 +1,5 @@
 import { Subtask, TaskStage } from "../domain/taskPipeline";
+import { StageKind } from "../domain/taskRoute";
 import { SubtaskSpec } from "../domain/pipelineEngine";
 import {
   PlanStep,
@@ -827,12 +828,51 @@ export function stripCorrectionDeclined(reply: string): string {
  * correction that rewrites half the stage costs what the re-run cost and invalidates
  * the reviews that had passed the rest.
  */
+/**
+ * What a correction to this kind of stage is allowed to change.
+ *
+ * `correctionPrompt` told every stage to "go straight to the code the finding names",
+ * which is true of exactly one kind. A finding is written about where a problem was
+ * *noticed*, and that is almost always the code — so a planning stage handed one went
+ * and edited the controller. The fix was competent, narrow and correct, and it was in
+ * the wrong stage: the plan still did not mention the work, so the implementation
+ * stages were about to re-run cold against a document that omitted it, and no `STEP`
+ * would ever have accounted for it. Work done in the wrong stage is invisible to every
+ * mechanism that checks stages did their work.
+ *
+ * The stage's medium was known all along — `kind` is on the stage — and the prompt
+ * simply never said it. Remembering to phrase findings per stage cannot be the
+ * operator's job: it is a property of the stage, so the harness owns it.
+ */
+export function correctionMedium(kind: StageKind): string {
+  switch (kind) {
+    case "planning":
+      return "the plan this stage produced";
+    case "implementation":
+      return "the code this stage wrote";
+    case "deployment":
+      return "this stage's deployment steps and what it ships";
+    case "test":
+      return "the tests this stage wrote";
+    case "codeReview":
+    case "domainReview":
+      return "this stage's review findings";
+    case "behaviourReview":
+      return "the verification checklist this stage wrote";
+    case "humanVerification":
+      return "this stage's own record of what was verified";
+    case "assessment":
+      return "this stage's assessment of what is already done";
+  }
+}
+
 export function correctionPrompt(
   context: StageContext,
   stage: TaskStage,
   finding: string,
   previousReport: string,
 ): string {
+  const medium = correctionMedium(stage.kind);
   return [
     preamble(context, stage),
     "",
@@ -852,10 +892,18 @@ export function correctionPrompt(
     "",
     "### How to do this",
     "",
-    "Go straight to the code the finding names. Do not re-read the ticket, re-derive",
-    "the approach, or re-check work the finding does not mention — reviews have",
-    "already passed the rest of this stage, and changing it invalidates them for no",
-    "reason.",
+    `This stage's output is ${medium}, and that is the only thing you are correcting.`,
+    "A finding is written about where the problem was *noticed*, which is usually the",
+    "code and is not always where this stage works. If it names a defect that a",
+    "different stage owns, correct this stage's own output so that stage produces the",
+    "right thing — do not do that stage's work here. Work done in the wrong stage is",
+    "invisible to everything that checks a stage did its own, and the stage that owns",
+    "it will run afterwards against output that never mentioned it.",
+    "",
+    `Go straight to the part of ${medium} the finding names. Do not re-read the ticket,`,
+    "re-derive the approach, or re-check work the finding does not mention — reviews",
+    "have already passed the rest of this stage, and changing it invalidates them for",
+    "no reason.",
     "",
     "If the fix turns out to need a change of approach rather than a change of code,",
     "do not make it: that is a re-run, and it is a decision for the person who asked",
