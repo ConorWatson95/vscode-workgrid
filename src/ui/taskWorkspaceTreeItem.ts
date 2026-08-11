@@ -8,6 +8,7 @@ import {
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
 import { outstandingChecklist } from "../domain/pipelineEngine";
+import { itemsForGate } from "../domain/checklistScope";
 import {
   ChecklistItem,
   DenialItem,
@@ -188,14 +189,20 @@ export class StageTreeItem extends vscode.TreeItem {
     // spinner was identical whether it was running or sitting on seven
     // unanswered questions. `contextValue` is untouched, because it drives the
     // menu actions that resolve the block.
-    // The gate is blocked by every outstanding item in the pipeline, including the
-    // ones another stage raised — which is all of them, since a gate raises none.
-    // Derived by the engine, not re-counted here. Two hand-rolled copies had already
+    // A gate is blocked by the items *it* answers for, which on a route with no declared
+    // scopes is still every outstanding item in the pipeline — a gate raises none of its
+    // own. Derived by the engine, not re-counted here. Two hand-rolled copies had already
     // drifted: this one counted a skipped stage's items and the task row's did not, so
     // the badge and the button that acts on them could disagree.
-    const outstandingInPipeline = task.pipeline
-      ? outstandingChecklist(task.pipeline).length
-      : 0;
+    //
+    // Scoped for the same reason: a `local` gate showing the pipeline's whole count would
+    // tell the operator they owe eleven checks when the gate will pass on four, and the
+    // number they are shown has to be the number that opens the gate.
+    const outstandingInPipeline = !task.pipeline
+      ? 0
+      : stage.kind === "humanVerification"
+        ? itemsForGate(task.pipeline, stage.id).length
+        : outstandingChecklist(task.pipeline).length;
     const base = stagePresentation(stage, outstandingInPipeline);
     const block = stageBlock(task.pipeline, stage);
     const visual = block ? { ...base, ...blockedStageVisual(block) } : base;

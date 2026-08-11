@@ -7,6 +7,7 @@ import {
 import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
+import { checklistGates, gateFor } from "../domain/checklistScope";
 import {
   UsageTotals,
   discardedUsage,
@@ -347,8 +348,21 @@ export function formatStageReport(
   const checklist = stage.checklist ?? [];
   if (checklist.length > 0) {
     lines.push("", "## Verification items raised", "");
+    // The gate an item is destined for, named where it is scoped. Named rather than left
+    // implicit because the two verifications ask different questions — does it behave,
+    // versus does it work where it is served — and an item read at the wrong one is a
+    // false pass. Unscoped items carry nothing, so a route that declares no scopes
+    // renders exactly as before.
+    const gates = pipeline ? checklistGates(pipeline) : [];
     for (const item of checklist) {
-      lines.push(`- [${item.checked ? "x" : " "}] ${item.text}`);
+      const destination =
+        item.scope && gates.length > 0
+          ? gateFor(gates, item.scope)?.stageName
+          : undefined;
+      lines.push(
+        `- [${item.checked ? "x" : " "}] ${item.text}` +
+          (destination ? `  _(${destination})_` : ""),
+      );
     }
   }
 

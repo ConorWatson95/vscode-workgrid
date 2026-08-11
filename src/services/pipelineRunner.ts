@@ -29,6 +29,7 @@ import {
 } from "../domain/pipelineEngine";
 import { guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
+import { declaredScopes } from "../domain/checklistScope";
 import { CHANGED_NOTHING_REASON, changedNothing } from "../domain/stageProductivity";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
@@ -874,7 +875,13 @@ export class PipelineRunner {
       : stage.kind === "assessment"
         ? assessmentPrompt(context, stage)
         : producesChecklist(stage.kind)
-          ? behaviourReviewPrompt(context, stage)
+          ? behaviourReviewPrompt(
+              context,
+              stage,
+              // From the live pipeline, so rule-added gates count and a review is never
+              // told about a gate this task does not have.
+              declaredScopes(task.pipeline!),
+            )
           : subtaskPrompt(context, stage, subtask, planSteps);
 
     let pipeline = task.pipeline!;
@@ -1099,7 +1106,8 @@ export class PipelineRunner {
     }
 
     if (reply.ok && producesChecklist(stage.kind)) {
-      const items = parseChecklistReply(reply.text);
+      const scopes = declaredScopes(pipeline);
+      const items = parseChecklistReply(reply.text, scopes);
       const recorded = recordChecklist(pipeline, stage.id, items);
       if (recorded.ok) pipeline = recorded.value;
       steps.push(
@@ -1107,6 +1115,33 @@ export class PipelineRunner {
           ? `"${stage.name}" raised ${items.length} verification item(s).`
           : `"${stage.name}" found nothing needing manual verification.`,
       );
+      // Said out loud when the route asked for a distinction and the review made none.
+      // Every item then falls to the fallback gate, which is safe but is not what the
+      // route describes — and an operator reading "12 items" at one gate cannot tell
+      // that from a change genuinely having nothing to check anywhere else.
+      if (scopes.length > 0 && items.length > 0) {
+        const tagged = items.filter((entry) => entry.scope).length;
+        if (tagged === 0) {
+          steps.push(
+            `"${stage.name}" tagged none of its ${items.length} item(s) with a ` +
+              `verification stage, so all of them fall to the last one.`,
+          );
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} ignored the scope instruction: ` +
+              `none of ${items.length} item(s) named ${scopes.join(" or ")}. They will all ` +
+              "be asked for at the final scoped gate.",
+          );
+        } else {
+          const byScope = scopes
+            .map((scope) => `${items.filter((i) => i.scope === scope).length} ${scope}`)
+            .join(", ");
+          const untagged = items.length - tagged;
+          steps.push(
+            `Split across verification stages: ${byScope}` +
+              (untagged > 0 ? `, ${untagged} untagged` : "") + ".",
+          );
+        }
+      }
     } else if (reply.ok) {
       steps.push(`Completed "${subtask.title}".`);
     } else {

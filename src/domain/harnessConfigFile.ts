@@ -199,6 +199,19 @@ function parseStage(
     return undefined;
   }
 
+  // Only meaningful on a verification gate. Rejected elsewhere rather than ignored: a
+  // scope declared on, say, a deployment stage looks like it works and silently sends
+  // every item tagged with it to the fallback gate instead, which is a route quietly
+  // verifying things in the wrong place.
+  const checklistScope = str(raw.checklistScope);
+  if (checklistScope !== undefined && kind !== "humanVerification") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "checklistScope" only applies to a ` +
+        `"humanVerification" stage, and this one is "${kind}".`,
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -208,6 +221,7 @@ function parseStage(
     model: str(raw.model),
     splittable: raw.splittable === true,
     gate: gate as StageGate,
+    ...(checklistScope ? { checklistScope } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),

@@ -246,6 +246,44 @@ gates, evidence and durable state outrank per-task speed.
   the barrier (splitting a change across two stages is common, and a review spliced
   between them reviews half a change), floored at the first unresolved stage so a
   pending review never lands in front of one that already ran.
+- **A checklist belongs to the gate that reads it, not to the pipeline**
+  (`domain/checklistScope.ts`, `ChecklistItem.scope`, `RouteStageDefinition.checklistScope`).
+  `outstandingChecklist` pooled every unchecked item route-wide, so the **first**
+  `humanVerification` gate absorbed all of them and every later gate had nothing left to
+  ask for — a route could describe two verifications and only ever perform one. That
+  matters because the two are different questions: run locally against the DEV database
+  and you learn whether the change *behaves*; open it on the deployed DEV site and you
+  learn whether it works where it is served, which is the only pass that catches a menu
+  entry, a permission, a `Web.config` transform applied for one tenant, or an assembly
+  that never deployed. Gates declare a scope, the behaviour review tags each item, and
+  `itemsForGate` gives a gate only what it can answer for. Four rules, each load-bearing:
+  **no declared scopes means the old behaviour exactly**, so nothing that has not opted in
+  changes and there is no migration; **an untagged or misspelled item is assigned, never
+  dropped** — to the last *unresolved* scoped gate, because an item nobody is asked about
+  is worse than one asked in the wrong place, and assigning it to a gate that has already
+  passed would block nothing at all; **a tag is only read as a scope when it names one the
+  route declared**, so a review writing `[Excel]` does not have that silently removed from
+  what the item says; and **a bulk tick cannot reach across gates**
+  (`checkOutstandingChecklist`'s `forGate`), since ticking a site item at a local gate
+  asserts somebody exercised a behaviour in an environment the change had not reached.
+- **The checklist review is spliced immediately before the gate that will read it.** The
+  previous rule was "after the first deployment", which broke as soon as one route had two
+  kinds: on `report-change` the first deployment lands the branch in source control and
+  puts nothing in any environment — the next stage's own intent says so — so the checklist
+  was written while the change was half-live, listing items whose SQL was not yet
+  deployed. One `StageKind` was covering two different acts and counting deployments could
+  not tell them apart; the consuming gate can. The no-gate fallback is deliberately still
+  the first deployment.
+- **`report-change` verifies before it shares** (project config, 11 Aug 2026). The old
+  route merged into shared DEV and *then* deployed the SQL and asked for sign-off, so an
+  unverified change sat in everyone's branch while it was still being checked. Now:
+  commit and push the task branch → preview the SQL deploy → deploy it → QA checklist →
+  verify locally against DEV → **merge into DEV** → sign off on the DEV site. Splitting
+  the old "Land on DEV" in two is what makes that safe, and the half that matters is the
+  check: deploying scripts that exist in no branch at all is the one thing the reorder
+  must not allow, so the commit stage verifies with
+  `Test-WorkLandedOnDev.ps1 -Upstream` — clean tree including untracked files, and the
+  commits pushed to the branch's own remote.
 - **A checklist-writing review goes *after* the first deployment, not before it.** The
   exact inverse, and it needs its own rule: a checklist is a list of things for a person
   to exercise, so a runtime QA stage raised before anything reached DEV produces items

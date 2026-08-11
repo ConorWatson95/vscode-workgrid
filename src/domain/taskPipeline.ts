@@ -312,6 +312,23 @@ export interface ChecklistItem {
    * and bulk-ticking it would be a false statement rather than a judgement call.
    */
   kind?: "verify" | "action";
+  /**
+   * Which verification gate should read this item, by the gate's declared
+   * `checklistScope`.
+   *
+   * Exists because one pooled list cannot express two verifications in two
+   * environments. On a real route the same change has to be exercised twice for
+   * different reasons — locally against the DEV database, which asks whether the
+   * change *behaves*, and then on the deployed DEV site, which asks whether it works
+   * where people will see it and catches configuration, permissions and the
+   * deployment itself. `outstandingChecklist` pooled every item pipeline-wide, so the
+   * first gate absorbed all of them and the second had nothing left to ask for.
+   *
+   * Absent means unscoped, which is **not** the same as "no gate": see
+   * `domain/checklistScope.ts`. An item must be verified somewhere, so an unscoped
+   * one is assigned rather than dropped.
+   */
+  scope?: string;
   checked: boolean;
   /** Stage that raised it, so the gate can explain where each item came from. */
   raisedByStage: string;
@@ -336,6 +353,16 @@ export interface TaskStage {
    * one and cannot be approved while any remain unchecked.
    */
   checklist?: ChecklistItem[];
+  /**
+   * What this verification gate is responsible for confirming, as a short label —
+   * `"local"`, `"dev-site"`. Copied from the route so a persisted pipeline stays
+   * self-describing.
+   *
+   * Only meaningful on a `humanVerification` stage. When no gate in the pipeline
+   * declares one, checklist behaviour is exactly what it was before scopes existed:
+   * the first unresolved gate answers for every item. See `domain/checklistScope.ts`.
+   */
+  checklistScope?: string;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**

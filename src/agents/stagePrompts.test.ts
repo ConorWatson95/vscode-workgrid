@@ -354,7 +354,7 @@ describe("parseChecklistReply", () => {
   it("parses a bulleted checklist", () => {
     expect(
       parseChecklistReply("- Edit an existing customer\n- Run a dealer report"),
-    ).toEqual(["Edit an existing customer", "Run a dealer report"]);
+    ).toEqual([{ text: "Edit an existing customer" }, { text: "Run a dealer report" }]);
   });
 
   it("treats NONE as an empty but valid answer", () => {
@@ -367,18 +367,56 @@ describe("parseChecklistReply", () => {
   it("ignores surrounding prose", () => {
     expect(
       parseChecklistReply("Here is what to check:\n\n- Exports still balance\n\nThanks."),
-    ).toEqual(["Exports still balance"]);
+    ).toEqual([{ text: "Exports still balance" }]);
   });
 
   it("accepts numbered items", () => {
     expect(parseChecklistReply("1. Check totals\n2) Check headings")).toEqual([
-      "Check totals",
-      "Check headings",
+      { text: "Check totals" },
+      { text: "Check headings" },
     ]);
   });
 
   it("returns nothing for an empty reply", () => {
     expect(parseChecklistReply("")).toEqual([]);
+  });
+
+  /**
+   * Scoping, which is what lets one route verify the same change in two environments.
+   * The tag is only read as a scope when it names one the route declared — see
+   * `splitScopeTag` — so a review describing an item as `[Excel]` does not have that
+   * silently removed from what the item says.
+   */
+  it("reads a scope tag that names a declared gate", () => {
+    expect(
+      parseChecklistReply(
+        "- [local] Run the report locally\n- [dev-site] Open it on DEV",
+        ["local", "dev-site"],
+      ),
+    ).toEqual([
+      { text: "Run the report locally", scope: "local" },
+      { text: "Open it on DEV", scope: "dev-site" },
+    ]);
+  });
+
+  it("leaves an item untagged when the route declares no scopes", () => {
+    expect(parseChecklistReply("- [local] Run the report locally")).toEqual([
+      { text: "[local] Run the report locally" },
+    ]);
+  });
+
+  it("keeps an unrecognised bracket in the text", () => {
+    expect(parseChecklistReply("- [Excel] Compare the headers", ["local"])).toEqual([
+      { text: "[Excel] Compare the headers" },
+    ]);
+  });
+
+  // An untagged item is still an item: it is assigned to a gate downstream rather than
+  // dropped, so the parser must not discard it for lacking a tag.
+  it("keeps an untagged item when scopes are declared", () => {
+    expect(parseChecklistReply("- Check the totals", ["local", "dev-site"])).toEqual([
+      { text: "Check the totals" },
+    ]);
   });
 });
 
@@ -797,7 +835,9 @@ describe("a behaviour review's output channels", () => {
       ].join("\n"),
     );
     expect(items).toEqual([
-      "Open the parts scorecard for a dealer with no sales and confirm it reads 0.0%",
+      {
+        text: "Open the parts scorecard for a dealer with no sales and confirm it reads 0.0%",
+      },
     ]);
   });
 });

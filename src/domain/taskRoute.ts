@@ -135,6 +135,18 @@ export interface RouteStageDefinition {
   /** Optional slash-command to invoke instead of a plain prompt, e.g. "/review". */
   workflow?: string;
   /**
+   * What this verification gate confirms, as a short label: `"local"`, `"dev-site"`.
+   *
+   * Only meaningful on a `humanVerification` stage, and the mechanism that lets one
+   * route verify the same change in more than one environment. A behaviour review is
+   * told the declared scopes and tags each checklist item with the one it belongs to,
+   * so a gate asks only for the items it can actually answer for.
+   *
+   * A route that declares none behaves exactly as before: the first unresolved gate
+   * answers for everything. See `domain/checklistScope.ts`.
+   */
+  checklistScope?: string;
+  /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *
    * Stages differ enormously in what they need. Deciding which of three

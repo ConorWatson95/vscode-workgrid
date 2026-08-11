@@ -718,6 +718,136 @@ describe("checklists", () => {
     expect(result.ok === false && result.error.message).toContain("existing customer");
   });
 
+  /**
+   * Two verifications in two environments, which one pooled list could not express.
+   *
+   * The same change has to be exercised locally against the DEV database — does it
+   * behave — and again on the deployed DEV site, which is the only pass that catches
+   * configuration, permissions or the deployment itself. Before scopes, the first gate
+   * absorbed every item and the second had nothing to ask for, so a route could describe
+   * two verifications and only ever perform one.
+   */
+  describe("two verification gates, scoped", () => {
+    const TWO_GATES: RouteDefinition = {
+      id: "two-gates",
+      label: "Two gates",
+      stages: [
+        {
+          id: "qa",
+          label: "QA checklist",
+          kind: "behaviourReview",
+          intent: "plan it",
+          splittable: false,
+          gate: "auto",
+        },
+        {
+          id: "local",
+          label: "Local verification",
+          kind: "humanVerification",
+          intent: "run it locally",
+          splittable: false,
+          gate: "approval",
+          checklistScope: "local",
+        },
+        {
+          id: "site",
+          label: "DEV site sign-off",
+          kind: "humanVerification",
+          intent: "open it on DEV",
+          splittable: false,
+          gate: "approval",
+          checklistScope: "dev-site",
+        },
+      ],
+    };
+
+    function scoped(): TaskPipeline {
+      let pipeline = must(
+        recordChecklist(createPipeline(TWO_GATES), "qa", [
+          { text: "Run the report locally", scope: "local" },
+          { text: "Open the report on the DEV site", scope: "dev-site" },
+        ]),
+      );
+      // Both gates held, so either can be approved in isolation for the test.
+      pipeline = {
+        ...pipeline,
+        stages: pipeline.stages.map((stage) =>
+          stage.kind === "humanVerification"
+            ? { ...stage, status: "awaiting-approval" as const }
+            : stage,
+        ),
+      };
+      return pipeline;
+    }
+
+    it("carries the declared scope onto the stage", () => {
+      const pipeline = createPipeline(TWO_GATES);
+      expect(pipeline.stages[1].checklistScope).toBe("local");
+      expect(pipeline.stages[2].checklistScope).toBe("dev-site");
+    });
+
+    it("records the scope a review tagged an item with", () => {
+      expect(scoped().stages[0].checklist).toEqual([
+        {
+          id: "qa-c1",
+          text: "Run the report locally",
+          checked: false,
+          raisedByStage: "qa",
+          scope: "local",
+        },
+        {
+          id: "qa-c2",
+          text: "Open the report on the DEV site",
+          checked: false,
+          raisedByStage: "qa",
+          scope: "dev-site",
+        },
+      ]);
+    });
+
+    it("blocks each gate only on its own items", () => {
+      const pipeline = scoped();
+
+      const local = approveStage(pipeline, "local", T);
+      expect(local.ok).toBe(false);
+      expect(local.ok === false && local.error.message).toContain("locally");
+      expect(local.ok === false && local.error.message).not.toContain("DEV site");
+
+      const site = approveStage(pipeline, "site", T);
+      expect(site.ok).toBe(false);
+      expect(site.ok === false && site.error.message).toContain("DEV site");
+      expect(site.ok === false && site.error.message).not.toContain("locally");
+    });
+
+    // The behaviour the whole change exists for: the local gate passes on local
+    // evidence, and the site item is still owed.
+    it("lets the local gate pass while the site item is still outstanding", () => {
+      let pipeline = scoped();
+      const localItem = pipeline.stages[0].checklist![0];
+      pipeline = must(setChecklistItem(pipeline, localItem.id, { checked: true, at: T }));
+
+      const local = approveStage(pipeline, "local", T);
+      expect(local.ok).toBe(true);
+
+      const site = approveStage(must(local), "site", T);
+      expect(site.ok).toBe(false);
+      expect(site.ok === false && site.error.kind).toBe("checklistIncomplete");
+    });
+
+    it("does not let a bulk tick at one gate answer for the other", () => {
+      const pipeline = scoped();
+      const { pipeline: after, checked } = checkOutstandingChecklist(pipeline, {
+        forGate: "local",
+        note: "Ran it locally",
+        at: T,
+      });
+      expect(checked).toBe(1);
+      const items = after.stages[0].checklist!;
+      expect(items.find((i) => i.scope === "local")?.checked).toBe(true);
+      expect(items.find((i) => i.scope === "dev-site")?.checked).toBe(false);
+    });
+  });
+
   it("accumulates items raised by an earlier stage into the final gate", () => {
     // The items belong to the behaviour review, not the gate itself.
     const pipeline = atGate(["Check exports"]);
@@ -1137,6 +1267,41 @@ describe("ruleInsertionIndex", () => {
     // A static review still goes in front of it: whether an object is safe to run is
     // a question worth nothing once it has run.
     expect(ruleInsertionIndex(stages, "domainReview")).toBe(1);
+  });
+
+  /**
+   * Anchored on the gate that reads the checklist, which is the only position that is
+   * right once a route has two kinds of deployment.
+   *
+   * `report-change` has both: one lands the branch in source control and puts nothing in
+   * any environment, the other deploys the SQL. Counting deployments cannot tell them
+   * apart, so "after the first deployment" wrote the checklist while the change was
+   * half-live — items whose SQL was not yet deployed.
+   */
+  it("puts a checklist review immediately before the gate that will read it", () => {
+    const stages = [
+      s("write", "implementation"),
+      s("commit", "deployment"), // lands source; nothing observable yet
+      s("preview", "test"),
+      s("deploy-sql", "deployment"), // now it is live
+      s("local-verify", "humanVerification"),
+      s("merge", "deployment"),
+      s("signoff", "humanVerification"),
+    ];
+    // Index 4 is immediately before the first gate, so after the SQL is deployed.
+    expect(ruleInsertionIndex(stages, "behaviourReview")).toBe(4);
+    // A static review still goes in front of anything irreversible.
+    expect(ruleInsertionIndex(stages, "domainReview")).toBe(1);
+  });
+
+  it("skips a gate that has already passed when placing a checklist review", () => {
+    const stages = [
+      s("write", "implementation"),
+      s("deploy", "deployment"),
+      { ...s("local-verify", "humanVerification"), status: "passed" as const },
+      s("signoff", "humanVerification"),
+    ];
+    expect(ruleInsertionIndex(stages, "behaviourReview")).toBe(3);
   });
 
   it("falls back to the barrier for a checklist stage when nothing deploys", () => {

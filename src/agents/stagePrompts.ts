@@ -9,6 +9,7 @@ import {
 } from "../domain/planSteps";
 import { invariantProtocolBlock } from "./claudeAdapter";
 import { isNothingReported } from "../domain/nothingReported";
+import { splitScopeTag } from "../domain/checklistScope";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -707,6 +708,16 @@ Stay within this objective.${deferralInstruction()}${blockedInstruction(stage)}$
 export function behaviourReviewPrompt(
   context: StageContext,
   stage: TaskStage,
+  /**
+   * Where each item will be exercised, from the route's verification gates.
+   *
+   * Passed in rather than inferred because the gates are a property of the live
+   * pipeline, and a review told the wrong set would tag items for a gate that does not
+   * exist. Empty means the route has one pooled verification, and the tagging
+   * instruction is omitted entirely — asking for a distinction the route cannot honour
+   * would produce tags that go nowhere.
+   */
+  scopes: readonly string[] = [],
 ): string {
   return `${preamble(context, stage)}
 
@@ -714,6 +725,7 @@ ${stage.intent}
 
 Reply with a checklist, one item per line, each starting with "- ".
 Each item must name what a human should exercise and what would indicate a regression.
+${scopeInstruction(scopes)}
 
 A checklist item is something a person **observes**. It is never work. If something
 has to be *done* before the behaviour can be observed at all — a script run, an object
@@ -725,6 +737,35 @@ Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
 
 If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
+}
+
+/**
+ * Tells a behaviour review which verification gate each item belongs to.
+ *
+ * Empty when the route declares no scopes, so a project that has not opted in sees the
+ * prompt it saw before. The tag is a *hint*, not a contract: `splitScopeTag` only
+ * strips one that names a declared scope, and an item tagged with anything else — or
+ * not tagged at all — is still assigned to a gate rather than dropped. That is
+ * deliberate. Every other marker in this protocol had to be defended against a model
+ * that ignores it, and the defence here is that the fallback verifies the item in a
+ * possibly-wrong place rather than in no place.
+ */
+function scopeInstruction(scopes: readonly string[]): string {
+  if (scopes.length === 0) return "";
+  const list = scopes.map((scope) => `[${scope}]`).join(" or ");
+  return `
+This route verifies the change in more than one place, and each item has to say where
+it will be exercised. Begin every item with one of: ${list}.
+
+  - [${scopes[0]}] Open the report for NissanGB with period 248 — the Total column should …
+
+Choose by what the item actually needs to be true. An item that only needs the code and
+the database is a ${scopes[0]} item; one that needs the change to have been deployed and
+served — a menu entry, a permission, a config transform, anything about the running site
+— belongs to a later one. If you are unsure, pick the later gate: an item checked too
+late is an inconvenience, and one checked in a place that cannot show the problem is a
+false pass.
+`;
 }
 
 /** How an assessment stage reports on one stage of the route. */
@@ -993,10 +1034,17 @@ export function parseSubtaskPlan(text: string): SubtaskSpec[] {
 }
 
 /** Parses a checklist reply. "NONE" yields an empty list, which is a valid answer. */
-export function parseChecklistReply(text: string): string[] {
+export function parseChecklistReply(
+  text: string,
+  /**
+   * Scopes the route declared. A tag is only recognised as one when it names one of
+   * these — see `splitScopeTag` for why anything else stays in the item's text.
+   */
+  declaredScopes: readonly string[] = [],
+): { text: string; scope?: string }[] {
   if (/^\s*none\s*$/i.test(text)) return [];
 
-  const items: string[] = [];
+  const items: { text: string; scope?: string }[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
@@ -1004,7 +1052,10 @@ export function parseChecklistReply(text: string): string[] {
     const body = bullet[1].trim();
     // A lone "NONE" bullet means the same as the bare word.
     if (!body || /^none$/i.test(body)) continue;
-    items.push(body);
+    const split = splitScopeTag(body, declaredScopes);
+    // A bullet that was nothing but a scope tag carries no item.
+    if (!split.text) continue;
+    items.push(split.scope ? { text: split.text, scope: split.scope } : { text: split.text });
   }
   return items;
 }

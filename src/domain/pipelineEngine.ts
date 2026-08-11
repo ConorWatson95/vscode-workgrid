@@ -23,6 +23,7 @@ import {
 import { PlanStep, StepAccount } from "./planSteps";
 import { hasUsage, stageUsage } from "./stageUsage";
 import { ownedByPendingStage, ownedByStageResolution } from "./deferralOwnership";
+import { itemsForGate } from "./checklistScope";
 import {
   InterventionKind,
   InterventionRecord,
@@ -150,6 +151,9 @@ function createStage(
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     ...(definition.verify ? { verify: definition.verify } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
+    ...(definition.checklistScope
+      ? { checklistScope: definition.checklistScope }
+      : {}),
     ...(definition.requiredMcpServers && definition.requiredMcpServers.length > 0
       ? { requiredMcpServers: [...definition.requiredMcpServers] }
       : {}),
@@ -315,7 +319,32 @@ export function ruleInsertionIndex(
   // The barrier reasoning does not apply to it either. "Before anything irreversible"
   // protects a review that says whether an object is safe to run; a behaviour review
   // asks how it behaved, which is a question with no answer until it has run.
+  // Immediately before the gate that will *read* the checklist, which is the only
+  // position that is right on every route shape.
+  //
+  // "After the first deployment" was the previous rule, and it broke as soon as a route
+  // had two kinds of deployment. On `report-change` the first one lands the branch in
+  // source control and puts nothing in any environment — its own successor stage says so:
+  // "landing on DEV merges the branch, it does not run the scripts". So the checklist was
+  // written while the change was half-live, asking a human to exercise behaviour whose
+  // SQL was not yet deployed. One `StageKind` was covering two different acts, and
+  // counting deployments could not tell them apart.
+  //
+  // The consuming gate can. A checklist exists to be worked through at a verification
+  // gate, so writing it just before that gate puts it after everything that makes the
+  // change observable, whatever those stages happen to be called.
   if (kind && producesChecklist(kind)) {
+    const gate = stages.findIndex(
+      (stage) =>
+        stage.kind === "humanVerification" &&
+        stage.status !== "passed" &&
+        stage.status !== "skipped",
+    );
+    if (gate !== -1) return Math.max(gate, firstUnresolvedIndex(stages));
+    // No gate left to read it, so anchor on the first deployment as before. Deliberately
+    // unchanged: that rule is right when nothing consumes the checklist — the change is
+    // observable from the first deployment onwards — and narrowing this fix to the
+    // gate-anchored case is what keeps every other route's behaviour identical.
     const deployed = stages.findIndex((stage) => stage.kind === "deployment");
     if (deployed !== -1) return Math.max(deployed + 1, firstUnresolvedIndex(stages));
   }
@@ -820,17 +849,28 @@ function settleStage(
 export function recordChecklist(
   pipeline: TaskPipeline,
   stageId: string,
-  items: readonly string[],
+  /**
+   * Plain strings, or items carrying the gate they belong to.
+   *
+   * Both accepted so every existing caller and test keeps working unchanged — a route
+   * that declares no scopes produces no scoped items, and a bare string is the same
+   * item it always was.
+   */
+  items: readonly (string | { text: string; scope?: string })[],
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
 
-  const checklist: ChecklistItem[] = items.map((text, index) => ({
-    id: `${stage.id}-c${index + 1}`,
-    text,
-    checked: false,
-    raisedByStage: stage.id,
-  }));
+  const checklist: ChecklistItem[] = items.map((entry, index) => {
+    const { text, scope } = typeof entry === "string" ? { text: entry, scope: undefined } : entry;
+    return {
+      id: `${stage.id}-c${index + 1}`,
+      text,
+      checked: false,
+      raisedByStage: stage.id,
+      ...(scope ? { scope } : {}),
+    };
+  });
 
   return ok(replaceStage(pipeline, { ...stage, checklist }));
 }
@@ -932,9 +972,26 @@ export function recordActions(
  */
 export function checkOutstandingChecklist(
   pipeline: TaskPipeline,
-  options: { stageId?: string; note: string; at: string },
+  options: {
+    stageId?: string;
+    /**
+     * Tick only what this verification gate is responsible for.
+     *
+     * Without it, a bulk tick at a `local` gate would also tick the items that belong
+     * to the deployed-site gate — a statement that somebody exercised a behaviour in an
+     * environment the change had not reached. The gate's own value is that each item
+     * was confirmed *somewhere it could be seen*, and ticking across scopes is the
+     * quiet way to lose that.
+     */
+    forGate?: string;
+    note: string;
+    at: string;
+  },
 ): { pipeline: TaskPipeline; checked: number } {
   let checked = 0;
+  const allowed = options.forGate
+    ? new Set(itemsForGate(pipeline, options.forGate).map((item) => item.id))
+    : undefined;
 
   const stages = pipeline.stages.map((stage) => {
     // Skipped stages are excluded for the same reason `outstandingChecklist` excludes
@@ -946,6 +1003,8 @@ export function checkOutstandingChecklist(
 
     const checklist = stage.checklist.map((item) => {
       if (item.checked) return item;
+      // Belongs to a different verification gate, so it is not this operator's to tick.
+      if (allowed && !allowed.has(item.id)) return item;
       // An operator action is excluded from a bulk tick. Ticking a verification in
       // bulk is a judgement about risk; ticking "I opened the pull request" in bulk is
       // simply untrue, and the step it stands for is the one this exists to protect.
@@ -1571,9 +1630,13 @@ export function approveStage(
   // route asks "has someone confirmed this behaves". Operator *actions* gate the stage
   // that raised them, whatever its kind: a pull request nobody opened makes the next
   // stage wrong, and the point of recording the step was that it must not be skipped.
+  // Scoped to the gate, so a route can verify the same change in more than one
+  // environment. `itemsForGate` collapses to "every unchecked item" when no gate in the
+  // pipeline declares a scope, which is what this line did before — so a route that has
+  // not opted in behaves identically and needs no migration.
   const outstanding =
     stage.kind === "humanVerification"
-      ? outstandingChecklist(pipeline)
+      ? itemsForGate(pipeline, stage.id)
       : (stage.checklist ?? []).filter((i) => !i.checked && i.kind === "action");
   if (outstanding.length > 0) {
     const actionsOnly = outstanding.every((i) => i.kind === "action");

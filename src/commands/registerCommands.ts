@@ -3,6 +3,7 @@ import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
 import { correctStage, ruleInsertionIndex } from "../domain/pipelineEngine";
+import { itemsForGate } from "../domain/checklistScope";
 import {
   refreshPendingStages,
   addMissingStages,
@@ -1383,10 +1384,22 @@ async function verifyAllChecklistCommand(
   const task = await resolveTask(ctx, arg);
   if (!task?.pipeline) return;
 
-  const outstanding = outstandingChecklist(task.pipeline);
+  // Scoped to the gate the operator is standing at, when the route has one waiting. A
+  // bulk tick that reached across gates would assert somebody exercised a behaviour in
+  // an environment the change had not yet reached. Falls back to the whole pipeline when
+  // no gate is held — which is also exactly what happens on a route that declares no
+  // scopes, since every item resolves to the one gate.
+  const gate = task.pipeline.stages.find(
+    (stage) => stage.kind === "humanVerification" && stage.status === "awaiting-approval",
+  );
+  const outstanding = gate
+    ? itemsForGate(task.pipeline, gate.id)
+    : outstandingChecklist(task.pipeline);
   if (outstanding.length === 0) {
     void vscode.window.showInformationMessage(
-      `"${task.name}" has nothing outstanding to verify.`,
+      gate
+        ? `"${gate.name}" on "${task.name}" has nothing outstanding to verify.`
+        : `"${task.name}" has nothing outstanding to verify.`,
     );
     return;
   }
@@ -1397,7 +1410,9 @@ async function verifyAllChecklistCommand(
   }
   const confirm = "Verify All";
   const choice = await vscode.window.showWarningMessage(
-    `Mark all ${outstanding.length} outstanding item(s) on "${task.name}" as verified?`,
+    gate
+      ? `Mark all ${outstanding.length} item(s) for "${gate.name}" on "${task.name}" as verified?`
+      : `Mark all ${outstanding.length} outstanding item(s) on "${task.name}" as verified?`,
     { modal: true, detail: shown.join("\n") },
     confirm,
   );
@@ -1420,7 +1435,11 @@ async function verifyAllChecklistCommand(
   }
 
   const at = new Date().toISOString();
-  const result = checkOutstandingChecklist(task.pipeline, { note: note.trim(), at });
+  const result = checkOutstandingChecklist(task.pipeline, {
+    note: note.trim(),
+    at,
+    ...(gate ? { forGate: gate.id } : {}),
+  });
   await ctx.repository.save({ ...task, pipeline: result.pipeline, updatedAt: at });
   ctx.tree.refresh();
 
