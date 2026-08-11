@@ -1238,6 +1238,81 @@ describe("work a stage declined", () => {
     });
   });
 
+  /**
+   * Declines belonging to a run that was thrown away.
+   *
+   * Re-opening a stage clears its checklist and plan steps because they were raised by
+   * a run that no longer exists. Deferrals were only *hidden* by `outstandingDeferrals`
+   * while the stage was pending, and came back the moment it passed again — so a real
+   * task corrected a stage, watched the four after it re-run and pass, and found the
+   * same fourteen items waiting.
+   */
+  describe("when the run that raised them is discarded", () => {
+    /** `correctStage` refuses a stage with nothing to correct, so give it a run. */
+    const ranBuild = (p: TaskPipeline): TaskPipeline => ({
+      ...p,
+      stages: p.stages.map((s) =>
+        s.id === "build"
+          ? {
+              ...s,
+              subtasks: [
+                {
+                  id: "build-1",
+                  title: "Build",
+                  prompt: "",
+                  status: "done" as const,
+                  startedAt: "t0",
+                  finishedAt: "t1",
+                  reply: "built it",
+                },
+              ],
+            }
+          : s,
+      ),
+    });
+
+    it("settles them instead of letting them come back", () => {
+      const declinedThen = recordDeferrals(
+        route(),
+        "review",
+        ["the export structure is missing on live"],
+        "t1",
+      );
+      const corrected = correctStage(ranBuild(declinedThen), "build", {
+        finding: "wrong cast",
+        at: "t2",
+      });
+      expect(corrected.ok).toBe(true);
+      if (!corrected.ok) return;
+
+      const item = (corrected.value.deferrals ?? [])[0];
+      expect(item.resolved).toBe(true);
+      expect(item.resolution).toContain("discarded");
+
+      // And stays settled once the re-opened stage passes again, which is the failure:
+      // hiding it by stage status only deferred the problem.
+      const rerun = {
+        ...corrected.value,
+        stages: corrected.value.stages.map((s) =>
+          s.id === "review" ? { ...s, status: "passed" as const } : s,
+        ),
+      };
+      expect(outstandingDeferrals(rerun)).toHaveLength(0);
+    });
+
+    it("leaves the corrected stage's own declines alone", () => {
+      // A correction keeps everything that stage produced, so what it noticed stands.
+      const declinedThen = recordDeferrals(route(), "build", ["a thing nobody owns"], "t1");
+      const corrected = correctStage(ranBuild(declinedThen), "build", {
+        finding: "wrong cast",
+        at: "t2",
+      });
+      expect(corrected.ok).toBe(true);
+      if (!corrected.ok) return;
+      expect((corrected.value.deferrals ?? [])[0].resolved).toBeUndefined();
+    });
+  });
+
   it("holds the route in front of the stage that ships", () => {
     // The reported failure: a live publish halted on a structure nobody created,
     // several stages after the first agent noticed it was missing.

@@ -6,7 +6,7 @@ import {
   TaskStage,
   truncateHandoff,
 } from "./taskPipeline";
-import { stageFromDefinition } from "./pipelineEngine";
+import { settleDiscardedDeferrals, stageFromDefinition } from "./pipelineEngine";
 import { stageUsage } from "./stageUsage";
 
 /**
@@ -278,9 +278,17 @@ export function revertToStage(
     };
   });
 
+  // The runs being discarded take their declines with them. Without this the items
+  // only go dormant -- `outstandingDeferrals` hides them while the raising stage is
+  // pending -- and return the moment it passes again, so a revert appeared to settle
+  // nothing. Anything still true is raised afresh by the re-run.
+  const withoutDiscardedDeferrals = discard
+    ? settleDiscardedDeferrals(pipeline, reopened, discard.at)
+    : pipeline;
+
   return {
     pipeline: {
-      ...pipeline,
+      ...withoutDiscardedDeferrals,
       stages,
       currentStage: undefined,
       // A question or refusal belonged to the run being discarded.

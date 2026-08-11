@@ -612,6 +612,16 @@ noticed it was missing.
   are dropped — that tail is the stage's guess at an owner, and two stages guessing
   differently about one item is not two items. Deliberately *not* fuzzy matching:
   merging two real items is worse than listing one twice.
+- **Discarding a run settles what it declined** (`settleDiscardedDeferrals`). The half of
+  the re-open rule that was only ever asserted: re-opening a stage clears its checklist
+  and plan steps because they belong to a run that no longer exists, and the same
+  sentence claimed deferrals were "ignored, exactly as that stage's checklist items are
+  discarded". They were not. `outstandingDeferrals` merely *hid* them while the raising
+  stage was pending, so they returned the moment it passed again — a real task corrected
+  a stage, watched the four stages after it re-run and pass, and found the same fourteen
+  items waiting, every one raised by a run that had been thrown away. Settled rather than
+  deleted, which is what `DeferralItem` says about itself; anything still true is raised
+  afresh by the re-run, which is what makes discarding safe.
 - Settling one **requires a sentence**, not a tick. What was missing when every
   stage declined the work was the knowledge of who owns it, so silence would
   reproduce the gap. Items raised by a re-opened stage are ignored, exactly as

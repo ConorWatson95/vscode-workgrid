@@ -638,9 +638,17 @@ export function correctStage(
     };
   });
 
+  // The stages after this one are being thrown away, so the work they declined goes
+  // with them. Without this the items merely go dormant and return the moment those
+  // stages pass again, which makes a correction look as though it changed nothing.
+  const settled = settleDiscardedDeferrals(
+    { ...pipeline, stages },
+    pipeline.stages.slice(index + 1).map((s) => s.id),
+    correction.at,
+  );
+
   return ok({
-    ...pipeline,
-    stages,
+    ...settled,
     currentStage: stage.id,
     pendingQuestion: undefined,
     pendingDenials: undefined,
@@ -1138,6 +1146,48 @@ function deferralKey(text: string): string {
     .replace(/[^a-z\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Settles the declines belonging to runs that are being discarded.
+ *
+ * The half of the re-open rule that was only ever asserted. Re-opening a stage clears
+ * its checklist and its plan steps for a stated reason — they were raised by a run that
+ * no longer exists — and the same sentence claimed deferrals were "ignored, exactly as
+ * that stage's checklist items are discarded". They were not. They stayed on the
+ * pipeline, and `outstandingDeferrals` only *hid* them while the raising stage was
+ * pending. The moment it passed again, they came back.
+ *
+ * Which made a correction look like it had achieved nothing: a real task corrected a
+ * stage, watched the four stages after it re-run and pass, and found the same fourteen
+ * items waiting — every one raised by a run that had since been thrown away.
+ *
+ * Settled rather than deleted, which is what `DeferralItem` says about itself: the
+ * record of what was noticed, and what became of it, survives in the report. Anything
+ * still true is raised again by the re-run, which is what makes discarding safe.
+ */
+export function settleDiscardedDeferrals(
+  pipeline: TaskPipeline,
+  stageIds: readonly string[],
+  at: string,
+): TaskPipeline {
+  const discarded = new Set(stageIds);
+  if (!pipeline.deferrals?.length || discarded.size === 0) return pipeline;
+
+  let changed = false;
+  const deferrals = pipeline.deferrals.map((item) => {
+    if (item.resolved || !discarded.has(item.raisedByStage)) return item;
+    changed = true;
+    return {
+      ...item,
+      resolved: true,
+      resolution:
+        "Raised by a run that was discarded when the stage was re-opened. The stage " +
+        "ran again; anything still outstanding was raised afresh.",
+      resolvedAt: at,
+    };
+  });
+  return changed ? { ...pipeline, deferrals } : pipeline;
 }
 
 /**
