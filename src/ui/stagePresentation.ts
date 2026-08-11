@@ -1,5 +1,6 @@
 import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { parseReviewFindings, summariseFindings } from "../domain/reviewFindings";
+import { isCorrectable } from "../domain/pipelineEngine";
 
 /**
  * Presentation for pipeline stages in the tree. Pure, so the labelling rules are
@@ -28,6 +29,16 @@ export function stagePresentation(
    */
   outstandingInPipeline?: number,
 ): StageVisual {
+  const visual = statusVisual(stage, outstandingInPipeline);
+  // A second token rather than a status of its own: "has output to correct" is
+  // orthogonal to what the stage is doing, and a correction leaves the stage
+  // `pending` while still holding everything it produced.
+  return isCorrectable(stage)
+    ? { ...visual, contextValue: `${visual.contextValue} correctable` }
+    : visual;
+}
+
+function statusVisual(stage: TaskStage, outstandingInPipeline?: number): StageVisual {
   const detail = stageDetail(stage, outstandingInPipeline);
 
   switch (stage.status) {

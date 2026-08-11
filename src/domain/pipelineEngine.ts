@@ -564,6 +564,20 @@ export interface SubtaskSpec {
  * route this came from, four implementation stages carried the cost and the other
  * sixteen were gates, promotions and reviews.
  */
+/**
+ * Whether a stage has produced anything a correction could act on.
+ *
+ * Exported so the tree's context value and `correctStage` cannot disagree about it.
+ * They did: the menu offered the action on a `passed`, `failed` or `awaiting-approval`
+ * stage, and a correction sets its stage back to `pending` — so filing one hid the
+ * command that would file the next, which is precisely the batching the confirmation
+ * dialog invites you to do. Status was never the right question; having produced
+ * something to correct is.
+ */
+export function isCorrectable(stage: TaskStage): boolean {
+  return stage.subtasks.some((subtask) => subtask.reply || subtask.activity);
+}
+
 export function correctStage(
   pipeline: TaskPipeline,
   stageId: string,
@@ -573,7 +587,7 @@ export function correctStage(
   if (index === -1) return err(unknownStage(stageId));
 
   const stage = pipeline.stages[index];
-  if (!stage.subtasks.some((subtask) => subtask.reply || subtask.activity)) {
+  if (!isCorrectable(stage)) {
     return err({
       kind: "notCorrectable",
       message:

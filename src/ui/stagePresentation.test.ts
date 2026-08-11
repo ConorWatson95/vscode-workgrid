@@ -138,6 +138,37 @@ describe("stagePresentation", () => {
     );
     expect(stagePresentation(stage({ status: "failed" })).contextValue).toBe("stage-failed");
   });
+
+  it("marks a stage with output as correctable, whatever its status", () => {
+    const ran = { ...subtask("a", "done"), reply: "did it" };
+    for (const status of ["passed", "failed", "awaiting-approval", "pending"] as const) {
+      expect(stagePresentation(stage({ status, subtasks: [ran] })).contextValue).toContain(
+        "correctable",
+      );
+    }
+  });
+
+  // The bug this pins: a correction sets its stage back to `pending`, and the menu
+  // keyed on `passed|failed|awaiting-approval` — so filing one correction hid the
+  // command that files the next, which is exactly the batching the dialog invites.
+  it("keeps a corrected stage correctable once it is pending again", () => {
+    const corrected = stage({
+      status: "pending",
+      subtasks: [
+        { ...subtask("a", "done"), reply: "did it" },
+        { ...subtask("fix-1", "pending"), correction: { finding: "wrong", at: "t" } },
+      ],
+    });
+    expect(stagePresentation(corrected).contextValue).toBe("stage-pending correctable");
+  });
+
+  it("leaves a stage that has produced nothing uncorrectable", () => {
+    expect(stagePresentation(stage({ status: "pending" })).contextValue).toBe("stage-pending");
+    expect(
+      stagePresentation(stage({ status: "active", subtasks: [subtask("a", "running")] }))
+        .contextValue,
+    ).toBe("stage-active");
+  });
 });
 
 describe("checklistPresentation", () => {
