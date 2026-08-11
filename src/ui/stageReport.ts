@@ -16,6 +16,7 @@ import {
   stageUsage,
   subtasksUsage,
 } from "../domain/stageUsage";
+import { correctionCost } from "../domain/correctionCost";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -155,6 +156,34 @@ export function formatRerunLine(pipeline: TaskPipeline): string | undefined {
     `**Discarded to re-runs:** $${gone.costUsd.toFixed(4)}` +
     (share > 0 ? ` — ${share}% of the total above` : "") +
     (worst ? ` · ${worst}` : "")
+  );
+}
+
+/**
+ * How much of the re-run cost was work that was actually wrong.
+ *
+ * Sits under `formatRerunLine` because it answers the next question that line
+ * provokes: a route that discarded 40% of its spend is either paying to redo
+ * defective work or paying because one fix invalidated fourteen stages, and those
+ * have opposite remedies. Undefined unless something was discarded *and* a share
+ * could be worked out, so a route with no money recorded says nothing here rather
+ * than reporting a proportion of zero.
+ */
+export function formatCorrectionCostLine(pipeline: TaskPipeline): string | undefined {
+  const summary = correctionCost(pipeline);
+  if (summary.collateralShare === undefined) return undefined;
+
+  const worst = summary.events
+    .filter((event) => event.collateralStageNames.length > 0)
+    .sort((a, b) => b.collateralCostUsd - a.collateralCostUsd)[0];
+
+  return (
+    `**Of that, collateral:** $${summary.collateralCostUsd.toFixed(4)}` +
+    ` — ${summary.collateralShare}% was stages re-opened for standing after the one that changed` +
+    (worst
+      ? ` · worst: ${worst.collateralStageNames.length} stage(s) after` +
+        ` ${worst.targetStageName ?? "a correction"}`
+      : "")
   );
 }
 
@@ -479,6 +508,10 @@ export function formatTaskReport(
   // one a single figure suggests.
   const churn = formatRerunLine(pipeline);
   if (churn) parts.push("", churn);
+  // Directly under it, because the split is what makes the churn figure actionable
+  // rather than just alarming.
+  const collateral = formatCorrectionCostLine(pipeline);
+  if (collateral) parts.push("", collateral);
   // The proportion, which no per-stage line can give: "how much of this route
   // actually proved anything?" Omitted entirely when the answer is "all of it",
   // because a reassurance printed every time stops being read.

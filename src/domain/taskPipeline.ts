@@ -534,6 +534,20 @@ export interface DiscardedRun {
   elapsedMs?: number;
   /** Sessions the discarded run had used, whether or not they reported cost. */
   sessions: number;
+  /**
+   * True when this stage was thrown away only because an earlier one changed.
+   *
+   * The distinction the ledger was missing, and the one that decides whether
+   * re-run cost is worth engineering against: a stage discarded because its own
+   * output was wrong is work that genuinely had to be done again, while one
+   * discarded for sitting downstream of that stage may have been perfectly good.
+   * Summed together they say a route is expensive; kept apart they say whether the
+   * expense is the route invalidating in proportion to what actually changed.
+   *
+   * Absent means the target itself — a plain re-run of one stage records no
+   * collateral, so absence must not read as "unknown".
+   */
+  collateral?: boolean;
 }
 
 /** Refusals from one stage, waiting on a decision. */

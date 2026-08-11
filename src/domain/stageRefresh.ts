@@ -235,6 +235,8 @@ export function revertToStage(
             stageName: stage.name,
             at: discard.at,
             ...(discard.reason ? { reason: discard.reason } : {}),
+            // Everything past the target went only because the target did.
+            ...(stage.id === stageId ? {} : { collateral: true }),
             costUsd: totals.costUsd,
             tokens: totals.tokens,
             elapsedMs: totals.elapsedMs,

@@ -40,7 +40,7 @@ import {
   startSubtask,
   SubtaskSpec,
 } from "./pipelineEngine";
-import { TaskPipeline, normalizePipeline } from "./taskPipeline";
+import { TaskPipeline, TaskStage, normalizePipeline } from "./taskPipeline";
 import { RouteDefinition, findRoute, BUILT_IN_ROUTES } from "./taskRoute";
 import { ReviewRule } from "./reviewRules";
 
@@ -1867,6 +1867,43 @@ describe("correctStage", () => {
     const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
     expect(p.stages[0].verdict).toBeUndefined();
     expect(p.stages[0].verification).toBeUndefined();
+  });
+
+  it("records what re-opening the later stages threw away, as collateral", () => {
+    // Without this the cost of a correction was only ever the fix session: the stages
+    // it re-opened had their activity cleared and nothing wrote down what they had
+    // cost, so "the stages after an implementation one are the cheap ones" was an
+    // assertion with no number behind it.
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    expect(p.discarded).toEqual([
+      expect.objectContaining({
+        stageId: "review",
+        collateral: true,
+        costUsd: 2.49,
+        at: "t1",
+      }),
+    ]);
+  });
+
+  it("records nothing for a stage after the target that never ran", () => {
+    const withPending = ran();
+    const p = must(
+      correctStage(
+        {
+          ...withPending,
+          stages: [
+            ...withPending.stages,
+            {
+              id: "deploy", name: "Deploy to DEV", kind: "deployment", status: "pending",
+              intent: "", splittable: false, requiresApproval: false, subtasks: [],
+            } as unknown as TaskStage,
+          ],
+        },
+        "implement",
+        { finding: "wrong cast", at: "t1" },
+      ),
+    );
+    expect(p.discarded?.map((run) => run.stageId)).toEqual(["review"]);
   });
 
   it("re-opens later stages, which ran against output that is about to change", () => {

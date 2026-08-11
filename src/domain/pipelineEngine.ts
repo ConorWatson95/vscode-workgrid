@@ -2,6 +2,7 @@ import { Result, ok, err } from "../utilities/result";
 import {
   ChecklistItem,
   DenialItem,
+  DiscardedRun,
   PlanStepRecord,
   QuestionItem,
   Subtask,
@@ -20,6 +21,7 @@ import {
   producesChecklist,
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
+import { hasUsage, stageUsage } from "./stageUsage";
 import { ownedByPendingStage, ownedByStageResolution } from "./deferralOwnership";
 import {
   InterventionKind,
@@ -571,6 +573,34 @@ export function correctStage(
     correction: { finding, at: correction.at },
   };
 
+  // Captured before the map below clears it. A correction keeps its own stage, so
+  // every entry here is collateral by construction — and it was going unrecorded,
+  // which is precisely why "a correction is cheap because the stages after it are
+  // the cheap ones" was an assertion nobody could check. Only stages that actually
+  // ran: a pending stage after the target is re-opened too, and a zero for it would
+  // fill the ledger with entries for work that never happened.
+  const discarded: DiscardedRun[] = pipeline.stages
+    .slice(index + 1)
+    .map((s) => ({ stage: s, totals: stageUsage(s) }))
+    // Keyed on there being a number to record rather than on `startedAt`: a stage
+    // whose cost was captured without a start time is exactly the entry this ledger
+    // exists for, and a pending stage after the target is re-opened too — a zero for
+    // it would fill the ledger with work that never happened.
+    .filter(({ totals }) => hasUsage(totals))
+    .map(({ stage: s, totals }) => {
+      return {
+        stageId: s.id,
+        stageName: s.name,
+        at: correction.at,
+        reason: `re-opened by a correction to ${stage.name}`,
+        collateral: true,
+        costUsd: totals.costUsd,
+        tokens: totals.tokens,
+        elapsedMs: totals.elapsedMs,
+        sessions: totals.measured + totals.unmeasured,
+      };
+    });
+
   const stages = pipeline.stages.map((s, at) => {
     if (at < index) return s;
     if (at > index) {
@@ -614,6 +644,9 @@ export function correctStage(
     currentStage: stage.id,
     pendingQuestion: undefined,
     pendingDenials: undefined,
+    ...(discarded.length > 0
+      ? { discarded: [...(pipeline.discarded ?? []), ...discarded] }
+      : {}),
   });
 }
 
