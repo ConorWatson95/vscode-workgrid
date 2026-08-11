@@ -734,6 +734,9 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
   const later = task.pipeline.stages
     .slice(task.pipeline.stages.findIndex((s) => s.id === stage.id) + 1)
     .filter((s) => s.status !== "pending").length;
+  const queued = stage.subtasks.filter(
+    (subtask) => subtask.correction && subtask.status === "pending",
+  ).length;
   const confirmed = await vscode.window.showWarningMessage(
     `Fix this in "${stage.name}"?`,
     {
@@ -742,12 +745,16 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
         `"${stage.name}" keeps what it already produced — its report, its cost and its ` +
         "work — and gets one more session that changes only what you named.\n\n" +
         (later > 0
-          ? `${later} later stage(s) will be re-opened, because they ran against output that is about to change.`
-          : "No later stage has run yet, so nothing else is discarded."),
+          ? `${later} later stage(s) will be re-opened, because they ran against output that is about to change.\n\n`
+          : "No later stage has run yet, so nothing else is discarded.\n\n") +
+        (queued > 0
+          ? `${queued} correction(s) are already waiting on this stage; they all run on the next advance.`
+          : "Fix It queues it — add more corrections before advancing, and they run together."),
     },
+    "Fix It & Advance",
     "Fix It",
   );
-  if (confirmed !== "Fix It") return;
+  if (confirmed !== "Fix It" && confirmed !== "Fix It & Advance") return;
 
   const corrected = correctStage(task.pipeline, stage.id, {
     finding,
@@ -766,17 +773,20 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
   ctx.tree.refresh();
   ctx.logger.info(`Harness [${task.name}] correcting "${stage.name}": ${finding.trim()}`);
 
-  if (ctx.configuration.advanceAfterAnswering(ctx.repositoryUri())) {
-    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  // Deliberately not `advanceAfterAnswering`: that setting is about answering a
+  // question and approving a stage, both of which are single deliberate acts whose
+  // only purpose is to unblock the route. A correction is a setup act, and setup acts
+  // come in batches — two findings against one stage want one advance, not two, since
+  // the first advance runs the stage and re-opens everything after it before the
+  // second finding has been filed. Which of the two this is, is known only at the
+  // moment of confirming, so it is asked there rather than settled by a preference.
+  if (confirmed !== "Fix It & Advance") {
+    void vscode.window.showInformationMessage(
+      `"${stage.name}" will fix that on the next advance.`,
+    );
     return;
   }
-  const next = await vscode.window.showInformationMessage(
-    `"${stage.name}" will fix that on the next advance.`,
-    "Advance Route",
-  );
-  if (next === "Advance Route") {
-    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
-  }
+  await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
 }
 
 /**
