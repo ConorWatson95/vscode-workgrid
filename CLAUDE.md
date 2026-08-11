@@ -369,6 +369,16 @@ sessions are invisible":
   and the prompt says it outranks the brief. The gate is the one moment a human has
   just read what a stage produced and knows something the route does not; without
   somewhere to put it, acting on it meant editing the brief or re-running a stage.
+- **A report has to be openable.** `formatTaskReport` embedded every stage's full
+  report, so a real 22-stage route rendered to **394KB of markdown** — which VS Code's
+  preview will not open, so "Show What This Did" appeared to do nothing at all. Command
+  output is what fills it: `MAX_OUTPUT_CHARS` caps it per *subtask*, so a stage with
+  three carries three times the cap and the route carries the sum of every stage. The
+  whole-task view now summarises — status, evidence, verdict, cost, and any stage that
+  says it did not do its work, which is never summarised away because it is the reader's
+  reason for opening the report — with the detail one click away on the stage row.
+  `MAX_REPORT_CHARS` is the backstop for a single stage, announced rather than silent,
+  since output that simply stops reads as the command having stopped.
 - **`agents/stageActivity.ts` + `ui/stageReport.ts`** — a stage session's reply used
   to be parsed for a marker and discarded, so a deployment preview that printed
   pages of output left nothing behind. `StageActivityWatcher` (fed from the same

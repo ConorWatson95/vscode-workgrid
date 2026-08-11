@@ -188,6 +188,35 @@ export function formatCorrectionCostLine(pipeline: TaskPipeline): string | undef
 }
 
 /** One stage's report. */
+/**
+ * Hard ceiling on a rendered report, in characters.
+ *
+ * A backstop, not the mechanism. `formatTaskReport` no longer embeds stage reports and
+ * `MAX_OUTPUT_CHARS` caps command output per subtask — but neither bounds a *stage*,
+ * which carries one subtask's cap per subtask it has, and a split stage that ran three
+ * times through corrections carries all of them. Real stages reached 79KB.
+ *
+ * The number is chosen against the reader, not the renderer: nobody reads 60,000
+ * characters of shell output, and a document that will not open is worth less than a
+ * truncated one. Truncation is announced for the same reason the activity watcher
+ * announces it — output that simply stops reads as the command having stopped.
+ */
+export const MAX_REPORT_CHARS = 60000;
+
+/** Cuts an over-long report at a line boundary and says so. */
+function capReport(markdown: string): string {
+  if (markdown.length <= MAX_REPORT_CHARS) return markdown;
+  const cut = markdown.slice(0, MAX_REPORT_CHARS);
+  const at = cut.lastIndexOf("\n");
+  return (
+    (at > MAX_REPORT_CHARS / 2 ? cut.slice(0, at) : cut) +
+    "\n\n---\n\n_This report was truncated here: it exceeded " +
+    `${Math.round(MAX_REPORT_CHARS / 1000)}k characters, which the markdown preview ` +
+    "will not open. The full record is in the task state file; the usual cause is a " +
+    "stage with several subtasks, each carrying its own cap of captured command output._"
+  );
+}
+
 export function formatStageReport(
   taskName: string,
   stage: TaskStage,
@@ -263,7 +292,7 @@ export function formatStageReport(
 
   if (stage.subtasks.length === 0) {
     lines.push("", "## Intent", "", stage.intent, "", "_This stage has no subtasks yet._");
-    return redactSecrets(lines.join("\n"));
+    return capReport(redactSecrets(lines.join("\n")));
   }
 
   // A review's findings, then what the agent said, then everything else. This order
@@ -358,7 +387,7 @@ export function formatStageReport(
     );
   }
 
-  return redactSecrets(lines.join("\n"));
+  return capReport(redactSecrets(lines.join("\n")));
 }
 
 /**
@@ -486,6 +515,30 @@ function formatSubtaskDetail(subtask: Subtask): string[] {
 }
 
 /** Every stage of a task, for "show me everything this task has done". */
+/**
+ * One line per stage for the whole-task view: outcome, what backs it, what it cost.
+ *
+ * Everything a reader of the route-level report is actually asking. The stage's own
+ * report holds the rest, and embedding it here is what made this document unopenable.
+ */
+function formatStageSummary(stage: TaskStage): string {
+  const bits: string[] = [`**${stage.name}** — ${stage.status}`];
+  const evidence = stageEvidence(stage);
+  if (evidence.basis !== "none") {
+    bits.push(`${evidence.selfReported ? "⚠ " : ""}${redactSecrets(evidence.summary)}`);
+  }
+  if (stage.verdict) bits.push(`verdict: ${stage.verdict}`);
+  const usage = formatUsageLine(stageUsage(stage));
+  if (usage) bits.push(usage);
+  const line = `- ${bits.join(" · ")}`;
+  // The one thing that must never be summarised away: a stage held because it says it
+  // did not do its work. That is the reader's reason for opening the report.
+  return stage.blocked
+    ? `${line}
+  - **Did not do its work:** ${redactSecrets(stage.blocked)}`
+    : line;
+}
+
 export function formatTaskReport(
   taskName: string,
   pipeline: TaskPipeline | undefined,
@@ -521,8 +574,22 @@ export function formatTaskReport(
   // "pending" hides the part worth reading.
   const ran = pipeline.stages.filter((s) => s.subtasks.some((t) => t.activity || t.reply));
   const untouched = pipeline.stages.filter((s) => !ran.includes(s));
-  for (const stage of ran) {
-    parts.push("", "", formatStageReport(taskName, stage, pipeline));
+
+  // Summarised, not concatenated. This used to embed every stage's full report, and
+  // on a real 22-stage route that rendered to 394KB of markdown -- which VS Code's
+  // preview will not open, so the button that produces it appeared to do nothing at
+  // all. Command output is what fills it: capped per *subtask*, so a stage with three
+  // of them carries three times the cap, and the route carries the sum of all of it.
+  //
+  // The detail has not gone anywhere; it is one click away on the stage row. What the
+  // whole-task view is actually for is the shape of the route -- where the money went,
+  // what is backed by something, what is held -- and none of that was legible under a
+  // third of a megabyte of shell output.
+  if (ran.length > 0) {
+    parts.push("", "", "## Stages that have run", "");
+    for (const stage of ran) parts.push(formatStageSummary(stage));
+    parts.push("", "_Open a stage in the tree and choose \"Show What This Did\" for its" +
+      " commands, output and replies._");
   }
   if (untouched.length > 0) {
     parts.push("", "", "## Not yet run", "");
@@ -530,5 +597,5 @@ export function formatTaskReport(
       parts.push(`- ${stage.name} (${stage.status})`);
     }
   }
-  return parts.join("\n");
+  return capReport(parts.join("\n"));
 }

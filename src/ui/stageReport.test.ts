@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatStageReport, formatTaskReport, withLiveActivity } from "./stageReport";
+import {
+  MAX_REPORT_CHARS,
+  formatStageReport,
+  formatTaskReport,
+  withLiveActivity,
+} from "./stageReport";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 
 function stage(overrides: Partial<TaskStage> = {}): TaskStage {
@@ -308,13 +313,32 @@ describe("formatStageReport", () => {
 });
 
 describe("formatTaskReport", () => {
-  it("reports stages that ran and merely lists those that have not", () => {
+  it("summarises stages that ran and merely lists those that have not", () => {
     // A report mostly made of "pending" hides the part worth reading.
     const untouched = stage({ id: "sc-verify", name: "Verify", status: "pending", subtasks: [] });
     const report = formatTaskReport("NMGB-2792", pipeline([stage(), untouched]));
-    expect(report).toContain("Resolved SQL files: 2");
+    expect(report).toContain("## Stages that have run");
+    expect(report).toContain("**Preview the deployment** — passed");
     expect(report).toContain("## Not yet run");
     expect(report).toContain("Verify (pending)");
+  });
+
+  it("leaves the stage's own output to the stage's own report", () => {
+    // It used to embed every stage report in full, which on a real 22-stage route
+    // rendered to 394KB of markdown — and VS Code's preview will not open that, so the
+    // button that produces it appeared to do nothing at all. Command output is what
+    // fills it: capped per subtask, so a stage with three carries three times the cap.
+    const report = formatTaskReport("NMGB-2792", pipeline([stage()]));
+    expect(report).not.toContain("Resolved SQL files: 2");
+    expect(report).toContain("Show What This Did");
+  });
+
+  it("never summarises away a stage that says it did not do its work", () => {
+    // That is the reader's reason for opening the report in the first place.
+    const held = stage({ blocked: "nothing for this ticket is committed anywhere" });
+    expect(formatTaskReport("NMGB-2792", pipeline([held]))).toContain(
+      "nothing for this ticket is committed anywhere",
+    );
   });
 
   it("says so when the task has no route", () => {
@@ -449,5 +473,33 @@ describe("declared verification", () => {
     const verified = stage({ verify: 'sqlcmd -S x -U deploy -P S3cr3t!Value -Q "select 1"' });
     const report = formatStageReport("t", verified, undefined);
     expect(report).not.toContain("S3cr3t!Value");
+  });
+});
+
+describe("a report too large for the preview to open", () => {
+  it("truncates at the cap and says so", () => {
+    // Announced rather than silent, for the reason the activity watcher announces its
+    // own truncation: output that simply stops reads as the command having stopped.
+    const huge = stage({
+      subtasks: [
+        {
+          id: "s1",
+          title: "Run it",
+          prompt: "p",
+          status: "done" as const,
+          startedAt: "t1",
+          finishedAt: "t2",
+          activity: { output: "x".repeat(MAX_REPORT_CHARS * 2) },
+        },
+      ],
+    });
+    const report = formatStageReport("NMGB-2792", huge, undefined);
+    expect(report.length).toBeLessThan(MAX_REPORT_CHARS + 500);
+    expect(report).toContain("truncated here");
+  });
+
+  it("leaves an ordinary report untouched", () => {
+    const report = formatStageReport("NMGB-2792", stage(), undefined);
+    expect(report).not.toContain("truncated here");
   });
 });
