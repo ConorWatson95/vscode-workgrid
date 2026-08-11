@@ -763,11 +763,28 @@ Where the time actually goes, and both fixes are **project config, not harness c
 the SQL stage spent a large part of 71,002 output tokens authoring an ad-hoc query
 harness inline — then deleted it and wrote five of its files again — and the app stage
 ran two full solution builds while the `Build` stage that follows compiles in 0.6 min.
-Fixed in `qubeautoapp` by checking in `tools/sql/Invoke-SqlQuery.ps1` and
-`Compare-QueryResults.ps1`, naming them in seven stages' intents, and telling
-implementation stages not to build. **Output tokens are wall-clock time** is the general
-lesson: the cheapest latency win is a stage not having to write something the repository
-could have held.
+Fixed in `qubeautoapp` by checking in `Invoke-SqlQuery.ps1`, `Invoke-SqlScript.ps1`,
+`Compare-QueryResults.ps1` and `Test-SqlProjectConventions.ps1` under `tools/sql/`,
+naming them in seven stages' intents, and telling implementation stages not to build.
+**Output tokens are wall-clock time** is the general lesson: the cheapest latency win is a
+stage not having to write something the repository could have held.
+
+Two things that generalise beyond that repo, because both are about how to choose what to
+check in:
+
+- **Replace the loop, not the landmarks.** The first attempt shipped the two most
+  *visible* tools and left the rest with no home, so the next stage would rebuild them —
+  the failure it claimed to fix. The tool most needed was the least conspicuous one: a
+  `GO`-splitting script runner the stage used **eight times** to push a proc to DEV, run a
+  migration, run its rollback, and run the migration again. Read the stage's commands for
+  what it *repeated*, not for what looks like tooling.
+- **A review criterion belongs in a command, not a prompt.** Three of that route's ten
+  SQL review criteria — encoding, an explicit `USE`, a paired rollback — were being
+  checked by each stage writing its own throwaway PowerShell. A criterion a review will
+  fail you on should have an exit code. And the check has to be scoped to what the branch
+  changed: 285 of 285 files carry a BOM so that check is a real invariant, but only 197 of
+  285 state a database, and a check that fails on 88 files of history is one people learn
+  to skip.
 
 ### Keeping a worktree the checkout it claims to be
 
