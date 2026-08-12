@@ -297,6 +297,20 @@ export class HarnessSettings {
   }
 
   /**
+   * How long a stage may block on an `ask_user` question before the CLI gives up on it.
+   *
+   * Deliberately longer than `stageTimeoutMinutes`, which is the wrong bound for this:
+   * that cap is about a *hung CLI*, and a stage waiting on a person is not hung. The
+   * point of the harness is one engineer supervising several tasks, so a question
+   * waiting while they work on another one is the designed case. Left at the CLI's own
+   * default the call times out, the agent proceeds on assumptions, and the stage that
+   * asked because it did not know is recorded as done.
+   */
+  askTimeoutMinutes(): number {
+    return this.positive("askTimeoutMinutes", 120);
+  }
+
+  /**
    * How many subagents one stage session may run at once.
    *
    * The harness owns concurrency, and it owns it at the *task* level: the point

@@ -211,13 +211,20 @@ export class AskUserService {
    * Anything still waiting is abandoned first: removing the directory alone tells
    * the server nobody is listening, but only on its next poll, and being explicit
    * is what makes the agent's next turn immediate.
+   *
+   * Returns how many were still waiting, because that number means something the
+   * caller cannot otherwise learn: a question outstanding as the session ends was
+   * never answered by anybody. The CLI's own tool timeout fired, the agent proceeded
+   * on assumptions, and it then finished normally — so the run looks like any other.
+   * The runner fails the subtask on a non-zero count rather than letting a stage that
+   * asked because it did not know be recorded as having found out.
    */
-  release(taskId: string): void {
+  release(taskId: string): number {
     // The wait tally deliberately survives this. `release` is called from inside
     // `StageSessionRunner.run` as the session ends, which is *before* the runner takes
     // its closing reading — so clearing the total here would make the difference
     // negative and throw away the wait it had just recorded in `abandon`.
-    this.abandon(taskId);
+    const unanswered = this.abandon(taskId);
     const timer = this.watchers.get(taskId);
     if (timer) {
       clearInterval(timer);
@@ -233,6 +240,7 @@ export class AskUserService {
     } catch {
       /* best effort */
     }
+    return unanswered;
   }
 
   // --- internals --------------------------------------------------------

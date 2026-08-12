@@ -80,8 +80,19 @@ export interface StageGate {
   prepare(taskId: string):
     | { settingsPath?: string; extraMcpConfigPaths?: string[] }
     | undefined;
-  /** Stops watching. Also tells any still-blocked hook that nobody is listening. */
-  release(taskId: string): void;
+  /**
+   * Stops watching. Also tells any still-blocked hook that nobody is listening.
+   *
+   * Returns how many questions were **still unanswered** when the session ended, which
+   * is not a tidy-up statistic: it is the only evidence the harness has that a stage
+   * asked something and never found out. The CLI's tool timeout fires on its side, the
+   * agent proceeds on assumptions, and the session then ends normally — so by the time
+   * anything here looks, the run is indistinguishable from one that never asked.
+   *
+   * Undefined is "the gate does not report this", not zero — a gate that cannot tell us
+   * must not be read as telling us nothing was lost.
+   */
+  release(taskId: string): number | void;
 }
 
 /**
@@ -197,7 +208,30 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         }
         // The CLI has gone, so anything still holding is holding for nothing —
         // and a row the user could click but never satisfy is worse than none.
-        if (gateSession) this.gate?.release(task.id);
+        const unanswered = gateSession ? (this.gate?.release(task.id) ?? 0) : 0;
+        // A question outstanding at session end was never answered by anyone: the CLI's
+        // tool timeout fired, and the agent carried on having answered itself. Nothing
+        // downstream can see that — the reply parses, the session exited tidily, and
+        // `finishSubtask(..., "done")` records a process that ended. The same disease as
+        // every marker in this protocol: a fallback that reads as success.
+        //
+        // Failed rather than held, and only when the run was otherwise fine: a run that
+        // already failed has a truer reason, and overwriting it would hide it.
+        if (unanswered > 0 && result.ok) {
+          this.logger.error(
+            `Harness [${task.name}] ${label} ended with ${unanswered} question(s) never ` +
+              "answered — the CLI's tool timeout fired and the stage proceeded on its own " +
+              "assumptions. Raise taskWorkspaces.askTimeoutMinutes, then re-run it.",
+          );
+          resolve({
+            ...result,
+            ok: false,
+            error:
+              `asked ${unanswered} question(s) that were never answered, and continued ` +
+              "on its own assumptions",
+          });
+          return;
+        }
         resolve(result);
       };
 

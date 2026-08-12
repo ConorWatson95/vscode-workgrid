@@ -133,6 +133,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).stageTimeoutMinutes();
   }
 
+  askTimeoutMinutes(scope?: vscode.Uri): number {
+    return this.settings(scope).askTimeoutMinutes();
+  }
+
   stageSubagentConcurrency(scope?: vscode.Uri): number {
     return this.settings(scope).stageSubagentConcurrency();
   }

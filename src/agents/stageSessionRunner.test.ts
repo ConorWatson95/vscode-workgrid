@@ -298,6 +298,70 @@ describe("required MCP servers", () => {
     expect(sessions.stopped).toEqual([]);
   });
 
+  /**
+   * A stage that asked and never found out must not pass.
+   *
+   * `ask_user` blocks by design, but the CLI has its own tool timeout. When it fires the
+   * agent is told the call failed, proceeds on its own assumptions, and finishes the
+   * turn normally — so the session exits tidily, the reply parses, and the stage that
+   * asked precisely because it did not know is recorded as having found out.
+   */
+  it("fails a subtask that ended with a question nobody answered", async () => {
+    const sessions = new FakeSessions();
+    const captured = capturingLogger();
+    const run = new ClaudeStageSessionRunner(
+      sessions,
+      () => ({ cwd: "/repo" }) as Omit<StreamSessionOptions, "command">,
+      captured.logger,
+      1000,
+      { prepare: () => ({ settingsPath: "/s.json" }), release: () => 2 },
+    );
+    const promise = run.run(TASK, "p", "stage:sub-1");
+    sessions.session.reply("I assumed UAT and carried on.");
+    sessions.session.settle("waiting");
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("never answered");
+    // The reply is kept: it is the only account of what it assumed.
+    expect(result.text).toContain("assumed UAT");
+    expect(captured.errors.join("\n")).toContain("askTimeoutMinutes");
+  });
+
+  it("leaves a run that answered every question alone", async () => {
+    const sessions = new FakeSessions();
+    const run = new ClaudeStageSessionRunner(
+      sessions,
+      () => ({ cwd: "/repo" }) as Omit<StreamSessionOptions, "command">,
+      silentLogger,
+      1000,
+      { prepare: () => ({ settingsPath: "/s.json" }), release: () => 0 },
+    );
+    const promise = run.run(TASK, "p", "stage:sub-1");
+    sessions.session.reply("done");
+    sessions.session.settle("waiting");
+
+    expect((await promise).ok).toBe(true);
+  });
+
+  // A gate that cannot report the count must not be read as reporting zero — but it
+  // also must not fail every stage. Absent means unmeasured, as everywhere else here.
+  it("passes a run whose gate does not report unanswered questions", async () => {
+    const sessions = new FakeSessions();
+    const run = new ClaudeStageSessionRunner(
+      sessions,
+      () => ({ cwd: "/repo" }) as Omit<StreamSessionOptions, "command">,
+      silentLogger,
+      1000,
+      { prepare: () => ({ settingsPath: "/s.json" }), release: () => undefined },
+    );
+    const promise = run.run(TASK, "p", "stage:sub-1");
+    sessions.session.reply("done");
+    sessions.session.settle("waiting");
+
+    expect((await promise).ok).toBe(true);
+  });
+
   // A route that declares nothing must behave exactly as it did before the gate.
   it("ignores MCP startup entirely when the stage required nothing", async () => {
     const sessions = new FakeSessions();

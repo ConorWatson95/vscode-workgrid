@@ -35,6 +35,7 @@ import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { subagentLimitEnv } from "./domain/subagentLimits";
+import { askTimeoutEnv } from "./domain/askTimeout";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { taskStateDir } from "./persistence/taskStateFile";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
@@ -591,10 +592,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // they have configured; the protocol skill describes how to behave as a stage,
       // which a hand-driven session is not.
       pluginDirs: protocolPluginDir ? [protocolPluginDir] : undefined,
-      env: subagentLimitEnv({
-        concurrency: configuration.stageSubagentConcurrency(repositoryUri),
-        depth: configuration.stageSubagentDepth(repositoryUri),
-      }),
+      env: {
+        ...subagentLimitEnv({
+          concurrency: configuration.stageSubagentConcurrency(repositoryUri),
+          depth: configuration.stageSubagentDepth(repositoryUri),
+        }),
+        // A stage blocked on `ask_user` is waiting for a person, not hung. On the CLI's
+        // own tool timeout the call fails after a few minutes and the agent answers its
+        // own question — so the wait has to be set to human latency, not machine.
+        ...askTimeoutEnv(configuration.askTimeoutMinutes(repositoryUri)),
+      },
     }),
     logger,
     configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
@@ -621,8 +628,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       release: (taskId) => {
         permissionGate.release(taskId);
         // Abandons anything still asked, so a finished stage does not leave the
-        // question panel offering to answer a session that has gone.
-        askUser.release(taskId);
+        // question panel offering to answer a session that has gone. The count is
+        // returned rather than discarded: a question still waiting here was never
+        // answered by anyone, and the runner fails the subtask on it.
+        return askUser.release(taskId);
       },
     },
   );
