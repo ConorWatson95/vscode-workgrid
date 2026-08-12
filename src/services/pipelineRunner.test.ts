@@ -115,6 +115,8 @@ function makeRunner(
      * while the session is notionally running.
      */
     humanWaits?: number[];
+    /** How old an unowned `active` subtask must be before `reclaimStale` takes it. */
+    staleAfterMs?: number;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -160,6 +162,7 @@ function makeRunner(
             // subtasks than readings reports no further waits rather than throwing.
             return readings.length > 1 ? readings.shift()! : readings[0];
           },
+      () => options.staleAfterMs ?? 60 * 60 * 1000,
     ),
     verified,
   };
@@ -2156,5 +2159,115 @@ describe("an implementation stage that wrote no files", () => {
     await runner.advance((await repo.get("t1"))!);
 
     expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});
+
+/**
+ * A host that dies mid-subtask takes the session listener, the per-subtask timeout
+ * and the driver awaiting the run with it, leaving the record `active` with no
+ * reply, no activity and no cost. Nothing detected that: the route was not running,
+ * so no advance was there to reclaim it, and Stop wrote nothing at all. One sat
+ * `active` for two hours after its session had finished.
+ */
+describe("reclaimStale", () => {
+  /** A task wedged mid-subtask, as a dead host leaves it in the state file. */
+  function wedged(startedAt: string): TaskWorkspace {
+    const t = task();
+    const stage = t.pipeline!.stages[0];
+    stage.status = "active";
+    stage.subtasks = [
+      {
+        id: "build-1",
+        title: "Build it",
+        prompt: "Build it.",
+        status: "active",
+        startedAt,
+      },
+    ];
+    return t;
+  }
+
+  it("puts back an active subtask no live run owns", async () => {
+    const { repo, runner } = makeRunner(fakeSessions());
+    await repo.save(wedged("2026-08-12T09:08:36.485Z"));
+
+    const outcome = await runner.reclaimStale(
+      (await repo.get("t1"))!,
+      "2026-08-12T11:00:00.000Z",
+    );
+
+    expect(outcome.reclaimed.map((r) => r.subtaskId)).toEqual(["build-1"]);
+    const saved = (await repo.get("t1"))!.pipeline!.stages[0];
+    expect(saved.subtasks[0].status).toBe("pending");
+    expect(saved.subtasks[0].startedAt).toBeUndefined();
+    // Reverted, not failed: the stage has not been judged, so the route must
+    // resume from it rather than skip past it.
+    expect(saved.status).toBe("pending");
+  });
+
+  // The state file is shared by every worktree of a repository, so an unowned
+  // active subtask may belong to another window that started it moments ago.
+  it("leaves a young one alone", async () => {
+    const { repo, runner } = makeRunner(fakeSessions());
+    await repo.save(wedged("2026-08-12T10:55:00.000Z"));
+
+    const outcome = await runner.reclaimStale(
+      (await repo.get("t1"))!,
+      "2026-08-12T11:00:00.000Z",
+    );
+
+    expect(outcome.reclaimed).toEqual([]);
+    expect((await repo.get("t1"))!.pipeline!.stages[0].subtasks[0].status).toBe("active");
+  });
+
+  it("leaves a subtask this host is running alone, however old", async () => {
+    // Held open so the subtask is genuinely in flight while the sweep runs.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sessions: StageSessionRunner = {
+      run: async () => {
+        await held;
+        return { ok: true, text: "done" };
+      },
+    };
+    const { repo, runner } = makeRunner(sessions, { staleAfterMs: 0 });
+    await repo.save(task());
+
+    const advancing = runner.advance((await repo.get("t1"))!);
+    // Let the driver reach the session and mark the subtask active.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const outcome = await runner.reclaimStale(
+      (await repo.get("t1"))!,
+      "2026-08-12T11:00:00.000Z",
+    );
+
+    expect(outcome.reclaimed).toEqual([]);
+    release();
+    await advancing;
+  });
+
+  it("reports nothing for a task with no pipeline", async () => {
+    const { repo, runner } = makeRunner(fakeSessions());
+    const t = { ...task(), pipeline: undefined };
+    await repo.save(t);
+
+    const outcome = await runner.reclaimStale(t, "2026-08-12T11:00:00.000Z");
+
+    expect(outcome.reclaimed).toEqual([]);
+  });
+
+  it("makes the reclaimed subtask runnable again", async () => {
+    const sessions = fakeSessions({ "plan:": { text: PLAN_REPLY } });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(wedged("2026-08-12T09:08:36.485Z"));
+
+    await runner.reclaimStale((await repo.get("t1"))!, "2026-08-12T11:00:00.000Z");
+    await runner.advance((await repo.get("t1"))!);
+
+    // The point of the reclaim: the route resumes from the stage rather than
+    // reporting a subtask already in flight and blocking forever.
+    expect(sessions.calls.length).toBeGreaterThan(0);
   });
 });

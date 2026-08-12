@@ -796,7 +796,55 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // side of each subtask, so the operator's thinking time stops being recorded as
     // the model working — see `domain/humanWait.ts`.
     (taskId) => askUser.humanWaitMs(taskId),
+    // Past this, an `active` subtask no live run owns is assumed abandoned. The
+    // stage timeout plus a margin, because a live owner would have failed it at
+    // the timeout — so anything older has no owner left to come back for it.
+    () => configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000 + 5 * 60 * 1000,
   );
+
+  // The watchdog for a host that died mid-subtask. Every mechanism that ends a
+  // subtask lives in the owning host's memory — the session's status listener, the
+  // per-subtask timeout, the driver awaiting the run — so a host that goes takes
+  // all three with it and leaves the record `active` with no reply, no activity and
+  // no cost. Nothing detected that: the route was not running, so no advance was
+  // there to reclaim it, and Stop wrote nothing. A task stayed wedged until someone
+  // noticed by eye, which is how one sat for two hours.
+  //
+  // A sweep rather than a timer, precisely because the timer is what died. It reads
+  // the state file, so it recovers work abandoned by a host that no longer exists —
+  // including on the first pass at activation, which is the common case: the host
+  // that died is usually the one this one replaced.
+  const sweepStaleSubtasks = async (): Promise<void> => {
+    if (!repositoryRoot) return;
+    try {
+      const tasks = await repository.getByRepository(repositoryRoot);
+      let recovered = 0;
+      for (const task of tasks) {
+        if (!task.pipeline) continue;
+        const outcome = await runner.reclaimStale(task, new Date().toISOString());
+        recovered += outcome.reclaimed.length;
+      }
+      if (recovered > 0) {
+        tree.refresh();
+        // Notified, not merely logged: the user is owed the reason a stage they
+        // watched start is pending again, and the answer — re-run it — is theirs.
+        void vscode.window.showWarningMessage(
+          `${recovered} stage subtask(s) had been left running by a session that is gone. ` +
+            "They are pending again — Advance Route re-runs them.",
+          "Show Log",
+        )
+        .then((choice) => {
+          if (choice === "Show Log") logger.show?.();
+        });
+      }
+    } catch (error) {
+      // A sweep is a repair, so its own failure must not take activation with it.
+      logger.warn(`Could not sweep for abandoned stage subtasks: ${String(error)}`);
+    }
+  };
+  void sweepStaleSubtasks();
+  const staleSweep = setInterval(() => void sweepStaleSubtasks(), 10 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
 
   // Lets an open report show a stage's commands as they run, rather than nothing
   // until the subtask ends. Set here because the runner holds the live copy and is

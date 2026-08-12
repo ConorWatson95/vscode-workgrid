@@ -3190,6 +3190,7 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
   // starting the next one — so a stop that did not cancel the route was not a
   // stop at all. Cancelling first means the reply is discarded and the subtask
   // reverts to pending, so Advance Route resumes from where it stopped.
+  const driving = ctx.runner.isRunning(task.id);
   ctx.runner.cancel(task.id);
   ctx.sessions.stop(task.id);
   ctx.terminals.disposeTerminal(task.id);
@@ -3200,7 +3201,44 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
       updatedAt: new Date().toISOString(),
     });
   }
+
+  // Everything above this line is in-memory: `cancel` is a lookup in a map of live
+  // advances, `stop` a lookup in a map of live sessions, and the only write is
+  // guarded by `task.agent`, which a *stage* session does not have. So a stop
+  // ordered on a task whose owning host has died did all of nothing and then
+  // refreshed an unchanged tree — which is exactly what it looked like, and left
+  // the subtask `active` forever with no other way back from that state.
+  //
+  // Only when no advance is running: a live one reverts the subtask itself as it
+  // unwinds, and racing it here would write over the driver's own account.
+  let reclaimed: readonly { subtaskTitle: string }[] = [];
+  if (!driving) {
+    // Re-read, because a stop can be ordered long after the tree row was built and
+    // the pipeline is the thing being edited.
+    const current = (await ctx.repository.get(task.id)) ?? task;
+    const outcome = await ctx.runner.reclaimStale(current, new Date().toISOString());
+    reclaimed = outcome.reclaimed;
+  }
+
   ctx.tree.refresh();
+
+  // Said out loud in every case. A stop that reports nothing is indistinguishable
+  // from a stop that failed, which is how several were ordered in a row against a
+  // task nothing was going to change.
+  if (reclaimed.length > 0) {
+    void vscode.window.showInformationMessage(
+      `Stopped "${task.name}". ${reclaimed
+        .map((item) => `"${item.subtaskTitle}"`)
+        .join(", ")} had been left running by a session that is gone; ` +
+        "back to pending, so Advance Route re-runs it.",
+    );
+  } else if (driving) {
+    void vscode.window.showInformationMessage(`Stopping the route for "${task.name}".`);
+  } else {
+    void vscode.window.showInformationMessage(
+      `Nothing was running for "${task.name}".`,
+    );
+  }
 }
 
 function describeWorktreeError(error: unknown): string {

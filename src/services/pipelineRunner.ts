@@ -61,6 +61,11 @@ import {
   subtaskPrompt,
 } from "../agents/stagePrompts";
 import { PlanStep, parsePlanSteps } from "../domain/planSteps";
+import {
+  describeStaleSubtask,
+  StaleSubtask,
+  staleActiveSubtasks,
+} from "../domain/staleSubtask";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
 import { TaskRepository } from "../persistence/taskRepository";
@@ -295,6 +300,17 @@ export class PipelineRunner {
      * whose stages never ask anything has none to record.
      */
     private readonly humanWaitMs?: (taskId: string) => number,
+    /**
+     * How long an `active` subtask no live run owns must be before `reclaimStale`
+     * assumes it abandoned. A function, because it derives from a setting the user
+     * can change between sweeps.
+     *
+     * Defaults to an hour: long enough that no legitimately running stage is
+     * reachable — the owner's own stage timeout would have failed it first — and
+     * short enough that a wedged task is recovered within one working session
+     * rather than found by eye.
+     */
+    private readonly staleAfterMs: () => number = () => 60 * 60 * 1000,
   ) {}
 
   /**
@@ -438,9 +454,10 @@ export class PipelineRunner {
   }
 
   /**
-   * Subtasks *this* runner started. A persisted `running` subtask missing from
+   * Subtasks *this* runner started. A persisted `active` subtask missing from
    * here was left behind by a previous extension host, which cannot still be
-   * working on it — see `reclaimStale`.
+   * working on it — see `reclaimStale`, and the `running` branch of the driver,
+   * which reclaims one it is about to run regardless of age.
    */
   private readonly startedSubtasks = new Set<string>();
 
@@ -462,6 +479,61 @@ export class PipelineRunner {
   /** Whether a route is currently being driven for this task. */
   isRunning(taskId: string): boolean {
     return this.running.has(taskId);
+  }
+
+  /**
+   * Puts back `active` subtasks that no live run can account for.
+   *
+   * The gap this closes: every mechanism that ends a subtask — the session's
+   * status listener, the per-subtask timeout, the driver awaiting the run — lives
+   * in this host's memory, so a host that dies mid-subtask takes all three with
+   * it and leaves the record `active` with no reply, no activity and no cost. The
+   * reclaim in the driver's `running` branch only ever fired on the next advance,
+   * which a wedged task is precisely what nobody orders.
+   *
+   * Reverted rather than failed, for the reason `cancel` reverts: the stage has
+   * not been judged, so the route must resume from it rather than skip past it.
+   * Whatever the lost session produced is gone either way — that is the cost of
+   * the host dying, not of the reclaim.
+   */
+  async reclaimStale(
+    task: TaskWorkspace,
+    at: string,
+  ): Promise<{ task: TaskWorkspace; reclaimed: StaleSubtask[] }> {
+    const stale = staleActiveSubtasks(task.pipeline, {
+      now: at,
+      thresholdMs: this.staleAfterMs(),
+      owned: (subtaskId) => this.startedSubtasks.has(subtaskId),
+    });
+    if (stale.length === 0) return { task, reclaimed: [] };
+
+    let current = task;
+    const reclaimed: StaleSubtask[] = [];
+    for (const item of stale) {
+      const reverted = revertSubtask(current.pipeline!, item.subtaskId);
+      if (!reverted.ok) {
+        // Never fatal: the sweep runs over every task, and one unreadable record
+        // must not stop the rest being recovered.
+        this.logger.warn(
+          `Harness [${current.name}] could not reclaim ${describeStaleSubtask(item)}: ` +
+            reverted.error.message,
+        );
+        continue;
+      }
+      current = await this.save(current, reverted.value);
+      reclaimed.push(item);
+      this.logger.warn(
+        `Harness [${current.name}] reclaimed ${describeStaleSubtask(item)}. Its session ` +
+          "ended without reporting back — most likely the extension host that owned it " +
+          "was closed — so the subtask is pending again. Advance Route re-runs it.",
+      );
+    }
+    return { task: current, reclaimed };
+  }
+
+  /** Whether this host is the one running a given subtask. */
+  ownsSubtask(subtaskId: string): boolean {
+    return this.startedSubtasks.has(subtaskId);
   }
 
   /**
