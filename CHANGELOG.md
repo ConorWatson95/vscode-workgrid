@@ -2,6 +2,18 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.86.1
+
+- **Approve came back to the stage awaiting approval.** Its menu entry matched the row by
+  equality — `viewItem == stage-awaiting-approval` — which was right until corrections
+  shipped and `stagePresentation` began appending a second token to any stage holding
+  output to correct. A stage awaiting approval has by definition just run, so it is always
+  correctable, so the context value is always `stage-awaiting-approval correctable` and the
+  equality never held again. The one row the button exists for was the one row that could
+  not show it, while Correct and Send Back stayed visible because their clauses match by
+  substring. A test now fails any `viewItem == stage-…` clause: stage context values are
+  space-joined by design, so equality is never the right test for one.
+
 ## 0.57.0
 
 - **A stage that executes a written plan must now account for every numbered step.** The

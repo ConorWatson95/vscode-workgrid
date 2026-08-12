@@ -634,6 +634,14 @@ export interface PendingQuestion {
   askedAt: string;
   items: QuestionItem[];
   /**
+   * Background the stage offered about all of the questions, shown once.
+   *
+   * The questions themselves are kept short by telling the model to put its
+   * findings here, so this is where the reasoning it would otherwise have written
+   * into every question ends up.
+   */
+  context?: string;
+  /**
    * Set when an agent is **blocked on this question right now**, waiting on the
    * `ask_user` tool.
    *
@@ -813,6 +821,7 @@ function normalizeQuestion(stored: unknown): PendingQuestion | undefined {
     subtaskId: q.subtaskId,
     askedAt: q.askedAt ?? "",
     items,
+    context: typeof q.context === "string" && q.context.trim() ? q.context.trim() : undefined,
     liveCallId: typeof q.liveCallId === "string" ? q.liveCallId : undefined,
   };
 }

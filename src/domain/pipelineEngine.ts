@@ -1358,6 +1358,14 @@ export function recordQuestion(
     stageName: string;
     subtaskId: string;
     questions: string[];
+    /**
+     * The background the stage offered, shown once beside the questions.
+     *
+     * Carried because the tool asks for it: the questions are kept to one line each
+     * by telling the model its findings belong here instead, which is only true if
+     * this survives. Dropped, that instruction would silently discard the reasoning.
+     */
+    context?: string;
     at: string;
     /**
      * Set when the agent is blocked on this question, waiting on ask_user.
@@ -1390,6 +1398,7 @@ export function recordQuestion(
       subtaskId: asked.subtaskId,
       askedAt: asked.at,
       items,
+      context: asked.context?.trim() || undefined,
       liveCallId: asked.liveCallId,
     },
   });

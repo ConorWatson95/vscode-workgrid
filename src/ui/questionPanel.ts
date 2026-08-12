@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { PendingQuestion } from "../domain/taskPipeline";
+import { splitQuestion } from "../domain/questionText";
 
 /**
  * A panel for answering a stage's questions.
@@ -97,11 +98,20 @@ export class QuestionPanel {
     const items = this.pending.items
       .map((item, index) => {
         const answer = escapeHtml(item.answer ?? "");
+        // The ask is the prompt; the reasoning that led to it is reading, and stays
+        // collapsed. Never dropped — some questions genuinely cannot be answered
+        // without the background, and this panel is the only place it is shown.
+        const { headline, detail } = splitQuestion(item.text);
+        const background = detail
+          ? `<details class="detail"><summary>Why this is being asked</summary>
+             <p>${escapeHtml(detail)}</p></details>`
+          : "";
         return `
         <li class="question">
           <div class="number">${index + 1}</div>
           <div class="body">
-            <p class="text">${escapeHtml(item.text)}</p>
+            <p class="text">${escapeHtml(headline)}</p>
+            ${background}
             <textarea rows="3" data-id="${escapeHtml(item.id)}"
               placeholder="Your answer">${answer}</textarea>
           </div>
@@ -110,6 +120,12 @@ export class QuestionPanel {
       .join("");
 
     const count = this.pending.items.length;
+    // Collapsed, and below the questions: it is the stage's working, and a panel
+    // that opens on a paragraph is the thing this whole arrangement is avoiding.
+    const context = this.pending.context
+      ? `<details class="context"><summary>What the stage found</summary>
+         <p>${escapeHtml(this.pending.context)}</p></details>`
+      : "";
     return `<!DOCTYPE html>
 <html><head><meta charset="utf-8" />
 <style>
@@ -127,6 +143,13 @@ export class QuestionPanel {
             font-size: .8rem; }
   .body { flex: 1 1 auto; }
   .text { margin: .15rem 0 .5rem; white-space: pre-wrap; }
+  .detail { margin: 0 0 .5rem; font-size: .85rem;
+            color: var(--vscode-descriptionForeground); }
+  .detail summary, .context summary { cursor: pointer; }
+  .context { margin: .25rem 0 1rem; font-size: .85rem;
+             color: var(--vscode-descriptionForeground); }
+  .context p { margin: .35rem 0 0; white-space: pre-wrap; }
+  .detail p { margin: .35rem 0 0; white-space: pre-wrap; }
   textarea { width: 100%; box-sizing: border-box; resize: vertical;
              font-family: var(--vscode-font-family); font-size: .9rem;
              color: var(--vscode-input-foreground);
@@ -150,6 +173,7 @@ export class QuestionPanel {
   <h1>${escapeHtml(this.taskName)}</h1>
   <p class="meta">“${escapeHtml(this.pending.stageName)}” needs ${count === 1 ? "an answer" : `${count} answers`} before it can run.</p>
   <ol>${items}</ol>
+  ${context}
   <div class="actions">
     <button id="submit">Answer and continue</button>
     <span class="hint" id="hint"></span>

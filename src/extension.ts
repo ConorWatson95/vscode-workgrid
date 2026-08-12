@@ -463,6 +463,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           stageName: running?.name ?? "Stage",
           subtaskId: subtask?.id ?? asked.request.id,
           questions: asked.request.questions,
+          context: asked.request.context,
           at: asked.waitingSince,
           liveCallId: asked.request.id,
         });

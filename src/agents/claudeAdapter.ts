@@ -73,6 +73,13 @@ export function invariantProtocolBlock(
     `if you have it: it pauses you until a human answers, then you carry on with`,
     `everything you have already worked out.`,
     "",
+    // Form, not just existence. A question is read in a small box by someone making
+    // one decision, and a stage that writes its reasoning into the question makes
+    // them find the ask inside a paragraph before they can answer it.
+    `However you ask: one sentence per question, the decision only, naming the`,
+    `options where there are options. Your findings and your reasoning go in the`,
+    `tool's "context" argument, or in your report — never in the question itself.`,
+    "",
     `If you do not have that tool, reply with exactly "${markers.needsInfo}" followed`,
     `by your questions as a numbered list, one question per line, and nothing else.`,
     `Each line is answered separately. The work will pause and a human will answer,`,

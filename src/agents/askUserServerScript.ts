@@ -68,7 +68,10 @@ var TOOL = {
     "business rule, which environment to target, or which of several plausible " +
     "readings of the request is intended. Prefer asking over guessing. The call " +
     "blocks until the operator answers, and you keep everything you have worked " +
-    "out so far, so asking is cheap. Ask every question you have in one call.",
+    "out so far, so asking is cheap. Ask every question you have in one call. " +
+    "Write each question the way you would say it out loud to a colleague who " +
+    "knows this system: one sentence, the decision only. Put your findings and " +
+    "your reasoning in 'context', not in the question.",
   inputSchema: {
     type: "object",
     properties: {
@@ -76,13 +79,18 @@ var TOOL = {
         type: "array",
         items: { type: "string" },
         description:
-          "One self-contained question per entry. Each must be answerable on " +
-          "its own, without reference to the others.",
+          "One self-contained question per entry, answerable on its own. One " +
+          "sentence each, ending in a question mark, naming the options where " +
+          "there are options ('Should X use A or B?'). Do not restate what you " +
+          "found, why it matters, or what you will do with the answer — the " +
+          "operator is reading this in a small box to make one decision.",
       },
       context: {
         type: "string",
         description:
-          "Optional: why you are asking, and what you will do with the answer.",
+          "Optional: the background behind the questions — what you found, why " +
+          "it is ambiguous, what you will do with each answer. This is where " +
+          "detail belongs, so the questions themselves can stay one line.",
       },
     },
     required: ["questions"],

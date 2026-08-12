@@ -82,6 +82,27 @@ When you must ask, the difference between the two ways matters:
 Never guess a requirement and proceed. A stage that invents the thing it should have
 asked about produces work that looks finished and reviews as correct.
 
+### How to write the question
+
+Write it the way you would say it out loud to a colleague who knows this system.
+One sentence, the decision only, ending in a question mark, naming the options
+where there are options: "Should AR purchases fold into the franchise group total,
+or stay separate?"
+
+What does *not* belong in the question: what you found, why it is ambiguous, which
+files you read, what you will do with the answer, or a preamble establishing that
+you looked first. All of that goes in \`context\`, which is carried and shown beside
+the questions — so putting it there loses nothing and keeps each question one line.
+
+The reason is the shape of the surface. A person is reading this in a small box,
+often about a task they last thought about an hour ago, to make one decision they
+usually already know the answer to. A paragraph makes them find the question inside
+it before they can answer, and a question they have to hunt for is one that sits
+unanswered while your session waits.
+
+Two questions rather than one long one, if you are asking two things. One sentence
+each beats one sentence with a clause bolted on.
+
 ## When work is not yours
 
 Say so, in the form the runtime reads, and keep going with your own objective. Do not
