@@ -2,6 +2,24 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.86.2
+
+- **Approving a gate no longer fails with "operation not permitted".** The state file is
+  written by write-then-rename because the rename is atomic, which is what stops a
+  concurrent reader ever seeing a half-written blob. Atomic is not the same as always
+  permitted: Windows refuses to replace a file while anything else holds it open, and on
+  a git dir that is routine — Defender reads it moments after it is written, the indexer
+  opens it, and the extension and a headless run write it by design. Every one of those
+  clears in milliseconds.
+
+  It surfaced at the worst possible point. The write happens *after* the in-memory
+  transition, so approving a gate advanced the route, reported `EPERM … likely caused by
+  the extension`, and left the advance unpersisted — an approval that looked done, was
+  done on screen, and would not have survived a window reload. The rename now retries with
+  a short backoff, and only on codes that mean "someone else has it open"; `ENOENT` and a
+  real permissions failure still fail on the first attempt, because retrying a genuine
+  misconfiguration turns it into unexplained slowness.
+
 ## 0.86.1
 
 - **Approve came back to the stage awaiting approval.** Its menu entry matched the row by

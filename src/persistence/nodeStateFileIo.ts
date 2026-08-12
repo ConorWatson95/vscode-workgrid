@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { StateFileIo } from "./fileTaskRepository";
+import { retryOnTransientFsError } from "./transientFsError";
 
 let tempCounter = 0;
 
@@ -27,13 +28,21 @@ export class NodeStateFileIo implements StateFileIo {
    *
    * The temp name carries pid and a counter so two writers cannot collide on
    * the scratch file itself.
+   *
+   * The rename is retried on a transient code, because on Windows an atomic
+   * replace is refused outright while anything else holds the destination open —
+   * Defender, the indexer, or the other writer this scheme exists to tolerate.
+   * Without it the failure surfaced *after* the in-memory transition had
+   * happened, so approving a gate advanced the route and then reported
+   * "operation not permitted", leaving the advance unpersisted. See
+   * `transientFsError.ts`.
    */
   async write(filePath: string, contents: string): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const temp = `${filePath}.${process.pid}.${tempCounter++}.tmp`;
     try {
       await fs.writeFile(temp, contents, "utf8");
-      await fs.rename(temp, filePath);
+      await retryOnTransientFsError(() => fs.rename(temp, filePath));
     } catch (error) {
       // Leaving scratch files behind would accumulate in the git dir forever.
       await fs.rm(temp, { force: true }).catch(() => undefined);
