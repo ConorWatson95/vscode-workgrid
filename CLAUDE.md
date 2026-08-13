@@ -386,6 +386,24 @@ sessions are invisible":
   `revertToStage` re-opens a stage *and everything after it*, discarding those runs
   (including their checklist items, which otherwise gate the task on evidence about
   work that no longer exists) but **keeping the operator's guidance**.
+- **A route that reorders its stages has to reach tasks already in flight**
+  (`repositionRouteStages`). `addMissingStages` covered a route that gained a step and
+  nothing covered one that *reordered* the steps it had — yet reordering is how the most
+  consequential corrections are expressed, because their whole point is that one stage
+  must happen before another. `report-change` was corrected to deploy its SQL and have a
+  human verify the change locally *before* merging into shared DEV; a task already
+  running got the two new stages inserted correctly and kept `Land on DEV` where the old
+  route put it, in front of the deploy. So the gate the correction existed to add ran
+  after the change had already been shared — the exact state it was written to prevent —
+  and nothing said the pipeline disagreed with config. Pending route stages are permuted
+  **among the slots they already occupy**, which is what makes it safe without a separate
+  frontier check: a settled stage, a rule-added one, or one the route no longer defines
+  holds its index, so nothing can cross it. A stage counts as begun if its status has
+  moved *or* any subtask has started. Rule stages are left to `repositionRuleStages`,
+  which runs after this — their position comes from `ruleInsertionIndex`, not route order.
+  A stage the route reordered but which has already settled stays wrong, deliberately:
+  the only honest repair is `revertToStage`, and that discards work, so it is a human's
+  call.
 - **A re-run takes a reason, and the reason is guidance.** `revertToStage` had no input
   the operator could change: everything it reloads comes from project config, so
   steering one task meant editing the route every task shares — and the account of what

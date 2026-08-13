@@ -116,6 +116,83 @@ export function addMissingStages(
 }
 
 /**
+ * Puts not-yet-started stages back into the order the route now declares.
+ *
+ * The half of route repair that was missing. `addMissingStages` covers a route that
+ * gained a step; nothing covered a route that *reordered* the steps it already had —
+ * and reordering is how the most consequential route corrections are expressed, because
+ * the point of them is usually that one stage must happen before another.
+ *
+ * The observed case: `report-change` was corrected to deploy its SQL and have a human
+ * verify the change locally *before* merging into the shared DEV branch. New tasks got
+ * the fix. A task already in flight had the two new stages inserted correctly and kept
+ * `Land on DEV` exactly where the old route put it — in front of the SQL deploy — so the
+ * verification gate the correction existed to add ran after the change had already been
+ * shared, which is precisely the state it was written to prevent. The pipeline disagreed
+ * with config and nothing said so.
+ *
+ * Four rules, and each one is what keeps this from rewriting history:
+ *
+ * - **Only stages that have not begun.** A stage that ran, is running, failed, was
+ *   skipped or is awaiting approval is pinned at its index. Moving one would reorder the
+ *   record of what happened.
+ * - **Only ahead of the frontier**, which follows from the above rather than being
+ *   checked separately: the settled stages hold their slots, so nothing can cross one.
+ * - **Only into slots pending route stages already occupy.** The movable stages are
+ *   permuted among their own positions, so a pinned stage — settled, rule-added, or one
+ *   the route no longer defines — never shifts by even one index.
+ * - **Rule-added stages are left to `repositionRuleStages`.** Their position comes from
+ *   `ruleInsertionIndex`, not from route order, so sorting them by a route that does not
+ *   mention them would undo that placement.
+ *
+ * A stage the route reordered but which is already settled stays wrong, and stays
+ * wrong deliberately: the only honest repair for that is `revertToStage`, which is a
+ * human's call because it discards work.
+ */
+export function repositionRouteStages(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; moved: string[] } {
+  const route = source.routes.find((r) => r.id === pipeline.routeId);
+  if (!route) return { pipeline, moved: [] };
+
+  const routeIndexOf = new Map(route.stages.map((stage, at) => [stage.id, at]));
+
+  // Which slots may be permuted. Everything else holds its index exactly.
+  const slots: number[] = [];
+  pipeline.stages.forEach((stage, at) => {
+    if (!hasBegun(stage) && stage.addedByRule === undefined && routeIndexOf.has(stage.id)) {
+      slots.push(at);
+    }
+  });
+  if (slots.length < 2) return { pipeline, moved: [] };
+
+  const reordered = slots
+    .map((at) => pipeline.stages[at])
+    .sort((a, b) => routeIndexOf.get(a.id)! - routeIndexOf.get(b.id)!);
+
+  const stages = [...pipeline.stages];
+  const moved: string[] = [];
+  slots.forEach((at, which) => {
+    stages[at] = reordered[which];
+    if (stages[at].id !== pipeline.stages[at].id) moved.push(stages[at].id);
+  });
+
+  if (moved.length === 0) return { pipeline, moved: [] };
+  return { pipeline: { ...pipeline, stages }, moved };
+}
+
+/**
+ * Whether a stage has any history to protect.
+ *
+ * Status alone is not enough: a stage left `pending` whose first subtask has started is
+ * a stage that is running, and `refreshPendingStages` has always checked both.
+ */
+function hasBegun(stage: TaskStage): boolean {
+  return stage.status !== "pending" || stage.subtasks.some((s) => s.status !== "pending");
+}
+
+/**
  * Brings every not-yet-started stage into line with current config.
  *
  * Matched by id. A stage whose id is no longer in config keeps what it has rather

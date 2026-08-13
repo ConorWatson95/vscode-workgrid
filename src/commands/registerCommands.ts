@@ -12,6 +12,7 @@ import {
   sendBackToStage,
   formatSendBackNote,
   repositionRuleStages,
+  repositionRouteStages,
   syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
@@ -1673,6 +1674,27 @@ async function advanceRouteCommand(
         `Harness [${task.name}] cannot add ${grown.tooLate.join(", ")} — the route has ` +
           "moved past where they belong. Do those steps by hand, or revert to an " +
           "earlier stage first.",
+      );
+    }
+  }
+
+  // Stages the route *reordered* since this task was created. Done before the rule
+  // stages are repositioned, because their placement is computed relative to the route
+  // stages around them. A task whose order already matches config sees no change, and a
+  // stage that has begun is pinned — so this can only ever repair what is still ahead.
+  if (ctx.stageDefinitions && advancing.pipeline) {
+    const reordered = repositionRouteStages(advancing.pipeline, ctx.stageDefinitions());
+    if (reordered.moved.length > 0) {
+      advancing = {
+        ...advancing,
+        pipeline: reordered.pipeline,
+        updatedAt: new Date().toISOString(),
+      };
+      await ctx.repository.save(advancing);
+      ctx.tree.refresh();
+      ctx.logger.info(
+        `Harness [${advancing.name}] moved ${reordered.moved.join(", ")} into the order ` +
+          "harness.json now declares. Stages that have already run were left where they ran.",
       );
     }
   }

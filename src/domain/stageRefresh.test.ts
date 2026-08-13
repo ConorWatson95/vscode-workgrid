@@ -7,6 +7,7 @@ import {
   sendBackTargets,
   sendBackToStage,
   repositionRuleStages,
+  repositionRouteStages,
   syncHandoffs,
 } from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
@@ -158,6 +159,127 @@ describe("addMissingStages", () => {
     const before = twoStagePipeline();
     const result = addMissingStages(before, { routes: [], rules: [] });
     expect(result.pipeline).toBe(before);
+  });
+});
+
+describe("repositionRouteStages", () => {
+  /** The real case: SQL deploy, local verify, merge — a route that reordered them. */
+  const CORRECTED = source([
+    { id: "commit", intent: "Commit and push the branch." },
+    { id: "deploy-sql", intent: "Deploy the SQL to DEV." },
+    { id: "local-verify", intent: "Verify locally against DEV." },
+    { id: "dev-promote", intent: "Merge into shared DEV." },
+    { id: "signoff", intent: "Sign it off on the DEV site." },
+  ]);
+
+  /** The order an older build of that route left behind. */
+  const stale = (statuses: Partial<Record<string, TaskStage["status"]>> = {}) =>
+    pipeline(
+      ["commit", "dev-promote", "deploy-sql", "local-verify", "signoff"].map((id) =>
+        stage({ id, name: id, status: statuses[id] ?? "pending" }),
+      ),
+    );
+
+  it("puts pending stages back into the order the route now declares", () => {
+    const result = repositionRouteStages(stale(), CORRECTED);
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "commit",
+      "deploy-sql",
+      "local-verify",
+      "dev-promote",
+      "signoff",
+    ]);
+    expect(result.moved).toEqual(["deploy-sql", "local-verify", "dev-promote"]);
+  });
+
+  it("pins a stage that has already run, and never moves one across it", () => {
+    // The honest limit: a merge that already happened cannot be put back behind the
+    // deploy it should have followed. Reverting is the only repair, and it is a
+    // human's call because it discards work.
+    const result = repositionRouteStages(
+      stale({ commit: "passed", "dev-promote": "passed" }),
+      CORRECTED,
+    );
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "commit",
+      "dev-promote",
+      "deploy-sql",
+      "local-verify",
+      "signoff",
+    ]);
+    expect(result.moved).toEqual([]);
+  });
+
+  it("treats a stage whose subtask has started as having run", () => {
+    // Status can still read "pending" while the first subtask is away.
+    const before = stale();
+    const running = {
+      ...before,
+      stages: before.stages.map((s) =>
+        s.id === "dev-promote"
+          ? { ...s, subtasks: s.subtasks.map((t) => ({ ...t, status: "running" as const })) }
+          : s,
+      ),
+    };
+    expect(repositionRouteStages(running, CORRECTED).moved).toEqual([]);
+  });
+
+  it("leaves a rule-added stage exactly where the rule engine put it", () => {
+    // Its position comes from ruleInsertionIndex, not from route order, and the route
+    // does not mention it at all.
+    const before = pipeline([
+      stage({ id: "commit", name: "commit" }),
+      stage({ id: "dev-promote", name: "dev-promote" }),
+      stage({ id: "sql-review", name: "sql-review", addedByRule: "sql" } as Partial<TaskStage>),
+      stage({ id: "deploy-sql", name: "deploy-sql" }),
+      stage({ id: "local-verify", name: "local-verify" }),
+    ]);
+    const result = repositionRouteStages(before, CORRECTED);
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "commit",
+      "deploy-sql",
+      "sql-review",
+      "local-verify",
+      "dev-promote",
+    ]);
+    expect(result.moved).not.toContain("sql-review");
+  });
+
+  it("leaves a stage the route no longer defines where it is", () => {
+    const before = pipeline([
+      stage({ id: "dev-promote", name: "dev-promote" }),
+      stage({ id: "retired", name: "retired" }),
+      stage({ id: "deploy-sql", name: "deploy-sql" }),
+    ]);
+    const result = repositionRouteStages(before, CORRECTED);
+    expect(result.pipeline.stages.map((s) => s.id)).toEqual([
+      "deploy-sql",
+      "retired",
+      "dev-promote",
+    ]);
+  });
+
+  it("returns the same pipeline when the order already matches", () => {
+    const before = pipeline(
+      ["commit", "deploy-sql", "local-verify", "dev-promote", "signoff"].map((id) =>
+        stage({ id, name: id }),
+      ),
+    );
+    const result = repositionRouteStages(before, CORRECTED);
+    expect(result.pipeline).toBe(before);
+    expect(result.moved).toEqual([]);
+  });
+
+  it("does nothing when the route is not in config at all", () => {
+    const before = stale();
+    expect(repositionRouteStages(before, { routes: [], rules: [] }).pipeline).toBe(before);
+  });
+
+  it("never mutates the pipeline it was given", () => {
+    const before = stale();
+    const order = before.stages.map((s) => s.id);
+    repositionRouteStages(before, CORRECTED);
+    expect(before.stages.map((s) => s.id)).toEqual(order);
   });
 });
 
