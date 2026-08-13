@@ -292,6 +292,49 @@ export class TaskWorkspaceService {
     };
   }
 
+  /**
+   * Records — or clears — which suggestion a task is for.
+   *
+   * The other half of starting a task from a suggestion, and it exists because most
+   * tasks do not begin that way. A task adopted from a branch, or created before a
+   * source was configured, has no origin, so the ticket it is plainly for goes on being
+   * offered as work nobody has picked up. That is a list you learn to distrust.
+   *
+   * Refuses to overwrite an existing origin: a task already linked to one ticket being
+   * silently repointed at another is a change nobody could see afterwards. Clearing is
+   * explicit, by passing `undefined`.
+   */
+  async setTaskOrigin(
+    id: string,
+    origin: TaskOrigin | undefined,
+  ): Promise<Result<TaskWorkspace, ServiceError>> {
+    const task = await this.repository.get(id);
+    if (!task) return err({ kind: "notFound", message: "Task not found." });
+    if (origin && task.origin) {
+      return err({
+        kind: "validation",
+        message:
+          `"${task.name}" is already linked to ${task.origin.sourceId}/${task.origin.ref}. ` +
+          "Unlink it first if it is really for something else.",
+      });
+    }
+
+    const updated: TaskWorkspace = {
+      ...task,
+      ...(origin ? { origin } : {}),
+      updatedAt: this.clock.now(),
+    };
+    if (!origin) delete (updated as { origin?: TaskOrigin }).origin;
+
+    await this.repository.save(updated);
+    this.logger.info(
+      origin
+        ? `Linked task "${task.name}" to ${origin.sourceId}/${origin.ref}`
+        : `Unlinked task "${task.name}" from its suggestion`,
+    );
+    return ok(updated);
+  }
+
   async archiveTask(id: string): Promise<Result<TaskWorkspace, ServiceError>> {
     const task = await this.repository.get(id);
     if (!task) return err({ kind: "notFound", message: "Task not found." });

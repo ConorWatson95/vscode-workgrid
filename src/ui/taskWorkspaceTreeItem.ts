@@ -102,6 +102,7 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       questions > 0,
       denied > 0,
       outstanding > 0,
+      task.origin !== undefined,
     );
 
     const descriptionParts = [statusLabel];
@@ -138,6 +139,10 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     } else if ((live?.commitsAhead ?? 0) > 0) {
       descriptionParts.push(`${live!.commitsAhead} commit${live!.commitsAhead === 1 ? "" : "s"}`);
     }
+    // Shown on the row rather than only in the tooltip, because the ref is how this task
+    // is referred to everywhere outside the extension — in a commit subject, in standup,
+    // on the board — and a task list that cannot be matched to a ticket list is two lists.
+    if (task.origin) descriptionParts.push(task.origin.ref);
     this.description = descriptionParts.join(" · ");
 
     // The pipeline records its own route label, so a project route that has since
@@ -153,6 +158,9 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
         // Shown because it is handed to every stage prompt — if it is wrong or
         // empty, every agent session inherits that.
         task.description ? `\nBrief: ${task.description}` : "",
+        task.origin
+          ? `\nFor: ${task.origin.ref}${task.origin.url ? ` — ${task.origin.url}` : ""}`
+          : "",
         `Branch: \`${task.branchName}\``,
         `Base: \`${task.baseBranch}\``,
         `Worktree: \`${task.worktreePath}\``,

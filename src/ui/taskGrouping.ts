@@ -1,4 +1,4 @@
-import { itemsForGate } from "../domain/checklistScope";
+import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 
 /**
@@ -85,14 +85,20 @@ export interface GroupInput {
 }
 
 /**
- * The gate this task is stopped at, if somebody other than the operator answers it
- * and it still has items outstanding.
+ * The gate this task is stopped at, if somebody other than the operator answers it.
  *
- * Two deliberate narrowings. **Outstanding items are required**: a gate whose items
- * are all ticked is waiting on the operator to approve it, which is a click and
- * belongs in "needs you". And **items are counted per gate** via `itemsForGate`
- * rather than pipeline-wide, so a task is not filed as waiting on testers over an
- * item scoped to a gate two rows further on that nothing has reached yet.
+ * Three outcomes rather than two, and the third is the one a first attempt got wrong.
+ * Items are counted **per gate** via `itemsForGate`, never pipeline-wide, so a task is
+ * not filed as waiting on testers over an item belonging to a gate two rows further on:
+ *
+ * - **Something outstanding** → waiting on others. The plain case.
+ * - **Items exist and every one is ticked** → *yours*. Somebody has fed back and what is
+ *   left is the approval, which only the operator can give.
+ * - **No items at all** → waiting on others, which is the correction. Keying purely on
+ *   outstanding items read an empty checklist as an answered one, so a DEV sign-off that
+ *   raised nothing — or whose items predate scoping and route elsewhere — sat in "needs
+ *   you" with nothing for the operator to read. Absence of a checklist is not evidence
+ *   that a verification happened; the audience says who performs it, and nobody has.
  */
 export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | undefined {
   if (!pipeline) return undefined;
@@ -108,7 +114,21 @@ export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | un
     );
   if (!gate || gate.checklistAudience !== "others") return undefined;
 
-  return itemsForGate(pipeline, gate.id).length > 0 ? gate : undefined;
+  if (itemsForGate(pipeline, gate.id).length > 0) return gate;
+
+  // Nothing outstanding: was anything ever asked of this gate? A ticked item is somebody
+  // having answered, and the approval that follows is the operator's.
+  const answered = pipeline.stages
+    .filter((stage) => stage.status !== "skipped")
+    .flatMap((stage) => stage.checklist ?? [])
+    .some((item) => item.checked && gateForItem(pipeline, item.scope) === gate.id);
+
+  return answered ? undefined : gate;
+}
+
+/** Which gate answers for a scope, by id, so a ticked item can be attributed. */
+function gateForItem(pipeline: TaskPipeline, scope: string | undefined): string | undefined {
+  return gateFor(checklistGates(pipeline), scope)?.stageId;
 }
 
 function externalGateInPlay(pipeline: TaskPipeline | undefined): boolean {

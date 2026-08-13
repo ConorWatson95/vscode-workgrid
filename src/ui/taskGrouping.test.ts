@@ -142,6 +142,33 @@ describe("a gate somebody else answers", () => {
     expect(of(p)).toBe("waiting-others");
   });
 
+  it("is waiting on others when the gate has no items at all", () => {
+    // The correction. Keying purely on outstanding items read an empty checklist as an
+    // answered one, so a DEV sign-off that raised nothing sat in "needs you" with
+    // nothing for the operator to read. Absence of a checklist is not evidence that a
+    // verification happened.
+    const p = pipeline([
+      stage({ id: "a", status: "passed" }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("waiting-others");
+  });
+
+  it("is waiting on others when its items were routed elsewhere", () => {
+    // A real state: eleven sign-off items written before scopes existed, so they carry
+    // none and resolve to a different gate. The sign-off itself is still outstanding.
+    const p = pipeline([
+      stage({
+        id: "a",
+        status: "passed",
+        checklist: [{ id: "c1", text: "exercise it", checked: false, scope: "live-site", raisedByStage: "a" }],
+      }),
+      gate({ status: "awaiting-approval" }),
+      gate({ id: "live", name: "Verify live", status: "pending", checklistScope: "live-site", checklistAudience: undefined }),
+    ]);
+    expect(of(p)).toBe("waiting-others");
+  });
+
   it("is yours again once the items are ticked", () => {
     // Approving is a decision only the operator makes, so a gate with nothing
     // outstanding is a click and belongs back in the list they scan.

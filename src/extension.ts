@@ -31,6 +31,7 @@ import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { SuggestionScanService } from "./services/suggestionScanService";
+import { refreshGateDeclarations } from "./domain/stageRefresh";
 import {
   SCAN_DISALLOWED_TOOLS,
   SCAN_TIMEOUT_MS,
@@ -901,6 +902,71 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void sweepStaleSubtasks();
   const staleSweep = setInterval(() => void sweepStaleSubtasks(), 10 * 60 * 1000);
   context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
+
+  /**
+   * Brings gate declarations on every task into line with the project's routes.
+   *
+   * Its own pass rather than part of the advance path, because the tasks that need it
+   * most are the ones nobody is advancing. A verification gate is `awaiting-approval`
+   * for its whole useful life: a task sitting at a DEV sign-off waiting on testers gets
+   * no advance, so a repair that only runs there never reaches it. Found with nine live
+   * tasks in one state file — five had never picked up `checklistScope` after it was
+   * added to config, and were silently running the pre-scope pooled behaviour that
+   * scoping exists to fix.
+   *
+   * Only `checklistScope` and `checklistAudience`, and only on unresolved stages: see
+   * `refreshGateDeclarations` for why those two are safe to reload where an intent is
+   * not. Saves only when something actually differs, so a repository already in line
+   * writes nothing.
+   */
+  const syncGateDeclarations = async (): Promise<void> => {
+    if (!repositoryRoot) return;
+    const source = currentHarness();
+    if (!source) return;
+    try {
+      const tasks = await repository.getByRepository(repositoryRoot);
+      const corrected: string[] = [];
+      for (const task of tasks) {
+        if (!task.pipeline) continue;
+        const result = refreshGateDeclarations(task.pipeline, source);
+        if (result.changed.length === 0) continue;
+        await repository.save({
+          ...task,
+          pipeline: result.pipeline,
+          updatedAt: new Date().toISOString(),
+        });
+        corrected.push(`${task.name}: ${result.changed.join(", ")}`);
+      }
+      if (corrected.length > 0) {
+        tree.refresh();
+        // Logged rather than notified. Unlike a reclaimed subtask this asks nothing of
+        // the user and discards nothing — the gates now match config, which is what
+        // they expected when they edited it.
+        logger.info(
+          `Harness reloaded gate declarations from harness.json for ${corrected.length} ` +
+            `task(s): ${corrected.join(" | ")}`,
+        );
+      }
+    } catch (error) {
+      // A repair's own failure must not take activation with it, exactly as the stale
+      // subtask sweep does not.
+      logger.warn(`Could not sync gate declarations: ${String(error)}`);
+    }
+  };
+  void syncGateDeclarations();
+  // Watched as a *file*, because that is what it is. `onDidChangeConfiguration` fires for
+  // VS Code settings and never for `harness.json`, so hooking it would have looked
+  // correct and only ever run at activation — which is the same class of mistake as the
+  // bug this repairs. Editing the route file is the moment a user expects a new audience
+  // to take effect.
+  if (repositoryRoot) {
+    const configWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(repositoryRoot, ".taskworkspaces/*.json"),
+    );
+    configWatcher.onDidChange(() => void syncGateDeclarations());
+    configWatcher.onDidCreate(() => void syncGateDeclarations());
+    context.subscriptions.push(configWatcher);
+  }
 
   // Lets an open report show a stage's commands as they run, rather than nothing
   // until the subtask ends. Set here because the runner holds the live copy and is

@@ -110,6 +110,8 @@ export function buildContextValue(
   hasQuestions = false,
   hasDenials = false,
   hasChecklist = false,
+  /** True when the task records which suggestion it is for. */
+  linkedToSuggestion = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -133,5 +135,8 @@ export function buildContextValue(
   // nothing to verify is not merely useless: the gate's meaning rests on the button
   // being a deliberate act, and one that is always present invites reflexive use.
   if (hasChecklist) tokens.push("hasChecklist");
+  // Only when there is a link to break. An "Unlink" on an unlinked task is a menu entry
+  // that does nothing, and this is also what tells the two states apart on the row.
+  if (linkedToSuggestion) tokens.push("linkedToSuggestion");
   return tokens.join(" ");
 }

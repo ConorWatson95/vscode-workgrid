@@ -1092,6 +1092,73 @@ record of which arm a run had been.
 Still unmeasured until a route is actually run both ways — but that is now an
 experiment rather than an anecdote.
 
+### Config a task in flight never picked up
+
+Two live defects found together in one state file with nine tasks in it (13 Aug 2026),
+and one shared cause: **`refreshPendingStages` only touches stages that have not begun,
+and a verification gate is `awaiting-approval` for its entire useful life.** So every
+repair the harness had for "config changed after this task started" was unreachable for
+exactly the stages that sit longest.
+
+- `checklistScope` had been added to the project's routes months after five tasks
+  started. Their gates still had none, so `scopingActive` was false and they silently ran
+  the pooled behaviour scoping exists to replace — the first gate absorbing every item and
+  the later ones asking for nothing.
+- `checklistAudience` was added, and the tasks parked at a DEV sign-off stayed in
+  **Needs you**, because the persisted stage had no audience to read.
+
+`refreshGateDeclarations` is a second pass with its own field list and its own wider
+status rule, deliberately *not* folded into `refreshPendingStages` — whose contract
+("nothing that has begun is touched") is relied on elsewhere. The distinction that makes
+the wider rule safe: an `intent` is an instruction **given to a run**, so a stage that ran
+must keep what it ran with; a scope and an audience say which gate reads an item and whose
+job it is to answer, which is a fact about what happens **next**. A *resolved* gate is
+still left alone — once it has passed, who answered it is history.
+
+**It runs on its own trigger, not in the advance path**, because the tasks that need it
+are the ones nobody is advancing. At activation, and on a `.taskworkspaces/*.json` change
+watched as a **file** — `onDidChangeConfiguration` fires for VS Code settings and never for
+`harness.json`, so hooking it would have looked right and only ever run at activation,
+which is the same class of mistake as the bug being repaired.
+
+**Backfilling a scope can wreck a checklist, so it is withheld.** A scope is a *routing*
+decision: `gateFor` sends an unscoped item to the last unresolved scoped gate. Bringing
+gate scopes into line on a task whose items were written before scopes existed therefore
+re-routes every one of those items at once — measured on a real task, eleven DEV sign-off
+items moved onto `rc-live-verify-sm`, a **live** gate, while the DEV sign-off asked for
+nothing. Gates matched config; the checklist was ruined. So scope is backfilled only when
+no unchecked item lacks one — precisely the condition under which nothing can move.
+`audience` is never withheld: it routes nothing. The items are deliberately **not**
+auto-tagged, because a scope is the behaviour review's judgement about which environment
+can answer an item, and inferring it from wording is the guess this codebase refuses
+everywhere else. Re-running the review is the honest repair, and it is a human's call.
+
+**An external gate with no items is waiting on others, not on you.** The first version of
+`externalGate` keyed purely on outstanding items, which read an empty checklist as an
+answered one — so a sign-off that raised nothing, or whose items route elsewhere, sat in
+Needs you with nothing to read. Three outcomes, not two: something outstanding → others;
+items that exist and are all **ticked** → yours, because somebody has fed back and the
+approval is yours alone; nothing ever asked → others, since absence of a checklist is not
+evidence that a verification happened.
+
+### A suggestion can be linked to a task that already exists
+
+`TaskWorkspaceService.setTaskOrigin`, and **Link to an Existing Task…** on a suggestion
+row. Starting a task *from* a suggestion only serves work that has not begun, which is the
+rarer case on a repository already full of it: a task adopted from a branch, or created
+before a source was configured, has no `origin`, so the ticket it is plainly for goes on
+being offered as work nobody has picked up — and a list that offers you what you are
+already doing is one you stop reading.
+
+Only tasks with no origin are offered, and **repointing an existing link is refused**
+rather than handled silently: a task quietly moved from one ticket to another is a change
+nobody could see afterwards. Unlinking is its own deliberate act, because a wrong link is
+worse than none — it hides real work from the list.
+
+The ref is shown on the task row, not only in the tooltip. It is how the task is referred
+to everywhere outside the extension — a commit subject, a standup, the board — and a task
+list that cannot be matched to a ticket list is two lists.
+
 ### Suggested work, and what a scan costs
 
 `domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`

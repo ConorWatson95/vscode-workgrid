@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   guidanceFor,
+  refreshGateDeclarations,
   refreshPendingStages,
   addMissingStages,
   revertToStage,
@@ -1000,5 +1001,207 @@ describe("guidanceFor", () => {
   it("is empty for a pipeline with no guidance", () => {
     expect(guidanceFor(pipeline([stage({ id: "build" })]), "build")).toEqual([]);
     expect(guidanceFor(undefined, "build")).toEqual([]);
+  });
+});
+
+describe("refreshGateDeclarations", () => {
+  /** A route declaring scope and audience on a gate. */
+  const gateRoute = (
+    over: { scope?: string; audience?: string } = {},
+  ): { routes: RouteDefinition[]; rules: ReviewRule[] } => ({
+    routes: [
+      {
+        id: "sql-change",
+        label: "SQL change",
+        description: "",
+        stages: [
+          {
+            id: "signoff",
+            label: "Sign off",
+            kind: "humanVerification",
+            intent: "Verify it.",
+            gate: "approval",
+            ...(over.scope ? { checklistScope: over.scope } : {}),
+            ...(over.audience ? { checklistAudience: over.audience } : {}),
+          },
+        ],
+      } as unknown as RouteDefinition,
+    ],
+    rules: [],
+  });
+
+  const gate = (over: Partial<TaskStage> = {}) =>
+    stage({
+      id: "signoff",
+      name: "Sign off",
+      kind: "humanVerification",
+      requiresApproval: true,
+      subtasks: [],
+      ...over,
+    });
+
+  it("reaches a gate already standing at awaiting-approval", () => {
+    // The whole point. A verification gate is awaiting-approval for its entire useful
+    // life, so a repair that only touched stages which had not begun never reached one.
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "awaiting-approval" })]),
+      gateRoute({ scope: "dev-site", audience: "others" }),
+    );
+    expect(result.changed).toEqual(["signoff"]);
+    expect(result.pipeline.stages[0].checklistScope).toBe("dev-site");
+    expect(result.pipeline.stages[0].checklistAudience).toBe("others");
+  });
+
+  it("backfills a scope a task never picked up", () => {
+    // Five live tasks were found in this state: scoping added to config afterwards, so
+    // they silently ran the pooled behaviour scoping exists to replace.
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "pending", checklistScope: undefined })]),
+      gateRoute({ scope: "dev-site" }),
+    );
+    expect(result.pipeline.stages[0].checklistScope).toBe("dev-site");
+  });
+
+  it("leaves a resolved gate alone", () => {
+    // Once a gate has passed, who answered it is history.
+    for (const status of ["passed", "skipped"] as const) {
+      const result = refreshGateDeclarations(
+        pipeline([gate({ status, checklistAudience: undefined })]),
+        gateRoute({ audience: "others" }),
+      );
+      expect(result.changed).toEqual([]);
+      expect(result.pipeline.stages[0].checklistAudience).toBeUndefined();
+    }
+  });
+
+  it("clears a declaration the route has removed", () => {
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "awaiting-approval", checklistAudience: "others" })]),
+      gateRoute({}),
+    );
+    expect(result.changed).toEqual(["signoff"]);
+    expect(result.pipeline.stages[0].checklistAudience).toBeUndefined();
+  });
+
+  it("returns the pipeline unchanged when nothing differs, so no save is needed", () => {
+    const p = pipeline([
+      gate({ status: "awaiting-approval", checklistScope: "dev-site", checklistAudience: "others" }),
+    ]);
+    const result = refreshGateDeclarations(p, gateRoute({ scope: "dev-site", audience: "others" }));
+    expect(result.changed).toEqual([]);
+    expect(result.pipeline).toBe(p);
+  });
+
+  it("touches nothing else about a stage in flight", () => {
+    // Narrow on purpose: an intent is an instruction a run was given, and this pass
+    // deliberately reaches stages that are running.
+    const running = gate({ status: "active", intent: "What it was told." });
+    const result = refreshGateDeclarations(pipeline([running]), gateRoute({ audience: "others" }));
+    expect(result.pipeline.stages[0].intent).toBe("What it was told.");
+    expect(result.pipeline.stages[0].status).toBe("active");
+  });
+
+  it("leaves a stage the route no longer defines as it is", () => {
+    const result = refreshGateDeclarations(
+      pipeline([gate({ id: "gone", status: "awaiting-approval", checklistScope: "dev-site" })]),
+      gateRoute({ scope: "uat-site" }),
+    );
+    expect(result.changed).toEqual([]);
+    expect(result.pipeline.stages[0].checklistScope).toBe("dev-site");
+  });
+});
+
+describe("refreshGateDeclarations and the scope-backfill hazard", () => {
+  const gateRoute = (): { routes: RouteDefinition[]; rules: ReviewRule[] } => ({
+    routes: [
+      {
+        id: "sql-change",
+        label: "SQL change",
+        description: "",
+        stages: [
+          {
+            id: "signoff",
+            label: "Sign off",
+            kind: "humanVerification",
+            intent: "Verify it.",
+            gate: "approval",
+            checklistScope: "dev-site",
+            checklistAudience: "others",
+          },
+          {
+            id: "live",
+            label: "Verify live",
+            kind: "humanVerification",
+            intent: "Verify live.",
+            gate: "approval",
+            checklistScope: "live-site",
+          },
+        ],
+      } as unknown as RouteDefinition,
+    ],
+    rules: [],
+  });
+
+  const withItems = (items: Array<{ checked: boolean; scope?: string }>) =>
+    ({
+      routeId: "sql-change",
+      stages: [
+        stage({
+          id: "review",
+          status: "passed",
+          checklist: items.map((item, at) => ({
+            id: `c${at}`,
+            text: "exercise it",
+            checked: item.checked,
+            ...(item.scope ? { scope: item.scope } : {}),
+            raisedByStage: "review",
+          })),
+        }),
+        stage({
+          id: "signoff",
+          name: "Sign off",
+          kind: "humanVerification",
+          status: "awaiting-approval",
+          requiresApproval: true,
+          subtasks: [],
+        }),
+        stage({
+          id: "live",
+          name: "Verify live",
+          kind: "humanVerification",
+          status: "pending",
+          requiresApproval: true,
+          subtasks: [],
+        }),
+      ],
+    }) as TaskPipeline;
+
+  it("withholds a scope backfill that would re-route an existing item", () => {
+    // The failure this prevents, from a real state file: eleven unscoped DEV sign-off
+    // items, and backfilling gate scopes sent every one of them to the *live* gate,
+    // because that was simply the last unresolved scoped one.
+    const result = refreshGateDeclarations(
+      withItems([{ checked: false }, { checked: false }]),
+      gateRoute(),
+    );
+    const signoff = result.pipeline.stages.find((s) => s.id === "signoff");
+    expect(signoff?.checklistScope).toBeUndefined();
+    // The audience is never withheld: it routes nothing, it only says who answers.
+    expect(signoff?.checklistAudience).toBe("others");
+  });
+
+  it("backfills scopes once nothing unchecked lacks one", () => {
+    const result = refreshGateDeclarations(
+      withItems([{ checked: true }, { checked: false, scope: "dev-site" }]),
+      gateRoute(),
+    );
+    const signoff = result.pipeline.stages.find((s) => s.id === "signoff");
+    expect(signoff?.checklistScope).toBe("dev-site");
+    expect(result.pipeline.stages.find((s) => s.id === "live")?.checklistScope).toBe("live-site");
+  });
+
+  it("backfills scopes for a pipeline with no checklist at all", () => {
+    const result = refreshGateDeclarations(withItems([]), gateRoute());
+    expect(result.pipeline.stages.find((s) => s.id === "signoff")?.checklistScope).toBe("dev-site");
   });
 });

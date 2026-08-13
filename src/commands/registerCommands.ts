@@ -37,9 +37,11 @@ import {
 } from "./commandContext";
 import { createTaskWorkspaceCommand } from "./createTaskWorkspaceCommand";
 import {
+  linkSuggestionToTaskCommand,
   openSuggestionCommand,
   scanForWorkCommand,
   startTaskFromSuggestionCommand,
+  unlinkTaskOriginCommand,
 } from "./suggestionCommands";
 import { mergeIntoTaskCommand } from "./mergeIntoTaskCommand";
 import {
@@ -111,6 +113,10 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       startTaskFromSuggestionCommand(ctx, arg),
     ),
     register("taskWorkspaces.openSuggestion", (arg) => openSuggestionCommand(arg)),
+    register("taskWorkspaces.linkSuggestionToTask", (arg) =>
+      linkSuggestionToTaskCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.unlinkTaskOrigin", (arg) => unlinkTaskOriginCommand(ctx, arg)),
     register("taskWorkspaces.toggleHiddenSuggestions", () => {
       const showing = ctx.tree.toggleHiddenSuggestions();
       void vscode.commands.executeCommand(

@@ -1,5 +1,10 @@
 import { ReviewRule } from "./reviewRules";
-import { RouteDefinition, sendBackEntryKind, StageKind } from "./taskRoute";
+import {
+  ChecklistAudience,
+  RouteDefinition,
+  sendBackEntryKind,
+  StageKind,
+} from "./taskRoute";
 import {
   DiscardedRun,
   TaskPipeline,
@@ -190,6 +195,105 @@ export function repositionRouteStages(
  */
 function hasBegun(stage: TaskStage): boolean {
   return stage.status !== "pending" || stage.subtasks.some((s) => s.status !== "pending");
+}
+
+/**
+ * Declarations about **who answers a gate**, which have to reach a stage already
+ * standing at it.
+ *
+ * Separate from `REFRESHABLE` because the rule that protects history does not apply to
+ * them, and applying it anyway is what made both of these fail silently. `intent` and
+ * `model` are instructions *given to a run*, so a stage that has run must keep what it
+ * ran with. A scope and an audience are neither: they say which gate reads an item and
+ * whose job it is to answer, which is a fact about what happens **next** and says nothing
+ * about what happened.
+ *
+ * Refreshed on any stage that has not *resolved*, therefore, rather than any stage that
+ * has not *begun* — because a verification gate is `awaiting-approval` for its whole
+ * useful life, and "has begun" excludes exactly the stages this exists to correct. Two
+ * real failures, both found in one state file on 13 Aug 2026 with nine live tasks in it:
+ *
+ * - `checklistScope` was added to a project's route file, and five tasks already in
+ *   flight kept `undefined` on every gate. They silently ran the pre-scope pooled
+ *   behaviour, so the first gate absorbed every item and the later ones asked for
+ *   nothing — the exact defect scoping was introduced to fix, still live in the tasks
+ *   that predated it.
+ * - `checklistAudience` was added, and the four tasks sitting at a DEV sign-off stayed in
+ *   "Needs you" because their persisted stage had no audience to read.
+ *
+ * A **resolved** stage is left alone. Once a gate has passed, who answered it is history.
+ */
+const GATE_DECLARATIONS = ["checklistScope", "checklistAudience"] as const;
+
+/**
+ * Whether gate scopes can be brought into line without moving an existing item.
+ *
+ * A scope is a *routing* decision: `gateFor` sends an item to the gate whose scope it
+ * names, and an item naming none to the last unresolved scoped gate. So backfilling
+ * scopes onto the gates of a task whose items were written **before** scopes existed
+ * re-routes every one of those items at once — and on a real route it re-routed eleven
+ * DEV sign-off items onto `rc-live-verify-sm`, a live gate, because that was simply the
+ * last unresolved scoped one. The gates matched config and the checklist was ruined.
+ *
+ * So scope is backfilled only when no unchecked item lacks one, which is exactly the
+ * condition under which the change cannot alter any item's destination. `audience` is
+ * never withheld: it says who answers a gate and routes nothing, so it is always safe.
+ *
+ * The items themselves are deliberately not tagged here. A scope is the behaviour
+ * review's judgement about which environment can answer an item, and guessing it from
+ * an item's wording is exactly the inference this codebase refuses to make elsewhere.
+ * Re-running the review is the honest repair, and it is a human's call.
+ */
+function canBackfillScopes(pipeline: TaskPipeline): boolean {
+  return !pipeline.stages
+    .filter((stage) => stage.status !== "skipped")
+    .flatMap((stage) => stage.checklist ?? [])
+    .some((item) => !item.checked && !(item.scope ?? "").trim());
+}
+
+/** True when a stage has settled and can take no more items. */
+function hasResolved(stage: TaskStage): boolean {
+  return stage.status === "passed" || stage.status === "skipped";
+}
+
+/**
+ * Reloads gate declarations for every unresolved stage.
+ *
+ * Deliberately *not* folded into `refreshPendingStages`: that function's contract is
+ * "nothing that has begun is touched", and it is relied on. A second pass with its own
+ * narrower field list and its own wider status rule keeps both rules legible rather than
+ * making one of them conditional.
+ *
+ * Returns the pipeline unchanged when nothing differs, so callers can skip a save.
+ */
+export function refreshGateDeclarations(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; changed: string[] } {
+  const changed: string[] = [];
+  const scopeSafe = canBackfillScopes(pipeline);
+
+  const stages = pipeline.stages.map((stage) => {
+    if (hasResolved(stage)) return stage;
+    const definition = findDefinition(source, pipeline.routeId, stage);
+    if (!definition) return stage;
+
+    const updates: Partial<TaskStage> = {};
+    for (const field of GATE_DECLARATIONS) {
+      if (field === "checklistScope" && !scopeSafe) continue;
+      const next = normalize(definition[field]);
+      if (normalize(stage[field]) !== next) {
+        (updates as Record<string, unknown>)[field] = next;
+      }
+    }
+    if (Object.keys(updates).length === 0) return stage;
+
+    changed.push(stage.id);
+    return { ...stage, ...updates };
+  });
+
+  if (changed.length === 0) return { pipeline, changed: [] };
+  return { pipeline: { ...pipeline, stages }, changed };
 }
 
 /**
@@ -655,6 +759,10 @@ function findDefinition(
       verify?: string;
       planFile?: string;
       requiredMcpServers?: readonly string[];
+      // Only a route stage declares these; a rule stage has neither, and `undefined`
+      // from a rule is the right answer rather than a missing property.
+      checklistScope?: string;
+      checklistAudience?: ChecklistAudience;
     }
   | undefined {
   if (stage.addedByRule) {
