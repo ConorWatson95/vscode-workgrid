@@ -76,17 +76,38 @@ export class QuestionPanel {
 
   private async onMessage(message: IncomingMessage): Promise<void> {
     if (message.kind === "answer") {
-      await this.handlers.answer(this.taskId, message.id, message.text);
+      try {
+        await this.handlers.answer(this.taskId, message.id, message.text);
+      } catch {
+        // Typing must never raise: the submit path saves every answer again, and
+        // that is where a failure the user needs to see is reported.
+      }
       return;
     }
     if (message.kind === "submit") {
       // Save every answer first, then hand over — the panel closes on success,
       // so anything unsaved at that point would be lost.
-      for (const answer of message.answers) {
-        await this.handlers.answer(this.taskId, answer.id, answer.text);
+      //
+      // Every exit that is not success has to reach the webview. The button
+      // disables itself and shows "Saving…" the moment it is clicked, so a
+      // silent return — or a throw, which this handler is invoked with `void`
+      // and would otherwise swallow — leaves the panel stuck on a save that is
+      // never coming back, with the answers unsent and no way to retry.
+      try {
+        for (const answer of message.answers) {
+          await this.handlers.answer(this.taskId, answer.id, answer.text);
+        }
+        const outcome = await this.handlers.submit(this.taskId);
+        if (outcome && !outcome.ok) this.fail(outcome.reason);
+      } catch (error) {
+        this.fail(error instanceof Error ? error.message : String(error));
       }
-      await this.handlers.submit(this.taskId);
     }
+  }
+
+  /** Re-enables the button and says why the answers did not go through. */
+  private fail(reason: string): void {
+    void this.panel.webview.postMessage({ kind: "failed", reason });
   }
 
   private render(): void {
@@ -210,8 +231,17 @@ export class QuestionPanel {
       : blank + " of " + areas.length + " still to answer";
   }
 
+  window.addEventListener("message", (event) => {
+    if (event.data && event.data.kind === "failed") {
+      submit.disabled = false;
+      hint.textContent = "Not saved — " + event.data.reason;
+      hint.style.color = "var(--vscode-errorForeground)";
+    }
+  });
+
   submit.addEventListener("click", () => {
     submit.disabled = true;
+    hint.style.color = "";
     hint.textContent = "Saving…";
     vscode.postMessage({
       kind: "submit",
@@ -229,9 +259,16 @@ export class QuestionPanel {
 export interface QuestionHandlers {
   /** Stores one answer. Called as the user types, so it must be cheap. */
   answer(taskId: string, itemId: string, text: string): Promise<void>;
-  /** All answers are in: fold them into the brief and offer to continue. */
-  submit(taskId: string): Promise<void>;
+  /**
+   * All answers are in: fold them into the brief and offer to continue.
+   *
+   * Returns why it did not go through, so the panel can re-enable its button.
+   * On success the panel is closed by the handler, so nothing is returned.
+   */
+  submit(taskId: string): Promise<SubmitOutcome | void>;
 }
+
+export type SubmitOutcome = { ok: true } | { ok: false; reason: string };
 
 type IncomingMessage =
   | { kind: "answer"; id: string; text: string }

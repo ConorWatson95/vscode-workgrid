@@ -515,14 +515,16 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
     submit: async (taskId) => {
       const latest = await ctx.repository.get(taskId);
       const pending = latest?.pipeline?.pendingQuestion;
-      if (!latest?.pipeline || !pending) return;
+      if (!latest?.pipeline || !pending) {
+        return { ok: false, reason: "this task is no longer waiting on an answer." };
+      }
 
       const outstanding = unansweredQuestions(latest.pipeline);
       if (outstanding.length > 0) {
-        void vscode.window.showWarningMessage(
-          `${outstanding.length} question(s) still need an answer.`,
-        );
-        return;
+        return {
+          ok: false,
+          reason: `${outstanding.length} question(s) still need an answer.`,
+        };
       }
 
       // A live question is one an agent is still blocked on, so the answers go
