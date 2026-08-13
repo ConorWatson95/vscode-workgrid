@@ -54,6 +54,22 @@ export interface CliArgsInput {
    */
   pluginDirs?: string[];
   /**
+   * Tools the session may not use at all (`--disallowed-tools`).
+   *
+   * Removal, not refusal, and that distinction is the reason to use it. A denied call
+   * is a turn spent discovering a wall and usually a second one working around it: the
+   * first suggestion scan wrote three `Bash` commands to parse an MCP result, had each
+   * refused, and cost $0.89 in eight turns instead of $0.49 in three. An agent that
+   * never had the tool does the work with what it has.
+   *
+   * The same argument `subagentLimits` makes about removing the Agent tool rather than
+   * refusing the call, and it is why a read-only scan states its constraint here as
+   * well as in the prompt: a constraint the runtime can enforce should not be left to
+   * the model's cooperation.
+   */
+  disallowedTools?: string[];
+
+  /**
    * Load **only** `mcpConfigPath`, ignoring every other source of MCP servers.
    *
    * Needed because `--mcp-config` on its own *adds* servers: the worktree
@@ -150,6 +166,15 @@ export function buildCliArgs(input: CliArgsInput): string[] {
   // Before --mcp-config, which must stay last.
   if (input.settingsPath && input.settingsPath.trim().length > 0) {
     args.push("--settings", quoteForShell(input.settingsPath.trim(), input.useShell));
+  }
+
+  // Comma-separated, and emitted before the variadic --mcp-config for the same reason
+  // everything else is.
+  const disallowed = (input.disallowedTools ?? [])
+    .map((tool) => tool.trim())
+    .filter((tool) => tool.length > 0);
+  if (disallowed.length > 0) {
+    args.push("--disallowed-tools", quoteForShell(disallowed.join(","), input.useShell));
   }
 
   // Repeatable rather than variadic — one flag per directory — so unlike

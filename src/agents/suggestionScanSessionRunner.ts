@@ -16,7 +16,7 @@ export interface ScanCapableRunner {
     task: TaskWorkspace,
     prompt: string,
     label: string,
-    options?: { requiredMcpServers?: readonly string[] },
+    options?: { requiredMcpServers?: readonly string[]; model?: string },
   ): Promise<{ ok: boolean; text: string; error?: string }>;
 }
 
@@ -30,6 +30,43 @@ export interface ScanCapableRunner {
  * with a genuine one.
  */
 export const SCAN_TASK_ID = "suggestion-scan";
+
+/**
+ * Tools a scan session may not use.
+ *
+ * A scan reads a work source and writes a list. Nothing in that needs a shell, a file
+ * write, or a subagent — and the prompt already says so, which is exactly why this
+ * exists as well: a constraint the runtime can enforce should not be left to the model's
+ * cooperation. The first real scan against a live board wrote three `Bash` commands to
+ * parse an MCP result, had each refused by the permission layer, and cost $0.89 over
+ * eight turns instead of $0.49 over three.
+ *
+ * Removal rather than refusal, for the reason `subagentLimits` removes the Agent tool: an
+ * agent that never had a tool does the work with what it has, where one denied a tool
+ * spends turns rewording the request.
+ *
+ * `Read` and `Glob` are deliberately left available. A scan may reasonably want to look
+ * at the repository to say something useful about an item, and reading cannot change
+ * anything.
+ */
+export const SCAN_DISALLOWED_TOOLS = [
+  "Bash",
+  "Write",
+  "Edit",
+  "NotebookEdit",
+  "Task",
+  "KillShell",
+  "BashOutput",
+];
+
+/**
+ * Hard stop for one scan.
+ *
+ * Much shorter than a stage's fifteen minutes, because a scan is a foreground action with
+ * somebody waiting on it: a list refresh that has not answered in four minutes has gone
+ * wrong, and failing says so where hanging does not.
+ */
+export const SCAN_TIMEOUT_MS = 4 * 60 * 1000;
 
 /**
  * Adapts a stage runner into a scan runner.
@@ -54,7 +91,7 @@ export class SuggestionScanSessionRunner implements SuggestionScanRunner {
     repositoryRoot: string,
     prompt: string,
     label: string,
-    options?: { requiredMcpServers?: readonly string[] },
+    options?: { requiredMcpServers?: readonly string[]; model?: string },
   ): Promise<{ ok: boolean; text: string; error?: string }> {
     return this.runner.run(
       createScanTask(repositoryRoot, this.clock.now()),

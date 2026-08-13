@@ -69,6 +69,8 @@ export interface StreamSessionOptions {
    * protocol skill, which lives under the git common dir rather than in the worktree.
    */
   pluginDirs?: string[];
+  /** Tools this session may not use at all. See `claudeCliArgs`. */
+  disallowedTools?: string[];
   /** Further MCP configs, e.g. the extension's own ask_user server. */
   extraMcpConfigPaths?: string[];
   /**
@@ -224,6 +226,7 @@ export class ClaudeStreamSession {
       strictMcpConfig: this.options.strictMcpConfig,
       settingsPath: this.options.settingsPath,
       pluginDirs: this.options.pluginDirs,
+      disallowedTools: this.options.disallowedTools,
       extraMcpConfigPaths: this.options.extraMcpConfigPaths,
       useShell,
     });

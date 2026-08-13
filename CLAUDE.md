@@ -1092,6 +1092,69 @@ record of which arm a run had been.
 Still unmeasured until a route is actually run both ways — but that is now an
 experiment rather than an anecdote.
 
+### Suggested work, and what a scan costs
+
+`domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`
++ `agents/suggestionScanSessionRunner.ts`. Starting a task was the one step with no runtime
+support, so the harness learned about work only when a name was typed into it.
+
+**The abstraction is a ranked backlog, not an inbox to triage**, and that decided the
+rest. An inbox needs identity, dismissal records and a content fingerprint to tell "seen"
+from "changed"; none of it is needed when everything on the list has to be done eventually
+and the source already holds stable names and its own lifecycle. So **hiding is a filter**
+— reversible, recorded nowhere, impossible to lose a ticket through. That reasoning holds
+for a ticket system and not for an inbox, which is why email is a later *source* rather
+than the shape this was built around.
+
+**Nothing in the domain knows what a source is.** A source supplies an opaque `ref` and a
+`rank` from an order it declares, and a source *is* a config entry in `harness.json`
+naming a scan prompt, its required MCP servers, its rank vocabulary and optionally a
+model. Adding Azure DevOps or Linear is a config edit. The extension ships no sources,
+exactly as it ships no review rules.
+
+- **Identity is `sourceId` + `ref`, never content.** Proven against a live board: two
+  scans of the same seven tickets returned materially different titles. A fingerprint
+  would have called half of them new work every scan.
+- **An unrecognised rank sorts last, never hides.** A `showFrom` naming an undeclared rank
+  is rejected at parse time, because at runtime it hides nothing and a longer list than
+  you asked for is indistinguishable from a busy board.
+- **A scan reporting "nothing" reports nothing** (`isNothingReported`, its third caller).
+- **A failed source is named on the heading**, since it yields a short list and a short
+  list reads as a quiet board.
+
+**Scanning is explicit, never on activation**, which is also what makes holding the result
+in memory honest: it is exactly as old as the last time you asked, and the heading says
+so.
+
+**A scan gets its own session options, not a stage's** — no permission gate (nobody is
+waiting to grant anything mid-refresh), **no protocol skill** (it emits no `VERDICT`,
+`DEFERRED` or `HANDOFF`; loading it was prefix tokens teaching a protocol the scan cannot
+use), and **no tools that change anything** (`SCAN_DISALLOWED_TOOLS`, via the new
+`--disallowed-tools`). That last one is removal rather than refusal, the same choice
+`subagentLimits` makes about the Agent tool.
+
+**What a scan actually costs, measured three ways against a live JIRA board (13 Aug 2026):**
+
+| run | cost | secs | turns | denials | out tok | cache new | cache read |
+|---|---|---|---|---|---|---|---|
+| Opus, shell-out allowed | $0.8877 | 70.1 | 8 | 3 | 3,090 | 66,019 | 298,564 |
+| Opus, prompt says don't shell out | $0.4932 | 22.4 | 3 | 0 | 1,411 | 40,306 | 107,513 |
+| Sonnet, tools removed | $0.3936 | 26.7 | 3 | 0 | 1,559 | 57,899 | 72,544 |
+
+Two lessons, and the second corrects an assumption worth not repeating:
+
+- **A denied tool is not free.** The first run wrote three `Bash` commands to parse an MCP
+  result, had each refused, and spent five extra turns and $0.39 discovering the wall.
+  Under the permission gate it is worse than expensive: the scan would *stop and ask* to
+  approve `jq` in the middle of a read-only list refresh.
+- **The model tier was the small lever, not the big one.** Opus → Sonnet saved 20%, not
+  the 5× the price sheet suggests, because a scan's cost is **creating and reading a
+  ~130k-token prefix**, not its 1,500 tokens of reasoning — and a different model has to
+  create that prefix afresh, so `cache new` went *up*. The remaining cost is the MCP tool
+  surface. Do not reach for a cheaper model expecting an order of magnitude; the lever is
+  a smaller prefix or a warm cache, which means scanning once per session rather than
+  repeatedly.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`

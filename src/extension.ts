@@ -31,7 +31,11 @@ import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { SuggestionScanService } from "./services/suggestionScanService";
-import { SuggestionScanSessionRunner } from "./agents/suggestionScanSessionRunner";
+import {
+  SCAN_DISALLOWED_TOOLS,
+  SCAN_TIMEOUT_MS,
+  SuggestionScanSessionRunner,
+} from "./agents/suggestionScanSessionRunner";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
@@ -705,11 +709,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   );
 
-  // A scan is a stage session with no task, rooted at the repository — so it reuses the
-  // stage runner wholesale, including MCP readiness abandoning a scan whose ticket server
-  // is unavailable before any inference is paid for.
+  // A scan is a stage session with no task, rooted at the repository — the same runner
+  // class, so it inherits MCP readiness abandoning a scan whose ticket server is
+  // unavailable before any inference is paid for, the hard timeout, and the failure
+  // logging. What it does *not* inherit is a stage's environment, and each difference is
+  // deliberate:
+  //
+  //  * **No permission gate.** A scan holds nothing for approval because it is read-only
+  //    and nobody is waiting to grant anything mid-list-refresh.
+  //  * **No protocol skill.** The skill teaches an engine to speak VERDICT, DEFERRED and
+  //    HANDOFF, none of which a scan emits — it has its own reply contract. Loading it
+  //    was prefix tokens spent teaching a scan a protocol it cannot use.
+  //  * **No tools that change anything.** Enforced rather than requested: the first real
+  //    scan wrote three Bash commands to parse an MCP result, had each refused, and cost
+  //    $0.89 across eight turns instead of $0.49 across three. An agent that never had
+  //    the tool does the work with what it has, which is the same reasoning
+  //    `subagentLimits` applies to the Agent tool.
+  const scanRunner = new ClaudeStageSessionRunner(
+    sessions,
+    (task) => ({
+      worktreePath: task.worktreePath,
+      permissionMode: configuration.permissionMode(repositoryUri),
+      mcpConfigPath: reducedMcpConfigPath(task.repositoryRoot),
+      strictMcpConfig: configuration.stageMcpServers(repositoryUri).length > 0,
+      // The source's own model wins, applied per run by the scan service; this is only
+      // the fallback for a source that names none.
+      model: configuration.model(repositoryUri),
+      taskName: task.name,
+      autoCompactThreshold: 0,
+      disallowedTools: SCAN_DISALLOWED_TOOLS,
+    }),
+    logger,
+    SCAN_TIMEOUT_MS,
+  );
+
   suggestionScans = new SuggestionScanService(
-    new SuggestionScanSessionRunner(stageRunner, { now: () => new Date().toISOString() }),
+    new SuggestionScanSessionRunner(scanRunner, { now: () => new Date().toISOString() }),
     { now: () => new Date().toISOString() },
   );
 

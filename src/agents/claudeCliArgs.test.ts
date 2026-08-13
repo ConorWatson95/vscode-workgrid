@@ -302,3 +302,41 @@ describe("--plugin-dir", () => {
     expect(args).not.toContain("--plugin-dir");
   });
 });
+
+describe("--disallowed-tools", () => {
+  it("passes the tools as one comma-separated argument", () => {
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      disallowedTools: ["Bash", "Write", "Edit"],
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    const at = args.indexOf("--disallowed-tools");
+    expect(at).toBeGreaterThan(-1);
+    expect(args[at + 1]).toBe("Bash,Write,Edit");
+  });
+
+  it("emits nothing when none are given, or all are blank", () => {
+    const none = buildCliArgs({ permissionMode: "acceptEdits" } as Parameters<
+      typeof buildCliArgs
+    >[0]);
+    expect(none).not.toContain("--disallowed-tools");
+
+    const blank = buildCliArgs({
+      permissionMode: "acceptEdits",
+      disallowedTools: ["", "  "],
+    } as Parameters<typeof buildCliArgs>[0]);
+    expect(blank).not.toContain("--disallowed-tools");
+  });
+
+  it("does not disturb the trailing --mcp-config", () => {
+    // Same hazard as every other flag here: --mcp-config is variadic, so anything
+    // emitted after it is read as another config path.
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      disallowedTools: ["Bash"],
+      mcpConfigPath: "C:/repo/.mcp.json",
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    expect(args[args.length - 2]).toBe("--mcp-config");
+  });
+});

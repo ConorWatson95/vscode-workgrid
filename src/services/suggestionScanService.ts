@@ -32,7 +32,7 @@ export interface SuggestionScanRunner {
     repositoryRoot: string,
     prompt: string,
     label: string,
-    options?: { requiredMcpServers?: readonly string[] },
+    options?: { requiredMcpServers?: readonly string[]; model?: string },
   ): Promise<{ ok: boolean; text: string; error?: string }>;
 }
 
@@ -131,9 +131,12 @@ export class SuggestionScanService {
         repositoryRoot,
         buildScanPrompt(source),
         `scan:${source.id}`,
-        source.requiredMcpServers
-          ? { requiredMcpServers: source.requiredMcpServers }
-          : undefined,
+        {
+          ...(source.requiredMcpServers
+            ? { requiredMcpServers: source.requiredMcpServers }
+            : {}),
+          ...(source.model ? { model: source.model } : {}),
+        },
       );
     } catch (error) {
       return { ...base, suggestions: [], failure: (error as Error).message };

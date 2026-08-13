@@ -44,6 +44,16 @@ export interface SuggestionSource {
    * would read as a quiet day.
    */
   requiredMcpServers?: string[];
+  /**
+   * Model for this source's scan, overriding the extension-wide default.
+   *
+   * Worth having per source for the same reason a stage has one: a scan is "call a tool
+   * and format a list", which is the cheapest kind of work in the runtime, and paying
+   * the default model for it is most of what a scan costs. Measured against a real
+   * board, the reasoning was 1,411 output tokens against a 148k-token prefix — so the
+   * model tier, not the prompt, is the lever.
+   */
+  model?: string;
   /** The source's rank vocabulary and what it hides by default. */
   order: SuggestionSourceOrder;
 }
@@ -148,6 +158,9 @@ export function parseSuggestionSources(raw: unknown): ParsedSuggestionSources {
       id,
       label: str(source.label) ?? id,
       scanPrompt,
+      // Blank rather than absent leaves the default in place, matching how a route stage
+      // treats a blank model: passing an empty --model is worse than passing none.
+      ...(str(source.model) ? { model: str(source.model) as string } : {}),
       ...(requiredMcpServers && requiredMcpServers.length > 0 ? { requiredMcpServers } : {}),
       order: {
         ranks,
