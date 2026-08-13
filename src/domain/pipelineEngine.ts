@@ -578,6 +578,76 @@ export function isCorrectable(stage: TaskStage): boolean {
   return stage.subtasks.some((subtask) => subtask.reply || subtask.activity);
 }
 
+/**
+ * Re-opens every stage after `index`, and books what that threw away.
+ *
+ * Shared by `correctStage` and `undoCorrection` because the rule is one rule, and
+ * having it written twice is exactly how the two came to disagree: filing a
+ * correction re-opened the stages after it — they ran against output that had just
+ * changed — and withdrawing one did not, though it changes that stage's output in
+ * precisely the same way. A plan corrected, applied by the stages after it, and then
+ * un-corrected left those stages recorded as passed against a plan that no longer
+ * existed, which is the failure both halves exist to prevent, reached backwards.
+ *
+ * Returns the re-opened stages positionally, so a caller can splice its own target
+ * stage in without having to restate what re-opening means.
+ */
+function reopenAfter(
+  pipeline: TaskPipeline,
+  index: number,
+  at: string,
+  reason: string,
+): { later: TaskStage[]; discarded: DiscardedRun[] } {
+  // Captured before the map below clears it. Both callers keep their own stage, so
+  // every entry here is collateral by construction — and it was going unrecorded,
+  // which is precisely why "a correction is cheap because the stages after it are
+  // the cheap ones" was an assertion nobody could check.
+  const discarded: DiscardedRun[] = pipeline.stages
+    .slice(index + 1)
+    .map((s) => ({ stage: s, totals: stageUsage(s) }))
+    // Keyed on there being a number to record rather than on `startedAt`: a stage
+    // whose cost was captured without a start time is exactly the entry this ledger
+    // exists for, and a pending stage after the target is re-opened too — a zero for
+    // it would fill the ledger with work that never happened.
+    .filter(({ totals }) => hasUsage(totals))
+    .map(({ stage: s, totals }) => ({
+      stageId: s.id,
+      stageName: s.name,
+      at,
+      reason,
+      collateral: true,
+      costUsd: totals.costUsd,
+      tokens: totals.tokens,
+      elapsedMs: totals.elapsedMs,
+      sessions: totals.measured + totals.unmeasured,
+    }));
+
+  const later: TaskStage[] = [];
+  pipeline.stages.forEach((s, i) => {
+    if (i <= index) return;
+    later[i] = {
+      ...s,
+      status: "pending" as const,
+      startedAt: undefined,
+      finishedAt: undefined,
+      checklist: undefined,
+      planSteps: undefined,
+      verification: undefined,
+      subtasks: s.subtasks.map((subtask) => ({
+        ...subtask,
+        status: "pending" as const,
+        startedAt: undefined,
+        finishedAt: undefined,
+        failureReason: undefined,
+        sessionId: undefined,
+        reply: undefined,
+        activity: undefined,
+      })),
+    };
+  });
+  return { later, discarded };
+}
+
 export function correctStage(
   pipeline: TaskPipeline,
   stageId: string,
@@ -629,58 +699,16 @@ export function correctStage(
     },
   };
 
-  // Captured before the map below clears it. A correction keeps its own stage, so
-  // every entry here is collateral by construction — and it was going unrecorded,
-  // which is precisely why "a correction is cheap because the stages after it are
-  // the cheap ones" was an assertion nobody could check. Only stages that actually
-  // ran: a pending stage after the target is re-opened too, and a zero for it would
-  // fill the ledger with entries for work that never happened.
-  const discarded: DiscardedRun[] = pipeline.stages
-    .slice(index + 1)
-    .map((s) => ({ stage: s, totals: stageUsage(s) }))
-    // Keyed on there being a number to record rather than on `startedAt`: a stage
-    // whose cost was captured without a start time is exactly the entry this ledger
-    // exists for, and a pending stage after the target is re-opened too — a zero for
-    // it would fill the ledger with work that never happened.
-    .filter(({ totals }) => hasUsage(totals))
-    .map(({ stage: s, totals }) => {
-      return {
-        stageId: s.id,
-        stageName: s.name,
-        at: correction.at,
-        reason: `re-opened by a correction to ${stage.name}`,
-        collateral: true,
-        costUsd: totals.costUsd,
-        tokens: totals.tokens,
-        elapsedMs: totals.elapsedMs,
-        sessions: totals.measured + totals.unmeasured,
-      };
-    });
+  const { later, discarded } = reopenAfter(
+    pipeline,
+    index,
+    correction.at,
+    `re-opened by a correction to ${stage.name}`,
+  );
 
   const stages = pipeline.stages.map((s, at) => {
     if (at < index) return s;
-    if (at > index) {
-      // Re-opened like a revert: they ran against output that has just changed.
-      return {
-        ...s,
-        status: "pending" as const,
-        startedAt: undefined,
-        finishedAt: undefined,
-        checklist: undefined,
-        planSteps: undefined,
-        verification: undefined,
-        subtasks: s.subtasks.map((subtask) => ({
-          ...subtask,
-          status: "pending" as const,
-          startedAt: undefined,
-          finishedAt: undefined,
-          failureReason: undefined,
-          sessionId: undefined,
-          reply: undefined,
-          activity: undefined,
-        })),
-      };
-    }
+    if (at > index) return later[at];
     // The corrected stage keeps everything it did. Only its own settlement is undone.
     return {
       ...s,
@@ -798,34 +826,60 @@ export function undoCorrection(
       : { status: "pending" as const, finishedAt: undefined, blocked: undefined }),
   };
 
-  const stages = pipeline.stages.map((s, i) => (i === index ? restored : s));
+  // The same rule filing a correction follows, and for the same reason: the stages
+  // after this one ran against output that has just changed. A plan corrected, applied
+  // by the stages after it, and then un-corrected leaves those stages holding work
+  // built from a plan that no longer exists — so they are re-opened here exactly as
+  // `correctStage` re-opens them. Note this may re-open stages that had *already* been
+  // re-opened and re-run since the correction was filed, which is the whole point.
+  const { later, discarded } = reopenAfter(
+    pipeline,
+    index,
+    at,
+    `re-opened by withdrawing a correction to ${stage.name}`,
+  );
+  const stages = pipeline.stages.map((s, i) =>
+    i === index ? restored : i > index ? later[i] : s,
+  );
+
+  // What those re-opened runs declined goes with them, or the items go dormant and
+  // return the moment the stages pass again.
+  const settled = settleDiscardedDeferrals(
+    { ...pipeline, stages },
+    pipeline.stages.slice(index + 1).map((s) => s.id),
+    at,
+  );
+
+  const withdrawn: DiscardedRun[] = hasUsage(totals)
+    ? [
+        {
+          stageId: stage.id,
+          stageName: stage.name,
+          at,
+          reason: `correction withdrawn: ${fix.correction?.finding ?? fix.title}`,
+          costUsd: totals.costUsd,
+          tokens: totals.tokens,
+          elapsedMs: totals.elapsedMs,
+          sessions: totals.measured + totals.unmeasured,
+        },
+      ]
+    : [];
+  const ledger = [...withdrawn, ...discarded];
 
   return ok({
-    ...pipeline,
-    stages,
-    // The stage is settled again when the snapshot said it was, so pointing the
-    // route at it would park a finished route on a stage with nothing to do.
+    ...settled,
+    // The stage is settled again when the snapshot said it was, so pointing the route
+    // at it would park a finished route on a stage with nothing to do — the next
+    // unresolved stage is one of the ones just re-opened.
     currentStage:
       restored.status === "pending" || restored.status === "awaiting-approval"
         ? stage.id
-        : pipeline.currentStage,
+        : (stages[index + 1]?.id ?? pipeline.currentStage),
+    pendingQuestion: undefined,
+    pendingDenials: undefined,
     updatedAt: at,
-    ...(hasUsage(totals)
-      ? {
-          discarded: [
-            ...(pipeline.discarded ?? []),
-            {
-              stageId: stage.id,
-              stageName: stage.name,
-              at,
-              reason: `correction withdrawn: ${fix.correction?.finding ?? fix.title}`,
-              costUsd: totals.costUsd,
-              tokens: totals.tokens,
-              elapsedMs: totals.elapsedMs,
-              sessions: totals.measured + totals.unmeasured,
-            } satisfies DiscardedRun,
-          ],
-        }
+    ...(ledger.length > 0
+      ? { discarded: [...(pipeline.discarded ?? []), ...ledger] }
       : {}),
   } as TaskPipeline);
 }

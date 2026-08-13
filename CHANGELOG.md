@@ -19,11 +19,24 @@ All notable changes to Task Workspaces are documented here.
   snapshots that settlement onto the correction subtask, and **Withdraw the Last
   Correction…** puts it back exactly.
 
+  **Withdrawing re-opens the stages after it, exactly as filing does**, and that rule is
+  now written once and shared by both. It did not start that way, and the gap is worth
+  recording because it is invisible in the direction that matters: correct a plan, let the
+  stages after it apply the corrected plan, then withdraw the correction, and those stages
+  are left recorded as passed against a plan that no longer exists. Filing re-opens them
+  because they ran against output that just changed; withdrawing changes that output in
+  precisely the same way, and re-opening stages that filing had *already* re-opened and
+  which have since re-run is the whole point rather than an edge case. What those runs
+  cost is booked as collateral, and what they declined is settled with them.
+
   What does *not* come back is stated in the dialog rather than left to be assumed, since
-  a partial undo believed to be total is worse than none: the later stages the correction
-  re-opened had their replies and activity cleared when it was filed, and nothing here can
-  produce those again — they re-run. Deferrals it settled stay settled, for the same
-  reason. The withdrawn correction's own cost moves to the discarded ledger rather than
+  a partial undo believed to be total is worse than none. **The harness never reverts
+  files** — not here, not in `revertToStage`, not in `correctStage`; git is the source of
+  truth for changed paths, and always was. So a correction that edited the worktree leaves
+  those edits on disk after it is withdrawn, and a plan stage is the sharpest case,
+  because `planFile` is read fresh from the worktree on every run. Re-opened stages do not
+  revert anything; they re-run against whatever the worktree currently holds. The dialog
+  says so. The withdrawn correction's own cost moves to the discarded ledger rather than
   vanishing with it, because what a route cost is what was spent on it.
 
   Three narrowings, each load-bearing: only the **most recent** correction, because

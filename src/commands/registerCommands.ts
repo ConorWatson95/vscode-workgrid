@@ -832,9 +832,11 @@ async function undoCorrectionCommand(ctx: CommandContext, arg: unknown): Promise
 
   const ran = Boolean(fix.reply || fix.activity);
   const undo = fix.correction?.undo;
+  // Stages that have something to lose. Withdrawing re-opens everything after the
+  // target, but a stage that never ran loses nothing and counting it overstates.
   const later = task.pipeline.stages
     .slice(task.pipeline.stages.findIndex((s) => s.id === stage.id) + 1)
-    .filter((s) => s.status === "pending").length;
+    .filter((s) => s.status !== "pending").length;
 
   const confirmed = await vscode.window.showWarningMessage(
     `Withdraw this correction from "${stage.name}"?`,
@@ -853,9 +855,10 @@ async function undoCorrectionCommand(ctx: CommandContext, arg: unknown): Promise
           ? "The correction's own run is removed, and what it cost stays on the record as a discarded run.\n\n"
           : "It had not run yet, so nothing it did is lost.\n\n") +
         (later > 0
-          ? `${later} later stage(s) stay pending. Filing the correction cleared their runs, and ` +
-            "withdrawing it cannot bring those back — they have to run again."
-          : "No later stage had run when the correction was filed, so nothing else was affected."),
+          ? `${later} later stage(s) will be re-opened, because they ran against output that ` +
+            "is about to change back. Anything they wrote to the worktree stays there — " +
+            "the harness never reverts files, so check the worktree before advancing."
+          : "No later stage has run, so nothing else is discarded."),
     },
     "Withdraw It",
   );

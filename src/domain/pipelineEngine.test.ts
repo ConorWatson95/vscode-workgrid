@@ -2325,6 +2325,51 @@ describe("undoCorrection", () => {
     expect(p.stages[1].subtasks[0].reply).toBeUndefined();
   });
 
+  // The case that made this a defect rather than a nicety, and the reason the
+  // re-opening rule is now written once and shared. Correct a plan, let the stages
+  // after it apply the corrected plan, then withdraw the correction: those stages hold
+  // work built from a plan that no longer exists. Withdrawing changes the stage's
+  // output exactly as filing did, so it re-opens them exactly as filing did — even
+  // though filing had already re-opened them once and they have since re-run.
+  it("re-opens later stages that ran against the correction", () => {
+    const applied = corrected();
+    const afterRerun = {
+      ...applied,
+      stages: applied.stages.map((s, i) =>
+        i === 1
+          ? {
+              ...s,
+              status: "passed" as const,
+              subtasks: [
+                {
+                  ...s.subtasks[0],
+                  status: "done" as const,
+                  reply: "Applied the corrected plan.",
+                  activity: { costUsd: 3.1 },
+                },
+              ],
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+
+    const p = must(undoCorrection(afterRerun, "implement", "t2"));
+    expect(p.stages[1].status).toBe("pending");
+    expect(p.stages[1].subtasks[0].reply).toBeUndefined();
+    // And what that re-run cost stays on the record, as collateral.
+    expect(p.discarded).toContainEqual(
+      expect.objectContaining({ stageId: "review", costUsd: 3.1, collateral: true, at: "t2" }),
+    );
+  });
+
+  it("points the route at the next unresolved stage when the target settles again", () => {
+    // The restored stage is `passed`, so parking the route on it would leave a route
+    // whose current stage has nothing left to do.
+    const p = must(undoCorrection(corrected(), "implement", "t2"));
+    expect(p.stages[0].status).toBe("passed");
+    expect(p.currentStage).toBe("review");
+  });
+
   it("refuses a stage with no correction", () => {
     expect(undoCorrection(ran(), "implement", "t2").ok).toBe(false);
   });
