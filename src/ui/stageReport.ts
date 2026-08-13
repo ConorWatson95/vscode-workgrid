@@ -19,6 +19,7 @@ import {
   workingMs,
 } from "../domain/stageUsage";
 import { correctionCost } from "../domain/correctionCost";
+import { hasGateWait, summariseGateWait } from "../domain/gateWait";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -78,6 +79,70 @@ function formatElapsed(ms: number): string {
   const rest = seconds % 60;
   if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * A gate wait, which is measured in days rather than minutes.
+ *
+ * `formatElapsed` tops out at hours, which is right for a session and useless for a
+ * sign-off that sat over a weekend: "58h 20m" is a number the reader has to do
+ * arithmetic on before it means anything.
+ */
+function formatWaitSpan(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) {
+    const rest = minutes % 60;
+    // Not "3h 0m": `formatElapsed` prints the zero because a session's seconds are
+    // worth having, and on a two-day wait the trailing unit is noise.
+    return rest > 0 ? `${hours}h ${rest}m` : `${hours}h`;
+  }
+
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest > 0 ? `${days}d ${rest}h` : `${days}d`;
+}
+
+/**
+ * Where a route's calendar time went while nothing was running, or undefined when no
+ * gate has waited.
+ *
+ * The line exists to answer one question a wall-clock figure cannot: *should this
+ * route have been faster?* Time in "with others" is time the harness was working
+ * correctly — a task handed to testers and off the operator's desk is the throughput
+ * the whole thing is for — and lumped in with a gate the operator sat on for a day it
+ * reads as the same failure. Open waits are named separately because they are still
+ * growing, and `unmeasured` is announced for the reason every other total here
+ * announces it: a figure quietly missing two gates looks like a faster route.
+ */
+export function formatGateWaitLine(
+  pipeline: TaskPipeline,
+  now: number,
+): string | undefined {
+  const summary = summariseGateWait(pipeline, now);
+  if (!hasGateWait(summary)) return undefined;
+
+  const parts: string[] = [];
+  if (summary.othersMs > 0) parts.push(`${formatWaitSpan(summary.othersMs)} with others`);
+  if (summary.yoursMs > 0) parts.push(`${formatWaitSpan(summary.yoursMs)} with you`);
+  if (summary.openOthersMs > 0) {
+    parts.push(`${formatWaitSpan(summary.openOthersMs)} still with others`);
+  }
+  if (summary.openYoursMs > 0) {
+    parts.push(`${formatWaitSpan(summary.openYoursMs)} still with you`);
+  }
+  if (summary.unmeasured > 0) {
+    parts.push(
+      summary.unmeasured === 1
+        ? "1 gate not measured"
+        : `${summary.unmeasured} gates not measured`,
+    );
+  }
+  if (parts.length === 0) return undefined;
+
+  return `**Waiting at gates:** ${parts.join(" · ")}`;
 }
 
 /**
@@ -568,6 +633,8 @@ function formatStageSummary(stage: TaskStage): string {
 export function formatTaskReport(
   taskName: string,
   pipeline: TaskPipeline | undefined,
+  /** Injected so an open gate wait can be measured without this module reading a clock. */
+  now: number = Date.now(),
 ): string {
   if (!pipeline || pipeline.stages.length === 0) {
     return `# ${taskName}\n\n_This task has no route, so there is nothing to report._`;
@@ -582,6 +649,12 @@ export function formatTaskReport(
   // got cheaper.
   const total = formatUsageLine(pipelineUsage(pipeline));
   if (total) parts.push("", total);
+  // Beside the execution total, never folded into it. The two come from different
+  // records — sessions versus gates — and the reason for showing them together is that
+  // "62m of session, 3 days with testers" is the only honest account of a route whose
+  // wall clock says three days.
+  const waiting = formatGateWaitLine(pipeline, now);
+  if (waiting) parts.push("", waiting);
   // Named separately, immediately under the total it is part of. A route that spent
   // two thirds of its money on work it threw away has one problem, and it is not the
   // one a single figure suggests.

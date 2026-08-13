@@ -284,8 +284,31 @@ gates, evidence and durable state outrank per-task speed.
   defaulting means `"self"` and that is exactly the failure the field prevents. The row
   carries the age of the wait in days or hours (`formatWaitingSince`) — moving these out
   of the scan list is the point, but testers do not notify the tree, and a delegated task
-  with no visible age is a task you forget. Still to do: external wait is not supervision
-  time, and `domain/humanWait.ts` should stop counting it as the harness being slow.
+  with no visible age is a task you forget.
+- **Gate wait is measured, and attributed** (`domain/gateWait.ts`, 13 Aug 2026). The
+  other half of the audience change, and the half that touches the KPI. Session time is
+  measured (`stageUsage`) and operator wait inside a session is measured
+  (`humanWait`); time a route spent stopped *at a gate* was measured nowhere, so the only
+  figure for it was wall clock — in which a well-run route waiting three days on testers
+  is indistinguishable from a slow one, and optimising against that sends the effort at
+  execution. Exactly the mistake the first latency measurement made, for the opposite
+  reason.
+  **Derived, never recorded**: a gate's `finishedAt` is the moment it settled into
+  `awaiting-approval`, so it is when the wait began, and the `approval` intervention for
+  that stage is when it ended. A new field would have to be written at approval time, and
+  `interventions` already establishes that a call site with no clock records nothing — so
+  deriving inherits that honesty instead of reporting a confident zero. Four rules:
+  **unattributed time is yours**, because defaulting the other way moves it out of the
+  column the harness is judged on and into the one it is excused for; **the first
+  approval at or after the current `finishedAt`** ends the wait, since a re-opened stage
+  overwrites `finishedAt` and approvals from a discarded run must not close it; **an open
+  wait is reported apart from the closed totals**, or a growing number folded into a
+  total makes one that changes on every render and reads as the measurement being
+  unreliable; and a gate that plainly held the route up but left nothing to measure is
+  **counted and announced** (`unmeasured`), the rule `stageUsage` follows for a subtask
+  that reported no numbers. Rendered by `formatGateWaitLine` beside the execution total,
+  never folded into it — "62m of session, 3 days with testers" is the only honest account
+  of a route whose wall clock says three days.
 - **The checklist review is spliced immediately before the gate that will read it.** The
   previous rule was "after the first deployment", which broke as soon as one route had two
   kinds: on `report-change` the first deployment lands the branch in source control and

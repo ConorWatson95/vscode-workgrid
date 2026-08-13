@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_REPORT_CHARS,
+  formatGateWaitLine,
   formatStageReport,
   formatTaskReport,
   withLiveActivity,
@@ -309,6 +310,56 @@ describe("formatStageReport", () => {
   it("handles a stage that has not run yet", () => {
     const pending = stage({ status: "pending", subtasks: [] });
     expect(formatStageReport("t", pending, undefined)).toContain("no subtasks yet");
+  });
+});
+
+describe("gate wait in the report", () => {
+  const NOW = Date.parse("2026-08-13T12:00:00.000Z");
+  const gate = (over: Partial<TaskStage> = {}) =>
+    stage({
+      id: "signoff",
+      name: "Human sign-off on the DEV site",
+      kind: "humanVerification",
+      requiresApproval: true,
+      subtasks: [],
+      ...over,
+    });
+
+  it("names whose wait it was, so calendar time is accountable", () => {
+    const p = {
+      ...pipeline([
+        gate({
+          id: "signoff",
+          checklistAudience: "others",
+          status: "passed",
+          finishedAt: "2026-08-11T09:00:00.000Z",
+        }),
+      ]),
+      interventions: [
+        { kind: "approval" as const, stageId: "signoff", at: "2026-08-13T11:00:00.000Z" },
+      ],
+    } as TaskPipeline;
+    const line = formatGateWaitLine(p, NOW);
+    expect(line).toBe("**Waiting at gates:** 2d 2h with others");
+  });
+
+  it("keeps a live wait separate from a finished one", () => {
+    const p = pipeline([
+      gate({ status: "awaiting-approval", checklistAudience: "others", finishedAt: "2026-08-13T09:00:00.000Z" }),
+    ]);
+    expect(formatGateWaitLine(p, NOW)).toBe("**Waiting at gates:** 3h still with others");
+  });
+
+  it("says nothing when no gate has waited", () => {
+    expect(formatGateWaitLine(pipeline([gate({ status: "pending" })]), NOW)).toBeUndefined();
+  });
+
+  it("appears in the whole-task report beside the execution total", () => {
+    const p = pipeline([
+      stage(),
+      gate({ status: "awaiting-approval", checklistAudience: "others", finishedAt: "2026-08-13T09:00:00.000Z" }),
+    ]);
+    expect(formatTaskReport("NMGB-2792", p, NOW)).toContain("still with others");
   });
 });
 
