@@ -4,6 +4,7 @@ import {
   parseSuggestions,
   rankIndex,
   rankSuggestions,
+  startedSuggestionKeys,
   suggestionKey,
   SuggestionSourceOrder,
   TaskSuggestion,
@@ -207,5 +208,17 @@ describe("parseSuggestions", () => {
       "jira",
     );
     expect(parsed.map((p) => p.ref)).toEqual(["NMGB-1"]);
+  });
+});
+
+describe("startedSuggestionKeys", () => {
+  it("reads the origins of tasks already under way", () => {
+    expect(
+      startedSuggestionKeys([
+        { origin: { sourceId: "jira", ref: "NMGB-1" } },
+        {},
+        { origin: { sourceId: "JIRA", ref: "nmgb-2" } },
+      ]),
+    ).toEqual(["jira::nmgb-1", "jira::nmgb-2"]);
   });
 });

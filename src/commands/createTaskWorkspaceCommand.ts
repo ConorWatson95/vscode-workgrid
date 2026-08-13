@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
+import { TaskOrigin } from "../domain/taskWorkspace";
 import { ServiceError } from "../services/taskWorkspaceService";
 import { RouteDefinition, assessmentStageDefinition } from "../domain/taskRoute";
 import { createPipeline } from "../domain/pipelineEngine";
@@ -12,6 +13,15 @@ import { withStatus } from "../ui/statusProgress";
  */
 export async function createTaskWorkspaceCommand(
   ctx: CommandContext,
+  /**
+   * Values a suggestion has already supplied, when the task is being started from one.
+   *
+   * The prompts are still shown rather than skipped. A suggestion's title is written for
+   * a ticket board and a task name becomes a branch name, so the step worth keeping is
+   * the one where a human shortens it — and the flow that follows (route, assessment,
+   * brief) is the same either way, which is the point of prefilling rather than forking.
+   */
+  prefill?: { name?: string; description?: string; origin?: TaskOrigin },
 ): Promise<void> {
   const repositoryRoot = ctx.resolveRepositoryRoot();
   if (!repositoryRoot) {
@@ -25,6 +35,7 @@ export async function createTaskWorkspaceCommand(
   const name = await vscode.window.showInputBox({
     title: "Create Task Workspace",
     prompt: "Task name",
+    value: prefill?.name,
     placeHolder: "e.g. Campaign performance report",
     validateInput: (value) =>
       value.trim().length === 0 ? "Task name is required." : undefined,
@@ -138,6 +149,7 @@ export async function createTaskWorkspaceCommand(
   // route pauses, rather than the extension second-guessing what is enough.
   const description = await vscode.window.showInputBox({
     title: "Create Task Workspace",
+    value: prefill?.description,
     prompt: routeChoice.route
       ? "Brief — given to every stage of the route"
       : "Description (optional) — for the task's details, not sent to the chat",
@@ -185,6 +197,7 @@ export async function createTaskWorkspaceCommand(
       baseBranch: baseBranch.trim(),
       description,
       configuredParentDir,
+      ...(prefill?.origin ? { origin: prefill.origin } : {}),
     });
     if (!created.ok) return { created };
 

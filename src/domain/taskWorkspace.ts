@@ -63,6 +63,30 @@ export interface TaskWorkspace {
    * Optional, so tasks created before this existed stay valid.
    */
   worktreeClaims?: WorktreeClaim[];
+
+  /**
+   * The suggestion this task was started from, when it came from one.
+   *
+   * Two jobs, and the second is the reason it is worth persisting. It stops the
+   * suggestion list offering work already under way — matching by `sourceId` + `ref`,
+   * which is why identity is the source's own name for the item and never its title.
+   * And it is a verified engineering fact a cold session cannot obtain at any price:
+   * the ticket a task is *for* is in no diff, no branch and no brief, and every stage
+   * on this project's routes is required to lead its commit subject with the Jira URL.
+   *
+   * Optional, so every task that predates suggestions stays valid.
+   */
+  origin?: TaskOrigin;
+}
+
+/** Where a task came from, when it came from a suggestion rather than a typed name. */
+export interface TaskOrigin {
+  sourceId: string;
+  /** The source's own name for the item, e.g. an issue key. */
+  ref: string;
+  url?: string;
+  /** When it was accepted, so the record says when the link was made. */
+  at: string;
 }
 
 /**

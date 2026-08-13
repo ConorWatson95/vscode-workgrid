@@ -10,11 +10,26 @@ import {
   QuestionTreeItem,
   HeldCallTreeItem,
   TaskGroupTreeItem,
+  SuggestionGroupTreeItem,
+  SuggestionTreeItem,
 } from "./taskWorkspaceTreeItem";
 import { groupForTask, groupStartsExpanded, groupTasks } from "./taskGrouping";
 import { Logger } from "../logging/logger";
 import { AgentActivity } from "./statusPresentation";
 import { PendingGate } from "../services/permissionGateService";
+import {
+  rankSuggestions,
+  startedSuggestionKeys,
+  visibleSuggestions,
+  withoutStarted,
+} from "../domain/taskSuggestion";
+import { orderLookup, SuggestionSource } from "../domain/suggestionSourceFile";
+import {
+  ScanResult,
+  scanFailures,
+  scannedSuggestions,
+} from "../services/suggestionScanService";
+import { suggestionGroupDescription } from "./suggestionRow";
 
 type TreeNode =
   | TaskGroupTreeItem
@@ -25,7 +40,9 @@ type TreeNode =
   | ChecklistTreeItem
   | DenialTreeItem
   | QuestionTreeItem
-  | HeldCallTreeItem;
+  | HeldCallTreeItem
+  | SuggestionGroupTreeItem
+  | SuggestionTreeItem;
 
 /**
  * Tree data provider for the Task Workspaces view. Resolves the active
@@ -38,6 +55,14 @@ export class TaskWorkspaceTreeProvider
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
   private showArchived = false;
+  /**
+   * Whether filtered-out suggestions are shown.
+   *
+   * A view flag rather than anything persisted, which is what makes "hide but findable"
+   * true: nothing was ever recorded as dismissed, so what this reveals is always the
+   * complete set the sources still report.
+   */
+  private showHiddenSuggestions = false;
 
   constructor(
     private readonly service: TaskWorkspaceService,
@@ -55,6 +80,19 @@ export class TaskWorkspaceTreeProvider
     /** The rule "Always allow" would add for a held call, when one exists. */
     private readonly ruleForHeldCall: (held: PendingGate) => string | undefined = () =>
       undefined,
+    /**
+     * The project's suggestion sources, read fresh so a config edit takes effect
+     * without a reload. Empty means the project declared none, and the group is absent
+     * entirely — the feature is invisible rather than empty, because an empty
+     * "Suggestions" heading on every repository is a permanent advert for something
+     * that project has not opted into.
+     */
+    private readonly getSuggestionSources: (
+      repositoryRoot: string,
+    ) => SuggestionSource[] = () => [],
+    /** The last scan for a repository, or undefined when none has been run. */
+    private readonly getLastScan: (repositoryRoot: string) => ScanResult | undefined = () =>
+      undefined,
   ) {}
 
   refresh(): void {
@@ -66,6 +104,13 @@ export class TaskWorkspaceTreeProvider
     this.showArchived = !this.showArchived;
     this.emitter.fire();
     return this.showArchived;
+  }
+
+  /** Toggles whether filtered-out suggestions are shown; returns the new state. */
+  toggleHiddenSuggestions(): boolean {
+    this.showHiddenSuggestions = !this.showHiddenSuggestions;
+    this.emitter.fire();
+    return this.showHiddenSuggestions;
   }
 
   isShowingArchived(): boolean {
@@ -115,6 +160,7 @@ export class TaskWorkspaceTreeProvider
           : [];
       return [...asked, ...refused, ...checklist];
     }
+    if (element instanceof SuggestionGroupTreeItem) return element.children;
     if (element) return [];
 
     const repositoryRoot = this.resolveRepositoryRoot();
@@ -134,11 +180,19 @@ export class TaskWorkspaceTreeProvider
       (t) => this.showArchived || t.task.status !== "archived",
     );
 
+    // Built here so the empty case below can carry it too. A repository with no tasks
+    // is precisely when suggested work matters most, and returning early without it
+    // hid the group on exactly the morning it was useful.
+    const suggestions = this.suggestionNodes(
+      repositoryRoot,
+      result.value.tasks.map((entry) => entry.task),
+    );
+
     if (reconciled.length === 0 && result.value.orphans.length === 0) {
       const msg = this.showArchived
         ? "No task workspaces."
         : "No task workspaces yet. Create one to begin.";
-      return [new MessageTreeItem(msg, "add")];
+      return [new MessageTreeItem(msg, "add"), ...suggestions];
     }
 
     const taskItems: TaskWorkspaceTreeItem[] = [];
@@ -185,7 +239,73 @@ export class TaskWorkspaceTreeProvider
       );
     }
 
+    // Last, and collapsed. Suggestions are work that has not started, so they must not
+    // compete with a task that is stopped and waiting.
+    nodes.push(...suggestions);
+
     return nodes;
+  }
+
+  /**
+   * The suggestions group, or nothing at all.
+   *
+   * Absent rather than empty when a project declares no sources: a permanent
+   * "Suggestions" heading on a repository that never opted in is an advert, not
+   * information.
+   *
+   * Started work is dropped by matching a task's `origin`, and **archived tasks do not
+   * count as started**. An archived task is one abandoned or cleared away, and its
+   * ticket is very likely still open — so the honest thing is to offer it again. Work
+   * that genuinely finished is filtered by the source's own `hideStates` instead, which
+   * is the source of truth for whether it is done.
+   */
+  private suggestionNodes(
+    repositoryRoot: string,
+    tasks: readonly import("../domain/taskWorkspace").TaskWorkspace[],
+  ): SuggestionGroupTreeItem[] {
+    const sources = this.getSuggestionSources(repositoryRoot);
+    if (sources.length === 0) return [];
+
+    const scan = this.getLastScan(repositoryRoot);
+    const started = startedSuggestionKeys(
+      tasks.filter((task) => task.status !== "archived"),
+    );
+    const ranked = withoutStarted(
+      rankSuggestions(scannedSuggestions(scan), orderLookup(sources)),
+      started,
+    );
+    const shown = visibleSuggestions(ranked, this.showHiddenSuggestions);
+
+    const children: (SuggestionTreeItem | MessageTreeItem)[] = shown.map(
+      (suggestion) => new SuggestionTreeItem(suggestion),
+    );
+    if (children.length === 0) {
+      // Worded on what actually happened, because "nothing to suggest" covers three
+      // different situations and only one of them means there is no work.
+      const hiddenCount = ranked.length - shown.length;
+      children.push(
+        new MessageTreeItem(
+          !scan
+            ? "Run \"Scan for Work\" to see what your sources are holding."
+            : hiddenCount > 0
+              ? `Nothing above the rank filter. ${hiddenCount} hidden — show them to look.`
+              : "Nothing outstanding in your sources.",
+          "search",
+        ),
+      );
+    }
+
+    return [
+      new SuggestionGroupTreeItem(
+        children,
+        suggestionGroupDescription(
+          shown.length,
+          scan?.scannedAt,
+          Date.now(),
+          scanFailures(scan).length,
+        ),
+      ),
+    ];
   }
 
   dispose(): void {

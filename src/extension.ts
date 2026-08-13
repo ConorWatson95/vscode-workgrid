@@ -30,6 +30,8 @@ import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
+import { SuggestionScanService } from "./services/suggestionScanService";
+import { SuggestionScanSessionRunner } from "./agents/suggestionScanSessionRunner";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
@@ -247,6 +249,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => askUser.dispose() });
 
   // --- Tree view --------------------------------------------------------
+  // Declared before the tree and assigned after the stage runner exists: the tree only
+  // ever reads the last scan, and a scan needs a session runner that is built later.
+  let suggestionScans: SuggestionScanService | undefined;
+
   const tree = new TaskWorkspaceTreeProvider(
     service,
     () => repositoryRoot,
@@ -273,6 +279,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         reason: "held for approval",
         attempts: 1,
       }),
+    // Read fresh on every render, so adding a source to harness.json shows up without
+    // a window reload — the same way routes and rules are re-read.
+    (root) =>
+      loadHarness(root, {
+        configuredPath: configuration.harnessConfigPath(repositoryUri),
+      }).suggestionSources,
+    (root) => suggestionScans?.lastScan(root),
   );
   context.subscriptions.push(tree);
 
@@ -692,6 +705,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   );
 
+  // A scan is a stage session with no task, rooted at the repository — so it reuses the
+  // stage runner wholesale, including MCP readiness abandoning a scan whose ticket server
+  // is unavailable before any inference is paid for.
+  suggestionScans = new SuggestionScanService(
+    new SuggestionScanSessionRunner(stageRunner, { now: () => new Date().toISOString() }),
+    { now: () => new Date().toISOString() },
+  );
+
   const runner = new PipelineRunner(
     stageRunner,
     repository,
@@ -857,6 +878,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     permissionRules,
     permissionGate,
     askUser,
+    suggestionScans,
     stageDefinitions: () => currentHarness() ?? { routes: [], rules: [] },
     reducedMcpConfigPath,
     mcpNarrowed: () => configuration.stageMcpServers(repositoryUri).length > 0,

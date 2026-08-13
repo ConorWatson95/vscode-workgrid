@@ -25,6 +25,7 @@ import { PermissionGateService } from "../services/permissionGateService";
 import { AskUserService } from "../services/askUserService";
 import { WorktreeClaimService } from "../services/worktreeClaimService";
 import { StageDefinitionSource } from "../domain/stageRefresh";
+import { SuggestionScanService } from "../services/suggestionScanService";
 
 /** Shared dependencies handed to every command handler. */
 export interface CommandContext {
@@ -56,6 +57,13 @@ export interface CommandContext {
   worktreeClaims?: WorktreeClaimService;
   provisioner: WorktreeProvisioner;
   tree: TaskWorkspaceTreeProvider;
+  /**
+   * Runs the project's suggestion scans and holds the last result.
+   *
+   * Optional, so every command works without it exactly as before — a repository whose
+   * agent could not be prepared simply has no scanning, rather than a broken tree.
+   */
+  suggestionScans?: SuggestionScanService;
   logger: Logger;
   extensionUri: vscode.Uri;
   globalState: vscode.Memento;

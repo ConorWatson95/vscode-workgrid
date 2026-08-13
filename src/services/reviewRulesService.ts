@@ -4,6 +4,7 @@ import { ReviewRule } from "../domain/reviewRules";
 import { REVIEW_RULES_RELATIVE_PATH } from "../domain/reviewRulesFile";
 import { parseHarnessConfig } from "../domain/harnessConfigFile";
 import { BUILT_IN_ROUTES, RouteDefinition } from "../domain/taskRoute";
+import { SuggestionSource } from "../domain/suggestionSourceFile";
 
 /**
  * Loads a project's review rules from disk.
@@ -23,6 +24,14 @@ export interface LoadedHarness extends LoadedReviewRules {
   routes: RouteDefinition[];
   /** True when the project defined no routes, so the built-ins are offered. */
   usingBuiltInRoutes: boolean;
+  /**
+   * Where this project keeps work worth suggesting.
+   *
+   * No fallback, unlike routes: a route is process scaffolding and a default is better
+   * than an empty picker, whereas a *source* is somebody's ticket board. Guessing at one
+   * would be the extension inventing where a team's work lives.
+   */
+  suggestionSources: SuggestionSource[];
 }
 
 export interface LoadedReviewRules {
@@ -86,9 +95,10 @@ export function loadHarness(
     return parseHarnessContents(contents, sourcePath);
   }
 
-  // No config at all: built-in routes, no rules.
+  // No config at all: built-in routes, no rules, no suggestion sources.
   return {
     routes: [...BUILT_IN_ROUTES],
+    suggestionSources: [],
     usingBuiltInRoutes: true,
     rules: [],
     problems: [],
@@ -110,6 +120,9 @@ function parseHarnessContents(
       routes: [...BUILT_IN_ROUTES],
       usingBuiltInRoutes: true,
       rules: [],
+      // An unreadable config is not a project without sources; scanning is simply
+      // unavailable until it parses, which the problem list says out loud.
+      suggestionSources: [],
       sourcePath,
       problems: [
         `${sourcePath} is not valid JSON (${(error as Error).message}). ` +
@@ -124,6 +137,7 @@ function parseHarnessContents(
     routes: parsed.routes.length > 0 ? parsed.routes : [...BUILT_IN_ROUTES],
     usingBuiltInRoutes: parsed.routes.length === 0,
     rules: parsed.rules,
+    suggestionSources: parsed.suggestions,
     sourcePath,
     problems: parsed.problems,
     noRulesConfigured: parsed.rules.length === 0,
@@ -141,10 +155,12 @@ export function loadReviewRules(
     reader?: ReviewRulesReader;
   } = {},
 ): LoadedReviewRules {
-  const { routes: _routes, usingBuiltInRoutes: _builtIn, ...rules } = loadHarness(
-    repositoryRoot,
-    options,
-  );
+  const {
+    routes: _routes,
+    usingBuiltInRoutes: _builtIn,
+    suggestionSources: _sources,
+    ...rules
+  } = loadHarness(repositoryRoot, options);
   return rules;
 }
 

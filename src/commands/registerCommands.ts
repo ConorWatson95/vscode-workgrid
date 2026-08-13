@@ -36,6 +36,11 @@ import {
   CLAUDE_EXTENSION_ID,
 } from "./commandContext";
 import { createTaskWorkspaceCommand } from "./createTaskWorkspaceCommand";
+import {
+  openSuggestionCommand,
+  scanForWorkCommand,
+  startTaskFromSuggestionCommand,
+} from "./suggestionCommands";
 import { mergeIntoTaskCommand } from "./mergeIntoTaskCommand";
 import {
   TaskWorkspaceTreeItem,
@@ -101,6 +106,19 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.copyPath", (arg) => copyPathCommand(ctx, arg)),
     register("taskWorkspaces.archive", (arg) => archiveCommand(ctx, arg)),
     register("taskWorkspaces.unarchive", (arg) => unarchiveCommand(ctx, arg)),
+    register("taskWorkspaces.scanForWork", () => scanForWorkCommand(ctx)),
+    register("taskWorkspaces.startTaskFromSuggestion", (arg) =>
+      startTaskFromSuggestionCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.openSuggestion", (arg) => openSuggestionCommand(arg)),
+    register("taskWorkspaces.toggleHiddenSuggestions", () => {
+      const showing = ctx.tree.toggleHiddenSuggestions();
+      void vscode.commands.executeCommand(
+        "setContext",
+        "taskWorkspaces.showHiddenSuggestions",
+        showing,
+      );
+    }),
     register("taskWorkspaces.toggleArchived", () => {
       const showing = ctx.tree.toggleArchived();
       void vscode.commands.executeCommand("setContext", "taskWorkspaces.showArchived", showing);

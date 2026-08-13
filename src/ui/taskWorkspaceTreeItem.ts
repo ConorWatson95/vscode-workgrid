@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { externalWaitSince, formatWaitingSince, TaskGroupId } from "./taskGrouping";
+import { RankedSuggestion } from "../domain/taskSuggestion";
+import { suggestionRow } from "./suggestionRow";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import {
   taskStatusPresentation,
@@ -547,3 +549,60 @@ const GROUP_TOOLTIPS: Record<TaskGroupId, string> = {
   "no-route": "A worktree and a chat, with no stages or gates.",
   archived: "Archived. The worktree may still exist.",
 };
+
+/**
+ * The heading for suggested work.
+ *
+ * Last in the view, and collapsed. Suggestions are work that has not started, so they
+ * must never compete for attention with a task that is stopped and waiting — the whole
+ * point of the grouping above is that the top of the tree answers "what do I have to
+ * do?", and a list of things nobody has picked up is a different question.
+ */
+export class SuggestionGroupTreeItem extends vscode.TreeItem {
+  constructor(
+    readonly children: (SuggestionTreeItem | MessageTreeItem)[],
+    description: string,
+  ) {
+    super("Suggestions", vscode.TreeItemCollapsibleState.Collapsed);
+    this.description = description;
+    this.contextValue = "suggestion-group";
+    this.iconPath = new vscode.ThemeIcon("lightbulb");
+    this.tooltip = new vscode.MarkdownString(
+      "Work your project's sources say is waiting, ranked. Scanning is explicit — the" +
+        " list is exactly as old as the last time you asked for it.",
+    );
+  }
+}
+
+/** One suggested piece of work, which a click turns into a task. */
+export class SuggestionTreeItem extends vscode.TreeItem {
+  constructor(readonly suggestion: RankedSuggestion) {
+    const visual = suggestionRow(suggestion);
+    super(visual.label, vscode.TreeItemCollapsibleState.None);
+    this.description = visual.description;
+    this.tooltip = new vscode.MarkdownString(visual.tooltip);
+    this.iconPath = new vscode.ThemeIcon(
+      visual.iconId,
+      visual.dimmed ? new vscode.ThemeColor("descriptionForeground") : undefined,
+    );
+    // Separate context values so the menu can offer "Open" only where there is a link,
+    // and so a hidden row is distinguishable in the UI without re-deriving the rule.
+    // "suggestion-item", not "suggestion": a `when` clause matching the shorter name
+    // also matches "suggestion-group", and the two rows offer different actions. Given a
+    // distinct name rather than a word-boundary regex because `\b` inside a package.json
+    // `when` clause is JSON's backspace escape — it becomes a control character and the
+    // pattern matches the group row regardless.
+    this.contextValue = [
+      "suggestion-item",
+      suggestion.url ? "suggestion-linked" : undefined,
+      suggestion.hidden ? "suggestion-hidden" : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    this.command = {
+      command: "taskWorkspaces.startTaskFromSuggestion",
+      title: "Start a Task from This",
+      arguments: [this],
+    };
+  }
+}

@@ -192,6 +192,30 @@
         "icon": "$(eye)"
       },
       {
+        "command": "taskWorkspaces.scanForWork",
+        "title": "Scan for Work",
+        "category": "Task Workspaces",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "taskWorkspaces.startTaskFromSuggestion",
+        "title": "Start a Task from This",
+        "category": "Task Workspaces",
+        "icon": "$(play)"
+      },
+      {
+        "command": "taskWorkspaces.openSuggestion",
+        "title": "Open in Its Own System",
+        "category": "Task Workspaces",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "taskWorkspaces.toggleHiddenSuggestions",
+        "title": "Show/Hide Filtered Suggestions",
+        "category": "Task Workspaces",
+        "icon": "$(filter)"
+      },
+      {
         "command": "taskWorkspaces.remove",
         "title": "Remove Workspace",
         "category": "Task Workspaces",
@@ -363,9 +387,34 @@
           "command": "taskWorkspaces.sessionHistory",
           "when": "view == taskWorkspaces.tree",
           "group": "navigation@4"
+        },
+        {
+          "command": "taskWorkspaces.scanForWork",
+          "when": "view == taskWorkspaces.tree",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [
+        {
+          "command": "taskWorkspaces.scanForWork",
+          "when": "view == taskWorkspaces.tree && viewItem == suggestion-group",
+          "group": "inline@0"
+        },
+        {
+          "command": "taskWorkspaces.toggleHiddenSuggestions",
+          "when": "view == taskWorkspaces.tree && viewItem == suggestion-group",
+          "group": "inline@1"
+        },
+        {
+          "command": "taskWorkspaces.openSuggestion",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /suggestion-linked/",
+          "group": "inline@0"
+        },
+        {
+          "command": "taskWorkspaces.startTaskFromSuggestion",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /suggestion-item/",
+          "group": "1_actions@0"
+        },
         {
           "command": "taskWorkspaces.allowAllDenials",
           "when": "view == taskWorkspaces.tree && viewItem =~ /hasDenials/",

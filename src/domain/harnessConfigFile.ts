@@ -1,5 +1,6 @@
 import { ReviewRule } from "./reviewRules";
 import { parseReviewRules } from "./reviewRulesFile";
+import { parseSuggestionSources, SuggestionSource } from "./suggestionSourceFile";
 import {
   ALL_STAGE_KINDS,
   ChecklistAudience,
@@ -45,6 +46,12 @@ export interface ParsedHarnessConfig {
    */
   routes: RouteDefinition[];
   rules: ReviewRule[];
+  /**
+   * Where this project keeps work worth suggesting. Empty means it declared none, and
+   * unlike routes there is no fallback: which board matters is a property of a team,
+   * so a project with no sources is offered no suggestions rather than a guess.
+   */
+  suggestions: SuggestionSource[];
   problems: string[];
 }
 
@@ -58,6 +65,7 @@ export function parseHarnessConfig(raw: unknown): ParsedHarnessConfig {
   const problems = [...rulesResult.problems];
 
   let routes: RouteDefinition[] = [];
+  let suggestions: SuggestionSource[] = [];
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const routesField = (raw as { routes?: unknown }).routes;
     if (routesField !== undefined) {
@@ -67,9 +75,15 @@ export function parseHarnessConfig(raw: unknown): ParsedHarnessConfig {
         problems.push('"routes" must be an array.');
       }
     }
+
+    const parsedSources = parseSuggestionSources(
+      (raw as { suggestions?: unknown }).suggestions,
+    );
+    suggestions = parsedSources.sources;
+    problems.push(...parsedSources.problems);
   }
 
-  return { routes, rules: rulesResult.rules, problems };
+  return { routes, rules: rulesResult.rules, suggestions, problems };
 }
 
 function parseRoutes(entries: unknown[], problems: string[]): RouteDefinition[] {

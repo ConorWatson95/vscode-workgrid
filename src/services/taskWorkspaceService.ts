@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
+import {
+  TaskOrigin,
+  TaskWorkspace,
+  TaskWorkspaceLiveState,
+} from "../domain/taskWorkspace";
 import { GitWorktreeService, WorktreeError } from "../git/gitWorktreeService";
 import { GitStatusService } from "../git/gitStatusService";
 import { TaskRepository } from "../persistence/taskRepository";
@@ -43,6 +47,14 @@ export interface TaskProposal {
 export interface CreateTaskInput extends ProposeTaskInput {
   description?: string;
   baseBranch: string;
+  /**
+   * The suggestion this task was started from, when it came from one.
+   *
+   * Recorded at creation rather than attached afterwards: it is what stops the
+   * suggestion list offering work already under way, and a link made in a second step
+   * is missing for however long that second step takes to arrive.
+   */
+  origin?: TaskOrigin;
 }
 
 export type ServiceError =
@@ -118,6 +130,7 @@ export class TaskWorkspaceService {
       status: "ready",
       createdAt: now,
       updatedAt: now,
+      ...(input.origin ? { origin: input.origin } : {}),
     };
     await this.repository.save(task);
     this.logger.info(`Created task "${task.name}" on ${task.branchName}`);

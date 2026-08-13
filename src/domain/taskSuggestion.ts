@@ -190,6 +190,22 @@ export function visibleSuggestions(
   return showHidden ? [...ranked] : ranked.filter((entry) => !entry.hidden);
 }
 
+/**
+ * Keys for the suggestions a set of tasks was started from.
+ *
+ * Structural rather than typed against `TaskWorkspace`, so this module keeps knowing
+ * nothing about tasks either — it is the same argument as knowing nothing about JIRA,
+ * one layer in.
+ */
+export function startedSuggestionKeys(
+  tasks: readonly { origin?: { sourceId: string; ref: string } }[],
+): string[] {
+  return tasks
+    .map((task) => task.origin)
+    .filter((origin): origin is { sourceId: string; ref: string } => !!origin)
+    .map(suggestionKey);
+}
+
 /** Items already started as tasks, so the list stops offering them. */
 export function withoutStarted(
   ranked: readonly RankedSuggestion[],
