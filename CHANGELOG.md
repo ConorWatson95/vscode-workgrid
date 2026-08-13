@@ -2,6 +2,31 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.90.0
+
+- **The withdrawal fallback left the route with no legal move.** A correction filed before
+  0.88.0 has no snapshot of how its stage stood, so the stage cannot be handed back its
+  old verdict — nothing recorded it, and inventing one is the single thing an undo must
+  not do. It was therefore left `pending` for the operator to approve again.
+
+  `pending` was a dead end. The stage's own subtasks are all `done`, so `nextAction` reads
+  an unresolved stage with nothing left to run as `blocked` — a state its own comment
+  calls impossible, because `finishSubtask` had been the only thing that could ever
+  produce it — and `approveStage` then refuses the stage for not awaiting approval. The
+  fallback whose entire purpose was "the operator approves it again" offered nothing that
+  could approve.
+
+  It is now `awaiting-approval`: honest, since nothing here certified the work, and
+  resolvable, since that is the one status the operator can act on. What made this sharp
+  rather than theoretical is the narrowing — the fallback is reachable *only* by
+  corrections that predate 0.88.0, so the only runs that could hit it were the only runs
+  it exists for.
+
+  The withdrawal dialog now says the stage comes back awaiting approval, and repeats that
+  **the harness never reverts files**: a correction that edited the worktree leaves those
+  edits on disk, and re-opened stages re-run against whatever the worktree currently holds
+  rather than undoing anything.
+
 ## 0.88.0
 
 - **A correction can now be withdrawn.** `correctStage` had no inverse, and a finding is
@@ -43,18 +68,10 @@ All notable changes to Task Workspaces are documented here.
   corrections stack and each snapshotted what the one before it had already cleared, so
   unwinding out of order would restore a conclusion a standing correction had invalidated;
   never while one is **running**, since the session is still writing; and a correction
-  filed **before this shipped** has no snapshot, so its stage comes back awaiting approval
-  rather than handed a verdict invented at withdrawal time. Guessing a verdict is the one
-  thing an undo must not do.
-
-  That fallback status is `awaiting-approval` and emphatically not `pending`, which is
-  where it started and which was a dead end. The stage's own subtasks are all `done`, and
-  `nextAction` reads an unresolved stage with nothing left to run as `blocked` — a state
-  its own comment calls impossible, because `finishSubtask` had been the only thing that
-  could produce it. `approveStage` then refuses the stage for not awaiting approval. So
-  the fallback whose entire purpose was "the operator approves it again" left the route
-  with no legal move at all, and it would have bitten on precisely the corrections that
-  predate the feature — the only ones that can reach it.
+  filed **before this shipped** has no snapshot, so its stage is left for the operator to
+  approve again rather than handed a verdict invented at withdrawal time. Guessing a
+  verdict is the one thing an undo must not do. (The status that fallback used was itself
+  wrong — see 0.90.0.)
 
 ## 0.86.2
 
