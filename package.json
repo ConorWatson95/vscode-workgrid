@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.87.0",
+  "version": "0.88.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -312,6 +312,12 @@
         "icon": "$(wrench)"
       },
       {
+        "command": "taskWorkspaces.undoCorrection",
+        "title": "Withdraw the Last Correction…",
+        "category": "Task Workspaces",
+        "icon": "$(discard)"
+      },
+      {
         "command": "taskWorkspaces.revertToStage",
         "title": "Re-run This Stage…",
         "category": "Task Workspaces",
@@ -588,6 +594,11 @@
         {
           "command": "taskWorkspaces.correctStage",
           "when": "view == taskWorkspaces.tree && viewItem =~ /correctable/",
+          "group": "stage@7"
+        },
+        {
+          "command": "taskWorkspaces.undoCorrection",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /has-correction/",
           "group": "stage@7"
         },
         {

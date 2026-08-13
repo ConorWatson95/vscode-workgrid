@@ -2,7 +2,12 @@ import * as vscode from "vscode";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
-import { correctStage, ruleInsertionIndex } from "../domain/pipelineEngine";
+import {
+  correctStage,
+  ruleInsertionIndex,
+  undoCorrection,
+  undoableCorrection,
+} from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
 import {
   refreshPendingStages,
@@ -129,6 +134,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
     register("taskWorkspaces.correctStage", (arg) => correctStageCommand(ctx, arg)),
+    register("taskWorkspaces.undoCorrection", (arg) => undoCorrectionCommand(ctx, arg)),
     register("taskWorkspaces.setExperimentArm", (arg) => setExperimentArmCommand(ctx, arg)),
     register("taskWorkspaces.compareRuns", (arg) => compareRunsCommand(ctx, arg)),
     register("taskWorkspaces.sendBackToStage", (arg) => sendBackToStageCommand(ctx, arg)),
@@ -791,6 +797,90 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
     return;
   }
   await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+}
+
+/**
+ * Withdraws a correction whose finding turned out to be wrong.
+ *
+ * A finding is often a comment acted on before it was investigated, and until this
+ * existed the only ways out were editing the state file or re-running the stage
+ * from cold — the demolition `correctStage` was built to avoid, reached from the
+ * other side.
+ *
+ * The dialog says what does *not* come back, at length, because that is the part a
+ * reader will otherwise assume: later stages were re-opened when the correction was
+ * filed and their runs are gone for good.
+ */
+async function undoCorrectionCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await ctx.repository.get(arg.task.id);
+  if (!task?.pipeline) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop it before withdrawing a correction.`,
+    );
+    return;
+  }
+
+  const stage = task.pipeline.stages.find((s) => s.id === arg.stage.id) ?? arg.stage;
+  const fix = undoableCorrection(stage);
+  if (!fix) {
+    void vscode.window.showWarningMessage(`"${stage.name}" has no correction to withdraw.`);
+    return;
+  }
+
+  const ran = Boolean(fix.reply || fix.activity);
+  const undo = fix.correction?.undo;
+  const later = task.pipeline.stages
+    .slice(task.pipeline.stages.findIndex((s) => s.id === stage.id) + 1)
+    .filter((s) => s.status === "pending").length;
+
+  const confirmed = await vscode.window.showWarningMessage(
+    `Withdraw this correction from "${stage.name}"?`,
+    {
+      modal: true,
+      detail:
+        `The finding was: ${fix.correction?.finding ?? fix.title}\n\n` +
+        (undo
+          ? `"${stage.name}" goes back to ${undo.status}${
+              undo.verdict ? ` with its "${undo.verdict}" verdict` : ""
+            }, exactly as it stood before the correction was filed.\n\n`
+          : `This correction was filed before withdrawals were recorded, so there is no ` +
+            `snapshot of how "${stage.name}" stood. It is left pending for you to ` +
+            `approve again rather than given a verdict invented here.\n\n`) +
+        (ran
+          ? "The correction's own run is removed, and what it cost stays on the record as a discarded run.\n\n"
+          : "It had not run yet, so nothing it did is lost.\n\n") +
+        (later > 0
+          ? `${later} later stage(s) stay pending. Filing the correction cleared their runs, and ` +
+            "withdrawing it cannot bring those back — they have to run again."
+          : "No later stage had run when the correction was filed, so nothing else was affected."),
+    },
+    "Withdraw It",
+  );
+  if (confirmed !== "Withdraw It") return;
+
+  const undone = undoCorrection(task.pipeline, stage.id, new Date().toISOString());
+  if (!undone.ok) {
+    void vscode.window.showWarningMessage(undone.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: undone.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] withdrew correction from "${stage.name}": ${
+      fix.correction?.finding ?? fix.title
+    }`,
+  );
+  void vscode.window.showInformationMessage(
+    `Withdrew the correction from "${stage.name}".`,
+  );
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   producesChecklist,
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
-import { hasUsage, stageUsage } from "./stageUsage";
+import { hasUsage, stageUsage, subtasksUsage } from "./stageUsage";
 import { ownedByPendingStage, ownedByStageResolution } from "./deferralOwnership";
 import { itemsForGate } from "./checklistScope";
 import {
@@ -613,7 +613,20 @@ export function correctStage(
     status: "pending",
     // Marks this as a repair rather than part of the stage's original plan, so a
     // reader can tell a stage that took three goes from one split into three units.
-    correction: { finding, at: correction.at },
+    correction: {
+      finding,
+      at: correction.at,
+      // What this correction is about to clear off the stage. A finding can be
+      // wrong — a comment acted on before it was investigated — and withdrawing
+      // one is only cheap if the stage's own conclusion comes back with it.
+      undo: {
+        status: stage.status,
+        finishedAt: stage.finishedAt,
+        verdict: stage.verdict,
+        verification: stage.verification,
+        blocked: stage.blocked,
+      },
+    },
   };
 
   // Captured before the map below clears it. A correction keeps its own stage, so
@@ -699,6 +712,122 @@ export function correctStage(
       ? { discarded: [...(pipeline.discarded ?? []), ...discarded] }
       : {}),
   });
+}
+
+/**
+ * The correction a stage could withdraw, if any: its most recent one.
+ *
+ * Exported for the same reason `isCorrectable` is — the tree's context value and
+ * the command must not disagree about whether the action is available.
+ *
+ * Most recent rather than any, because corrections stack: each one snapshotted the
+ * settlement *the one before it* had already cleared, so undoing them out of order
+ * would restore a conclusion that a correction still standing had invalidated.
+ */
+export function undoableCorrection(stage: TaskStage): Subtask | undefined {
+  for (let i = stage.subtasks.length - 1; i >= 0; i--) {
+    const subtask = stage.subtasks[i];
+    if (subtask.correction) return subtask.status === "active" ? undefined : subtask;
+  }
+  return undefined;
+}
+
+/**
+ * Withdraws a correction from a stage, restoring the settlement it cleared.
+ *
+ * The inverse `correctStage` never had. A correction is filed on a finding, and a
+ * finding can be wrong — investigated afterwards, or raised by someone reading the
+ * report rather than the code. Until this existed, withdrawing one meant editing
+ * the state file by hand or re-running the stage from cold, which is the demolition
+ * `correctStage` was built to avoid, arrived at from the other direction.
+ *
+ * What comes back and what does not, stated plainly because a partial undo silently
+ * believed to be total is worse than none:
+ *
+ * - **The corrected stage** is restored exactly — its status, verdict, verification
+ *   and `BLOCKED:` reason all come from the snapshot the correction took. Everything
+ *   else on it was kept by `correctStage` and never left.
+ * - **Later stages do not.** `correctStage` re-opened them and cleared their replies
+ *   and activity; those runs are gone, and nothing here can produce them. They stay
+ *   pending and must run again. This is the cost of the correction, not of undoing it.
+ * - **Deferrals settled** by the correction stay settled. They belonged to runs that
+ *   no longer exist either, and anything still true is raised afresh by the re-run.
+ *
+ * The correction's own cost is moved to `discarded` rather than deleted with it: a
+ * withdrawn correction is money that was spent on this route, and the ledger's whole
+ * point is that what a route cost is what was spent on it.
+ */
+export function undoCorrection(
+  pipeline: TaskPipeline,
+  stageId: string,
+  at: string,
+): Result<TaskPipeline, PipelineError> {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) return err(unknownStage(stageId));
+
+  const stage = pipeline.stages[index];
+  const fix = undoableCorrection(stage);
+  if (!fix) {
+    return err({
+      kind: "notCorrectable",
+      message: stage.subtasks.some((s) => s.correction && s.status === "active")
+        ? `A correction to "${stage.name}" is running. Stop the task before withdrawing it.`
+        : `"${stage.name}" has no correction to withdraw.`,
+    });
+  }
+
+  const totals = subtasksUsage([fix]);
+  const subtasks = stage.subtasks.filter((s) => s.id !== fix.id);
+  const undo = fix.correction?.undo;
+
+  const restored: TaskStage = {
+    ...stage,
+    subtasks,
+    // Absent on a correction filed before undo snapshots existed. The subtask still
+    // goes, which is the destructive half and the half that matters; the stage is
+    // left pending for the operator to approve again rather than being given a
+    // settlement invented here. Guessing a verdict is the one thing this must not do.
+    ...(undo
+      ? {
+          status: undo.status,
+          finishedAt: undo.finishedAt,
+          verdict: undo.verdict,
+          verification: undo.verification,
+          blocked: undo.blocked,
+        }
+      : { status: "pending" as const, finishedAt: undefined, blocked: undefined }),
+  };
+
+  const stages = pipeline.stages.map((s, i) => (i === index ? restored : s));
+
+  return ok({
+    ...pipeline,
+    stages,
+    // The stage is settled again when the snapshot said it was, so pointing the
+    // route at it would park a finished route on a stage with nothing to do.
+    currentStage:
+      restored.status === "pending" || restored.status === "awaiting-approval"
+        ? stage.id
+        : pipeline.currentStage,
+    updatedAt: at,
+    ...(hasUsage(totals)
+      ? {
+          discarded: [
+            ...(pipeline.discarded ?? []),
+            {
+              stageId: stage.id,
+              stageName: stage.name,
+              at,
+              reason: `correction withdrawn: ${fix.correction?.finding ?? fix.title}`,
+              costUsd: totals.costUsd,
+              tokens: totals.tokens,
+              elapsedMs: totals.elapsedMs,
+              sessions: totals.measured + totals.unmeasured,
+            } satisfies DiscardedRun,
+          ],
+        }
+      : {}),
+  } as TaskPipeline);
 }
 
 export function planStage(

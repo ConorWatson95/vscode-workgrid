@@ -159,7 +159,31 @@ describe("stagePresentation", () => {
         { ...subtask("fix-1", "pending"), correction: { finding: "wrong", at: "t" } },
       ],
     });
-    expect(stagePresentation(corrected).contextValue).toBe("stage-pending correctable");
+    expect(stagePresentation(corrected).contextValue).toBe(
+      "stage-pending correctable has-correction",
+    );
+  });
+
+  // Separate from `correctable`, and not implied by it: a stage can have output worth
+  // correcting without ever having been corrected, and only the latter can be withdrawn.
+  it("marks a corrected stage as having a correction to withdraw", () => {
+    const uncorrected = stage({
+      status: "passed",
+      subtasks: [{ ...subtask("a", "done"), reply: "did it" }],
+    });
+    expect(stagePresentation(uncorrected).contextValue).not.toContain("has-correction");
+  });
+
+  // A correction mid-flight has nothing to withdraw yet — stopping the task comes first.
+  it("does not offer a withdrawal while the correction is running", () => {
+    const running = stage({
+      status: "active",
+      subtasks: [
+        { ...subtask("a", "done"), reply: "did it" },
+        { ...subtask("fix-1", "active"), correction: { finding: "wrong", at: "t" } },
+      ],
+    });
+    expect(stagePresentation(running).contextValue).not.toContain("has-correction");
   });
 
   it("leaves a stage that has produced nothing uncorrectable", () => {

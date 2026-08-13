@@ -11,6 +11,8 @@ import {
   recordHandoff,
   handoffsBefore,
   correctStage,
+  undoCorrection,
+  undoableCorrection,
   recordDeferrals,
   recordActions,
   outstandingDeferrals,
@@ -2099,7 +2101,7 @@ describe("correctStage", () => {
     const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
     const fix = p.stages[0].subtasks[1];
     expect(fix.status).toBe("pending");
-    expect(fix.correction).toEqual({ finding: "wrong cast", at: "t1" });
+    expect(fix.correction).toMatchObject({ finding: "wrong cast", at: "t1" });
     expect(p.stages[0].status).toBe("pending");
   });
 
@@ -2107,6 +2109,20 @@ describe("correctStage", () => {
     const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
     expect(p.stages[0].verdict).toBeUndefined();
     expect(p.stages[0].verification).toBeUndefined();
+  });
+
+  it("snapshots the settlement it drops, so the correction can be withdrawn", () => {
+    // None of this is re-derivable: a verdict is what a reviewing session said, and
+    // the session is gone. Without the snapshot, a finding that turns out to be wrong
+    // costs the cold re-run a correction exists to avoid.
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    expect(p.stages[0].subtasks[1].correction?.undo).toEqual({
+      status: "passed",
+      finishedAt: undefined,
+      verdict: "pass",
+      verification: { command: "npm test", exitCode: 0, at: "t0" },
+      blocked: undefined,
+    });
   });
 
   it("records what re-opening the later stages threw away, as collateral", () => {
@@ -2172,5 +2188,163 @@ describe("correctStage", () => {
 
   it("refuses an empty finding, which gives the session nothing to act on", () => {
     expect(correctStage(ran(), "implement", { finding: "   ", at: "t1" }).ok).toBe(false);
+  });
+});
+
+describe("undoCorrection", () => {
+  const ran = (): TaskPipeline =>
+    ({
+      routeId: "report-change",
+      stages: [
+        {
+          id: "implement", name: "Implement", kind: "implementation", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          verdict: "pass" as const,
+          verification: { command: "npm test", exitCode: 0, at: "t0" },
+          finishedAt: "t0",
+          subtasks: [{
+            id: "implement-1", title: "Implement", prompt: "p", status: "done" as const,
+            reply: "Added the grid and the proc.", activity: { costUsd: 12.48 },
+          }],
+        },
+        {
+          id: "review", name: "Code review", kind: "codeReview", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          subtasks: [{
+            id: "review-1", title: "Review", prompt: "p", status: "done" as const,
+            reply: "Looks fine.", activity: { costUsd: 2.49 },
+          }],
+        },
+      ],
+    }) as TaskPipeline;
+
+  const corrected = (): TaskPipeline =>
+    must(correctStage(ran(), "implement", { finding: "boss says the grain is wrong", at: "t1" }));
+
+  it("puts back the settlement the correction cleared", () => {
+    // The whole point. A finding acted on before it was investigated left a stage
+    // that had passed sitting pending with no record it ever had, so withdrawing the
+    // finding still cost the cold re-run the correction existed to avoid.
+    const p = must(undoCorrection(corrected(), "implement", "t2"));
+    const stage = p.stages[0];
+    expect(stage.status).toBe("passed");
+    expect(stage.verdict).toBe("pass");
+    expect(stage.verification).toEqual({ command: "npm test", exitCode: 0, at: "t0" });
+    expect(stage.finishedAt).toBe("t0");
+  });
+
+  it("removes the correction subtask and keeps the stage's original work", () => {
+    const p = must(undoCorrection(corrected(), "implement", "t2"));
+    expect(p.stages[0].subtasks).toHaveLength(1);
+    expect(p.stages[0].subtasks[0].id).toBe("implement-1");
+    expect(p.stages[0].subtasks[0].activity?.costUsd).toBe(12.48);
+  });
+
+  it("clears a block the correction's own run left behind", () => {
+    // The shape this was actually built for: the correction ran, declined the finding
+    // and held the stage. Withdrawing it must take the hold with it, or the route
+    // stays stopped on a finding nobody stands behind any more.
+    const held = corrected();
+    const p = must(
+      undoCorrection(
+        {
+          ...held,
+          stages: held.stages.map((s, i) =>
+            i === 0 ? { ...s, blocked: "the grain is a product decision" } : s,
+          ),
+        },
+        "implement",
+        "t2",
+      ),
+    );
+    expect(p.stages[0].blocked).toBeUndefined();
+  });
+
+  it("keeps what the withdrawn correction cost, as a discarded run", () => {
+    // A withdrawn correction is money spent on this route. What a route cost is what
+    // was spent on it, not what survives on it.
+    const held = corrected();
+    const withRun = {
+      ...held,
+      stages: held.stages.map((s, i) =>
+        i === 0
+          ? {
+              ...s,
+              subtasks: s.subtasks.map((t) =>
+                t.correction ? { ...t, status: "done" as const, activity: { costUsd: 1.4 } } : t,
+              ),
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+    const p = must(undoCorrection(withRun, "implement", "t2"));
+    expect(p.discarded).toContainEqual(
+      expect.objectContaining({ stageId: "implement", costUsd: 1.4, at: "t2" }),
+    );
+  });
+
+  it("leaves a stage pending when the correction predates undo snapshots", () => {
+    // Guessing a verdict is the one thing this must not do: the operator approves again.
+    const old = corrected();
+    const stripped = {
+      ...old,
+      stages: old.stages.map((s, i) =>
+        i === 0
+          ? {
+              ...s,
+              subtasks: s.subtasks.map((t) =>
+                t.correction ? { ...t, correction: { finding: t.correction.finding, at: "t1" } } : t,
+              ),
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+    const p = must(undoCorrection(stripped, "implement", "t2"));
+    expect(p.stages[0].subtasks).toHaveLength(1);
+    expect(p.stages[0].status).toBe("pending");
+    expect(p.stages[0].verdict).toBeUndefined();
+  });
+
+  it("withdraws the most recent correction only, so snapshots unwind in order", () => {
+    // Each correction snapshotted what the one before it had already cleared, so
+    // undoing out of order restores a conclusion a standing correction invalidated.
+    const twice = must(
+      correctStage(corrected(), "implement", { finding: "and the join", at: "t2" }),
+    );
+    const p = must(undoCorrection(twice, "implement", "t3"));
+    const remaining = p.stages[0].subtasks.filter((s) => s.correction);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].correction?.finding).toBe("boss says the grain is wrong");
+    // Still corrected once, so the settlement stays cleared.
+    expect(p.stages[0].verdict).toBeUndefined();
+  });
+
+  it("does not pretend the later stages it re-opened come back", () => {
+    const p = must(undoCorrection(corrected(), "implement", "t2"));
+    expect(p.stages[1].status).toBe("pending");
+    expect(p.stages[1].subtasks[0].reply).toBeUndefined();
+  });
+
+  it("refuses a stage with no correction", () => {
+    expect(undoCorrection(ran(), "implement", "t2").ok).toBe(false);
+  });
+
+  it("refuses while the correction is running", () => {
+    const running = corrected();
+    const mid = {
+      ...running,
+      stages: running.stages.map((s, i) =>
+        i === 0
+          ? {
+              ...s,
+              subtasks: s.subtasks.map((t) =>
+                t.correction ? { ...t, status: "active" as const } : t,
+              ),
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+    expect(undoableCorrection(mid.stages[0])).toBeUndefined();
+    expect(undoCorrection(mid, "implement", "t2").ok).toBe(false);
   });
 });

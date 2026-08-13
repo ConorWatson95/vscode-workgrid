@@ -2,6 +2,38 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.88.0
+
+- **A correction can now be withdrawn.** `correctStage` had no inverse, and a finding is
+  not always right — a comment acted on before it was investigated, or one raised by
+  somebody reading the report rather than the code. Until now the only ways back were
+  editing the state file by hand or re-running the stage from cold, which is the
+  demolition corrections were built to avoid, reached from the other side. So the cheapest
+  response to a *wrong* finding was to leave it standing.
+
+  What made it more than deleting a subtask is that filing a correction destroys the
+  stage's own conclusion — its status, `verdict`, `verification` and any `BLOCKED:` reason
+  — because all of it was about the version being corrected. That is right while the
+  correction stands and unrecoverable once it does not: none of it is re-derivable, since
+  a verdict is what a reviewing session said and the session is gone. `correctStage` now
+  snapshots that settlement onto the correction subtask, and **Withdraw the Last
+  Correction…** puts it back exactly.
+
+  What does *not* come back is stated in the dialog rather than left to be assumed, since
+  a partial undo believed to be total is worse than none: the later stages the correction
+  re-opened had their replies and activity cleared when it was filed, and nothing here can
+  produce those again — they re-run. Deferrals it settled stay settled, for the same
+  reason. The withdrawn correction's own cost moves to the discarded ledger rather than
+  vanishing with it, because what a route cost is what was spent on it.
+
+  Three narrowings, each load-bearing: only the **most recent** correction, because
+  corrections stack and each snapshotted what the one before it had already cleared, so
+  unwinding out of order would restore a conclusion a standing correction had invalidated;
+  never while one is **running**, since the session is still writing; and a correction
+  filed **before this shipped** has no snapshot, so its stage is left pending for the
+  operator to approve again rather than handed a verdict invented at withdrawal time.
+  Guessing a verdict is the one thing an undo must not do.
+
 ## 0.86.2
 
 - **Approving a gate no longer fails with "operation not permitted".** The state file is

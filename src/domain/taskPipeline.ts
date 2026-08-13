@@ -61,7 +61,32 @@ export interface Subtask {
    * it is handed the stage's own previous report and told what is wrong with it,
    * which is the entire reason a correction costs a fraction of a re-run.
    */
-  correction?: { finding: string; at: string };
+  correction?: { finding: string; at: string; undo?: CorrectionUndo };
+}
+
+/**
+ * The stage settlement a correction cleared, kept so it can be put back.
+ *
+ * A correction undoes its stage's own conclusion — status, verdict, verification,
+ * a `BLOCKED:` reason — because all of it was about the version being corrected.
+ * That is right while the correction stands, and unrecoverable once it does not:
+ * a finding that turns out to be wrong left a stage that had passed sitting
+ * `pending` with no record it ever had, so withdrawing the finding still cost the
+ * re-run the correction existed to avoid.
+ *
+ * Snapshotted rather than re-derived because none of it is derivable. A verdict is
+ * what a reviewing session said, and the session is gone.
+ *
+ * Only the corrected stage's own settlement. The stages *after* it were re-opened
+ * and their replies cleared, and no snapshot here can bring those back — see
+ * `undoCorrection`, which says so rather than implying otherwise.
+ */
+export interface CorrectionUndo {
+  status: TaskStageStatus;
+  finishedAt?: string;
+  verdict?: "pass" | "block";
+  verification?: { command: string; exitCode: number; at: string };
+  blocked?: string;
 }
 
 /**
