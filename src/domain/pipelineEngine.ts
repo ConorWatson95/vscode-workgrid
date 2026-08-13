@@ -813,8 +813,16 @@ export function undoCorrection(
     subtasks,
     // Absent on a correction filed before undo snapshots existed. The subtask still
     // goes, which is the destructive half and the half that matters; the stage is
-    // left pending for the operator to approve again rather than being given a
-    // settlement invented here. Guessing a verdict is the one thing this must not do.
+    // handed back to the operator rather than given a settlement invented here.
+    // Guessing a verdict is the one thing this must not do.
+    //
+    // `awaiting-approval`, emphatically not `pending`: the stage's own subtasks are
+    // all `done`, and `nextAction` reads an unresolved stage with nothing left to run
+    // as `blocked` — a state its own comment calls impossible, because `finishSubtask`
+    // is the only thing that ever produced it. `approveStage` then refuses the stage
+    // for not awaiting approval, so the fallback meant to let the operator approve
+    // again left the route with no move at all. Awaiting approval is the one status
+    // that is both honest — nothing here certified the work — and resolvable.
     ...(undo
       ? {
           status: undo.status,
@@ -823,7 +831,7 @@ export function undoCorrection(
           verification: undo.verification,
           blocked: undo.blocked,
         }
-      : { status: "pending" as const, finishedAt: undefined, blocked: undefined }),
+      : { status: "awaiting-approval" as const, finishedAt: undefined, blocked: undefined }),
   };
 
   // The same rule filing a correction follows, and for the same reason: the stages

@@ -43,9 +43,18 @@ All notable changes to Task Workspaces are documented here.
   corrections stack and each snapshotted what the one before it had already cleared, so
   unwinding out of order would restore a conclusion a standing correction had invalidated;
   never while one is **running**, since the session is still writing; and a correction
-  filed **before this shipped** has no snapshot, so its stage is left pending for the
-  operator to approve again rather than handed a verdict invented at withdrawal time.
-  Guessing a verdict is the one thing an undo must not do.
+  filed **before this shipped** has no snapshot, so its stage comes back awaiting approval
+  rather than handed a verdict invented at withdrawal time. Guessing a verdict is the one
+  thing an undo must not do.
+
+  That fallback status is `awaiting-approval` and emphatically not `pending`, which is
+  where it started and which was a dead end. The stage's own subtasks are all `done`, and
+  `nextAction` reads an unresolved stage with nothing left to run as `blocked` — a state
+  its own comment calls impossible, because `finishSubtask` had been the only thing that
+  could produce it. `approveStage` then refuses the stage for not awaiting approval. So
+  the fallback whose entire purpose was "the operator approves it again" left the route
+  with no legal move at all, and it would have bitten on precisely the corrections that
+  predate the feature — the only ones that can reach it.
 
 ## 0.86.2
 

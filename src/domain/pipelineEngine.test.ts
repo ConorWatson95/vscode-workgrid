@@ -2301,8 +2301,15 @@ describe("undoCorrection", () => {
     } as TaskPipeline;
     const p = must(undoCorrection(stripped, "implement", "t2"));
     expect(p.stages[0].subtasks).toHaveLength(1);
-    expect(p.stages[0].status).toBe("pending");
+    expect(p.stages[0].status).toBe("awaiting-approval");
     expect(p.stages[0].verdict).toBeUndefined();
+
+    // And the operator can actually act on it. `pending` here was a dead end: every
+    // subtask is `done`, so `nextAction` reads the stage as `blocked` and
+    // `approveStage` refuses it for not awaiting approval — a fallback whose whole
+    // purpose was "approve it again" with no way to approve it.
+    expect(nextAction(p)).toMatchObject({ kind: "awaitApproval", stage: { id: "implement" } });
+    expect(approveStage(p, "implement", "t3").ok).toBe(true);
   });
 
   it("withdraws the most recent correction only, so snapshots unwind in order", () => {

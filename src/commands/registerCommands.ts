@@ -849,8 +849,9 @@ async function undoCorrectionCommand(ctx: CommandContext, arg: unknown): Promise
               undo.verdict ? ` with its "${undo.verdict}" verdict` : ""
             }, exactly as it stood before the correction was filed.\n\n`
           : `This correction was filed before withdrawals were recorded, so there is no ` +
-            `snapshot of how "${stage.name}" stood. It is left pending for you to ` +
-            `approve again rather than given a verdict invented here.\n\n`) +
+            `snapshot of how "${stage.name}" stood. It keeps everything it produced and ` +
+            `comes back to you awaiting approval, rather than being handed a verdict ` +
+            `invented here — read it and approve it as you would have before.\n\n`) +
         (ran
           ? "The correction's own run is removed, and what it cost stays on the record as a discarded run.\n\n"
           : "It had not run yet, so nothing it did is lost.\n\n") +
