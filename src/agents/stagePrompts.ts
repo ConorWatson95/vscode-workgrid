@@ -70,10 +70,17 @@ export interface StageContext {
    * belonging to the next one — so the honest ones over-reported and the rest said
    * nothing.
    *
-   * Intents are included because a stage name alone ("Deploy") does not say whether it
-   * covers the thing in hand.
+   * A summary of each intent is included because a stage name alone ("Deploy") does
+   * not say whether it covers the thing in hand — but the full intent is how to
+   * *execute* a stage, which no other stage needs. See `summariseIntent`.
+   *
+   * Deliberately carries no "you are here": the marker used to sit inside this list,
+   * which made the list vary per stage and ended the cached prefix here. The list is
+   * now identical for every stage of a task, and the reader's own position is stated
+   * after it — so the brief and the route are paid for once per task, not per stage.
+   * `id` is what locates the reader, since two stages may share a name.
    */
-  routeStages?: { name: string; intent: string; position: "earlier" | "current" | "later" }[];
+  routeStages?: { id: string; name: string; summary: string }[];
 }
 
 /**
@@ -136,6 +143,20 @@ export function stripVerdict(reply: string): string {
  * and proceed confidently. Asking has to be an available, explicitly sanctioned
  * move, or it will not happen.
  */
+/**
+ * Where the reader sits in the route listed above it, as a suffix to the stage name.
+ *
+ * Stated after the list rather than marked inside it: a marker in the list makes the
+ * list vary per stage, which ends the cached prefix at the route and costs every stage
+ * the brief as well. Silent when the stage is not in the outline — a caller that passed
+ * none, or one built for another stage, must not assert a position it does not know.
+ */
+function routePosition(routeStages: StageContext["routeStages"], stageId: string): string {
+  if (!routeStages || routeStages.length === 0) return "";
+  const at = routeStages.findIndex((entry) => entry.id === stageId);
+  return at === -1 ? "" : ` (stage ${at + 1} of ${routeStages.length} above)`;
+}
+
 function preamble(context: StageContext, stage: TaskStage): string {
   return [
     // The invariant half lives in the Claude adapter: it is this engine's
@@ -150,7 +171,23 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `Task: ${context.taskName}`,
     context.taskDescription ? `Brief: ${context.taskDescription}` : "",
     `Branch: ${context.branchName} (based on ${context.baseBranch})`,
-    `Stage: ${stage.name}`,
+
+    // The route sits above the per-stage lines, not below them, and that ordering is
+    // the whole saving: it and the brief are the same bytes for every stage of a
+    // task, so twenty-two sessions share one cached prefix instead of each paying
+    // fresh for both. Anything that varies per stage has to stay below this point.
+    ...(context.routeStages && context.routeStages.length > 0
+      ? [
+          "",
+          "This task's route, in order. Every stage here has an owner: do not do another",
+          "stage's work, and do not raise it as outstanding — that is what they are for.",
+          "Raise only work no stage here covers.",
+          ...context.routeStages.map((entry, index) => `${index + 1}. ${entry.name} — ${entry.summary}`),
+        ]
+      : []),
+
+    "",
+    `Stage: ${stage.name}${routePosition(context.routeStages, stage.id)}`,
     // The exception to the rule above, and it lives down here rather than in that
     // block so the block stays byte-identical across stages and therefore cacheable.
     // Promotion is the case: a UAT promotion goes through a PR, and a live publish
@@ -162,19 +199,6 @@ function preamble(context: StageContext, stage: TaskStage): string {
           `${context.branchName} when you are finished, and say so — the stages after`,
           `you refuse to run until it is back, since they would otherwise report on`,
           `whatever tree you left behind.`,
-        ]
-      : []),
-    ...(context.routeStages && context.routeStages.length > 0
-      ? [
-          "",
-          "This task's route, in order. Stages after yours have owners already: do not",
-          "do their work, and do not raise it as outstanding — that is what they are",
-          "for. Raise only work no stage here covers.",
-          ...context.routeStages.map(
-            (entry) =>
-              `${entry.position === "current" ? "> " : "  "}${entry.name}` +
-              `${entry.position === "current" ? " (you are here)" : ""} — ${entry.intent}`,
-          ),
         ]
       : []),
     ...(context.handoffs && context.handoffs.length > 0

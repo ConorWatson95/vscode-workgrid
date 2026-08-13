@@ -847,9 +847,9 @@ describe("the route a stage is part of", () => {
   const ROUTE_CONTEXT = {
     ...CONTEXT,
     routeStages: [
-      { name: "Implement", intent: "Write the proc.", position: "earlier" as const },
-      { name: "Behaviour review", intent: "Plan the checks.", position: "current" as const },
-      { name: "Deploy to DEV", intent: "Run the migrations.", position: "later" as const },
+      { id: "impl", name: "Implement", summary: "Write the proc." },
+      { id: "fix", name: "Behaviour review", summary: "Plan the checks." },
+      { id: "deploy", name: "Deploy to DEV", summary: "Run the migrations." },
     ],
   };
 
@@ -857,11 +857,29 @@ describe("the route a stage is part of", () => {
   // as a verification item for a human, when the route already had a deployment stage
   // two steps later. It was not wrong that the work was outstanding — it had no way to
   // know anyone was going to do it.
-  it("names every stage, marks the current one, and says later ones have owners", () => {
+  it("names every stage and says the others have owners", () => {
     const prompt = behaviourReviewPrompt(ROUTE_CONTEXT, stage({ kind: "behaviourReview" }));
-    expect(prompt).toContain("Deploy to DEV — Run the migrations.");
-    expect(prompt).toContain("(you are here)");
+    expect(prompt).toContain("3. Deploy to DEV — Run the migrations.");
     expect(prompt).toContain("do not raise it as outstanding");
+  });
+
+  it("locates the reader after the list, not inside it", () => {
+    const prompt = behaviourReviewPrompt(ROUTE_CONTEXT, stage({ kind: "behaviourReview" }));
+    expect(prompt).toContain("Stage: Fix (stage 2 of 3 above)");
+  });
+
+  // The saving this ordering exists for: the brief and the route are the same bytes
+  // for every stage of a task, so one cached prefix serves the whole route. A marker
+  // inside the list is what used to break it.
+  it("gives every stage of a task a byte-identical prefix up to the route", () => {
+    const upToRoute = (id: string) => {
+      const prompt = subtaskPrompt(ROUTE_CONTEXT, stage({ id }), {
+        id: "s1-1", title: "T", prompt: "P", status: "pending",
+      });
+      return prompt.slice(0, prompt.indexOf("3. Deploy to DEV — Run the migrations."));
+    };
+
+    expect(upToRoute("impl")).toBe(upToRoute("deploy"));
   });
 
   it("reaches an implementation subtask too, not only reviews", () => {
@@ -871,10 +889,17 @@ describe("the route a stage is part of", () => {
     expect(prompt).toContain("Deploy to DEV");
   });
 
+  it("claims no position for a stage the outline does not list", () => {
+    const prompt = subtaskPrompt(ROUTE_CONTEXT, stage({ id: "spliced-review" }), {
+      id: "s1-1", title: "T", prompt: "P", status: "pending",
+    });
+    expect(prompt).not.toContain(" above)");
+  });
+
   it("says nothing about a route when there is none to describe", () => {
     expect(subtaskPrompt(CONTEXT, stage(), {
       id: "s1-1", title: "T", prompt: "P", status: "pending",
-    })).not.toContain("you are here");
+    })).not.toContain("do not raise it as outstanding");
   });
 });
 

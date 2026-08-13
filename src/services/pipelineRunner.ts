@@ -35,6 +35,7 @@ import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
+import { summariseIntent } from "../domain/routeSummary";
 import { substitutePlaceholders } from "../domain/commandPlaceholders";
 import {
   CommandOutcome,
@@ -1648,14 +1649,16 @@ function withVerification(
 function routeOutline(
   pipeline: TaskPipeline | undefined,
   stageId: string,
-): { name: string; intent: string; position: "earlier" | "current" | "later" }[] | undefined {
+): { id: string; name: string; summary: string }[] | undefined {
   if (!pipeline || pipeline.stages.length === 0) return undefined;
-  const at = pipeline.stages.findIndex((stage) => stage.id === stageId);
-  if (at === -1) return undefined;
+  if (!pipeline.stages.some((stage) => stage.id === stageId)) return undefined;
 
-  return pipeline.stages.map((stage, index) => ({
+  // Intentionally independent of which stage is asking, so every stage of a task gets
+  // the same bytes and shares one cached prefix. The reader's position is added after
+  // the list, by `routePosition`.
+  return pipeline.stages.map((stage) => ({
+    id: stage.id,
     name: stage.name,
-    intent: stage.intent,
-    position: index === at ? "current" : index < at ? "earlier" : "later",
+    summary: summariseIntent(stage.intent),
   }));
 }
