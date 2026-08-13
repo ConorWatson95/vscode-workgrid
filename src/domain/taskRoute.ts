@@ -122,6 +122,18 @@ export type StageGate =
   /** Hold at the stage until a human approves it. */
   | "approval";
 
+/**
+ * Who is expected to answer a verification gate's checklist items.
+ *
+ * Absent means `"self"` everywhere it appears, so nothing that has not opted in
+ * changes and there is no migration.
+ */
+export type ChecklistAudience =
+  /** The operator, at their own keyboard. */
+  | "self"
+  /** Somebody else — testers on DEV, an external party accepting UAT. */
+  | "others";
+
 export interface RouteStageDefinition {
   /** Stable within a route; persisted, so never renumber existing values. */
   id: string;
@@ -146,6 +158,23 @@ export interface RouteStageDefinition {
    * answers for everything. See `domain/checklistScope.ts`.
    */
   checklistScope?: string;
+  /**
+   * Who answers this gate's items: the operator, or somebody else.
+   *
+   * Only meaningful on a `humanVerification` stage, and absent means `"self"` — so a
+   * route that declares nothing behaves exactly as it did.
+   *
+   * The distinction is ownership, not difficulty. A gate whose items are exercised by
+   * testers on DEV, or by an external party accepting UAT, is not work the operator
+   * can do at all: the task has left them until feedback arrives. Grouped as their own
+   * work it padded the list they scan to decide what to pick up next, which is the
+   * sifting problem `ui/taskGrouping.ts` exists to prevent, one level in.
+   *
+   * It also separates the two waits for measurement: days spent waiting on a third
+   * party are not supervision time, and counted as such they make the harness look
+   * slow for working correctly.
+   */
+  checklistAudience?: ChecklistAudience;
   /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *

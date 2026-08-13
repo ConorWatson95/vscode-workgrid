@@ -266,6 +266,26 @@ gates, evidence and durable state outrank per-task speed.
   what the item says; and **a bulk tick cannot reach across gates**
   (`checkOutstandingChecklist`'s `forGate`), since ticking a site item at a local gate
   asserts somebody exercised a behaviour in an environment the change had not reached.
+- **A gate also declares *who* answers it** (`ChecklistAudience`,
+  `RouteStageDefinition.checklistAudience`, added 13 Aug 2026). Scope says which
+  environment an item can be answered in; audience says whose job it is. `"others"` —
+  testers signing off DEV, an external party accepting UAT — means the task has **left**
+  the operator until feedback arrives, which is a different state from waiting on them,
+  and `ui/taskGrouping.ts` files it under `Waiting on others` instead of padding the list
+  they scan to decide what to pick up next. That was the whole complaint: `needs-you`
+  mixed a click with a wait measured in days, which is the sifting problem that module
+  exists to prevent, one level in. Keyed on **outstanding items for that gate**
+  (`itemsForGate`), never the stage kind — an external gate with everything ticked is an
+  approval only the operator can give, so it goes back in `needs-you`, and an item scoped
+  to a gate nothing has reached yet must not file the task as delegated. A failed stage
+  and a held tool call both outrank it: a broken route is the operator's whatever the
+  task is nominally waiting on. Absent means `"self"`, so nothing that has not opted in
+  changes; an unrecognised value is **rejected rather than defaulted**, because
+  defaulting means `"self"` and that is exactly the failure the field prevents. The row
+  carries the age of the wait in days or hours (`formatWaitingSince`) — moving these out
+  of the scan list is the point, but testers do not notify the tree, and a delegated task
+  with no visible age is a task you forget. Still to do: external wait is not supervision
+  time, and `domain/humanWait.ts` should stop counting it as the harness being slow.
 - **The checklist review is spliced immediately before the gate that will read it.** The
   previous rule was "after the first deployment", which broke as soon as one route had two
   kinds: on `report-change` the first deployment lands the branch in source control and
@@ -760,6 +780,55 @@ Two checks that both exist because the failure they prevent is a stage *succeedi
   wrong one switches subagents off silently. Enforced by removing the tool rather than
   refusing the call, which is the better failure: an agent that never had a tool does
   the work itself instead of spending turns rewording a request it cannot make.
+
+### The compatibility probe backlog
+
+Every CLI fact above is a *result*, recorded so it is not re-derived. This is the other
+half: what is **not yet probed**. The validated baseline is **CLI 2.1.223** — everything
+asserted above holds there and nowhere else has been checked. Each item below is a
+behaviour a later release changed or introduced that can alter stage execution *without
+failing*, which is the only kind worth the startup cost of a probe. Run them when the
+baseline is next promoted, not before; a probe against a version no stage runs answers
+nothing.
+
+- **Managed MCP collision surface** (2.1.229). `managed-mcp.json` and server-delivered
+  MCP now resolve by precedence, the loser being skipped with a *warning* rather than
+  killing the session. `mcpReadiness` reads the init event and deliberately does not
+  reconstruct precedence — but it was written against two config sources and there are
+  now three, so the question is where a skipped-by-precedence server appears: a status in
+  `mcp_servers`, an entry in `mcp_server_errors`, or only a warning in neither. A required
+  server silently absent from both lists reads as ready, which is the exact failure the
+  check exists to prevent. The most valuable of these by some distance.
+- **`Write` may overwrite an unread file, on newer models only** (2.1.228). The one item
+  that changes tool semantics rather than architecture: same stage, same file, different
+  model, different admissible action. Probe is cheap and deterministic — existing file,
+  fresh session, ask for an overwrite with no read, record allowed/rejected against CLI
+  version *and* `actualModel`. Do **not** compensate by forcing a read in the harness:
+  that puts execution-engine policy into orchestration. Recording it is the whole
+  response, and `SubtaskActivity.actualModel` already exists for it.
+- **Server-supplied hooks reach self-hosted runners** (2.1.229). The permission gate
+  assumes the hooks a stage runs under are harness-owned and one-directional. If policy
+  can arrive from outside both the repository and our settings file, then *stage config +
+  local config = complete execution policy* is false. Probe the observable question only:
+  can a stage detect headlessly that a hook it did not install is in effect? Nothing to
+  build until it can — an `enginePolicy.source` field with no deterministic way to
+  populate it is a configuration abstraction pretending to be evidence.
+- **Plugin `command` source** (2.1.229). A marketplace may resolve its plugin directory
+  by running a local command, re-resolved per session, with `mode: "link"` usable without
+  a restart. Potentially a cleaner protocol-skill deployment than `--plugin-dir` at a
+  fixed absolute path. Probe: does it behave deterministically under `-p` and
+  stream-json, from an untrusted worktree, resolving once per fresh stage session? Until
+  all three hold, the existing static path is the safer known behaviour.
+
+**Cache staggering is remembered, not queued** (2.1.229, `CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS`).
+Anthropic staggers sibling workflow agents so later ones hit the prompt cache instead of
+each paying to create the same prefix — a concrete case of *less* concurrency costing
+less. It is not a probe item because its precondition is one this architecture works
+against: every subtask is a cold session with its own brief, so there may be no shared
+cacheable prefix to reuse. Concurrent stages are also blocked for unrelated reasons —
+five modules keyed by task id, not subtask (see the latency measurement below). Prove the
+shared prefix before benchmarking a staggerer, or it is measurement infrastructure
+looking for a decision.
 
 ### Measuring the thing the harness is actually for
 

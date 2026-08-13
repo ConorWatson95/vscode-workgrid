@@ -2,6 +2,7 @@ import { ReviewRule } from "./reviewRules";
 import { parseReviewRules } from "./reviewRulesFile";
 import {
   ALL_STAGE_KINDS,
+  ChecklistAudience,
   looksLikeKindEntry,
   RouteDefinition,
   RouteStageDefinition,
@@ -212,6 +213,26 @@ function parseStage(
     return undefined;
   }
 
+  // Same reasoning as the scope above, and one more: an audience misread as absent
+  // defaults to "self", so a typo puts a task waiting on external testers back into
+  // the operator's own list — the exact thing the field exists to stop. Rejected
+  // rather than defaulted.
+  const checklistAudience = str(raw.checklistAudience);
+  if (checklistAudience !== undefined && kind !== "humanVerification") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "checklistAudience" only applies to a ` +
+        `"humanVerification" stage, and this one is "${kind}".`,
+    );
+    return undefined;
+  }
+  if (checklistAudience !== undefined && checklistAudience !== "self" && checklistAudience !== "others") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "checklistAudience" must be "self" or ` +
+        `"others", not "${checklistAudience}".`,
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -222,6 +243,7 @@ function parseStage(
     splittable: raw.splittable === true,
     gate: gate as StageGate,
     ...(checklistScope ? { checklistScope } : {}),
+    ...(checklistAudience ? { checklistAudience: checklistAudience as ChecklistAudience } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),

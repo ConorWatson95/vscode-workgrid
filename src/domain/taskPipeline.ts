@@ -7,7 +7,7 @@
  * untouched. All transitions live in ./pipelineEngine and are pure.
  */
 
-import { StageKind } from "./taskRoute";
+import { ChecklistAudience, StageKind } from "./taskRoute";
 import { InterventionRecord } from "./interventions";
 import { PipelineExperiment } from "./pipelineExperiment";
 
@@ -388,6 +388,15 @@ export interface TaskStage {
    * the first unresolved gate answers for every item. See `domain/checklistScope.ts`.
    */
   checklistScope?: string;
+  /**
+   * Who answers this gate's items, copied from the route so a persisted pipeline
+   * stays self-describing. Absent means `"self"`.
+   *
+   * Only meaningful on a `humanVerification` stage. A gate answered by others means
+   * the task has left the operator until feedback arrives, which is a different state
+   * from waiting on them — see `RouteStageDefinition.checklistAudience`.
+   */
+  checklistAudience?: ChecklistAudience;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**

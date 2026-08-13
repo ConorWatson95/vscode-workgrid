@@ -181,6 +181,40 @@ describe("parseHarnessConfig", () => {
   });
 });
 
+describe("checklistAudience", () => {
+  const routeWith = (over: Record<string, unknown>) => ({
+    ...ROUTE,
+    stages: [STAGE, { ...GATE, ...over }],
+  });
+
+  it("carries an audience through on a verification gate", () => {
+    const parsed = parseHarnessConfig({ routes: [routeWith({ checklistAudience: "others" })] });
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].checklistAudience).toBe("others");
+  });
+
+  it("leaves it absent when the gate does not declare one", () => {
+    const parsed = parseHarnessConfig({ routes: [ROUTE] });
+    expect(parsed.routes[0].stages[1].checklistAudience).toBeUndefined();
+  });
+
+  it("rejects an audience on a stage that is not a gate", () => {
+    const parsed = parseHarnessConfig({
+      routes: [{ ...ROUTE, stages: [{ ...STAGE, checklistAudience: "others" }, GATE] }],
+    });
+    expect(parsed.routes).toHaveLength(0);
+    expect(parsed.problems.join(" ")).toContain("checklistAudience");
+  });
+
+  it("rejects an unrecognised audience rather than defaulting it", () => {
+    // Defaulting means "self", which puts a task waiting on external testers back
+    // into the operator's own list — the thing the field exists to stop.
+    const parsed = parseHarnessConfig({ routes: [routeWith({ checklistAudience: "testers" })] });
+    expect(parsed.routes).toHaveLength(0);
+    expect(parsed.problems.join(" ")).toContain("testers");
+  });
+});
+
 describe("sendBackTo", () => {
   const routeWith = (sendBackTo: unknown) => ({
     routes: [

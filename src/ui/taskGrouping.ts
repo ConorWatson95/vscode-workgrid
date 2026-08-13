@@ -1,4 +1,5 @@
-import { TaskPipeline } from "../domain/taskPipeline";
+import { itemsForGate } from "../domain/checklistScope";
+import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 
 /**
  * Which bucket a task belongs in, so a list of them can be scanned rather than
@@ -7,8 +8,18 @@ import { TaskPipeline } from "../domain/taskPipeline";
  * Grouped by what a task *needs* rather than by which stage it is on. A route can
  * have seventeen stages, so grouping by stage name produces mostly groups of one —
  * more to read, not less. The question actually being asked of the list is "what
- * do I have to do?", and a task parked at UAT acceptance for a week answers it the
- * same way as one that has just stopped at a sign-off gate.
+ * do I have to do?".
+ *
+ * The one thing that question turned out to hide is **ownership**. A gate whose
+ * checklist items are exercised by testers on DEV, or by an external party accepting
+ * UAT, is not work the operator can do at all — the task has left them until feedback
+ * arrives. Filed under "needs you" it padded the list they scan to decide what to pick
+ * up next with rows they cannot clear, which is the sifting problem this module exists
+ * to prevent, one level in. So a gate declaring `checklistAudience: "others"` and
+ * holding outstanding items gets its own group.
+ *
+ * The rule keys off *outstanding items*, not the stage kind: an external gate with
+ * everything ticked is a decision the operator makes, and belongs back in "needs you".
  *
  * Pure, so the rule is unit-tested. It has to be: the failure that matters is a
  * task that needs attention being filed under something the reader skips.
@@ -19,6 +30,8 @@ export type TaskGroupId =
   | "needs-you"
   /** An agent is working on it right now. */
   | "working"
+  /** Stopped at a gate somebody else has to answer: testers, or a UAT acceptor. */
+  | "waiting-others"
   /** Has a route, nothing running, nothing waiting on a person. */
   | "parked"
   /** Every stage resolved. */
@@ -32,6 +45,7 @@ export type TaskGroupId =
 export const GROUP_ORDER: readonly TaskGroupId[] = [
   "needs-you",
   "working",
+  "waiting-others",
   "parked",
   "done",
   "no-route",
@@ -44,6 +58,8 @@ export function groupLabel(id: TaskGroupId): string {
       return "Needs you";
     case "working":
       return "Working";
+    case "waiting-others":
+      return "Waiting on others";
     case "parked":
       return "Parked";
     case "done":
@@ -68,6 +84,71 @@ export interface GroupInput {
   heldCalls: number;
 }
 
+/**
+ * The gate this task is stopped at, if somebody other than the operator answers it
+ * and it still has items outstanding.
+ *
+ * Two deliberate narrowings. **Outstanding items are required**: a gate whose items
+ * are all ticked is waiting on the operator to approve it, which is a click and
+ * belongs in "needs you". And **items are counted per gate** via `itemsForGate`
+ * rather than pipeline-wide, so a task is not filed as waiting on testers over an
+ * item scoped to a gate two rows further on that nothing has reached yet.
+ */
+export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | undefined {
+  if (!pipeline) return undefined;
+
+  const gate =
+    pipeline.stages.find(
+      (stage) => stage.kind === "humanVerification" && stage.status === "awaiting-approval",
+    ) ??
+    pipeline.stages.find(
+      (stage) =>
+        stage.kind === "humanVerification" &&
+        (stage.status === "active" || stage.status === "pending"),
+    );
+  if (!gate || gate.checklistAudience !== "others") return undefined;
+
+  return itemsForGate(pipeline, gate.id).length > 0 ? gate : undefined;
+}
+
+function externalGateInPlay(pipeline: TaskPipeline | undefined): boolean {
+  return externalGate(pipeline) !== undefined;
+}
+
+/**
+ * When the current external gate started waiting, for display on the row.
+ *
+ * Moving these tasks out of the scan list is the point, but a delegated task is a
+ * task you forget — testers do not notify the tree. The age is what keeps one that
+ * has been sitting for a fortnight from looking the same as one handed over an hour
+ * ago. Absent when the stage never recorded a start, which reads as unknown rather
+ * than as new.
+ */
+export function externalWaitSince(pipeline: TaskPipeline | undefined): string | undefined {
+  return externalGate(pipeline)?.startedAt;
+}
+
+/**
+ * How long something has been waiting, in the units a reader of this group cares
+ * about.
+ *
+ * Days and hours rather than the minutes-and-seconds a held tool call is measured in:
+ * these waits are answered by other people on their own schedule, so a count of
+ * seconds is precision about a number nobody acts on. `now` is passed in so the rule
+ * is testable — nothing here calls the clock.
+ */
+export function formatWaitingSince(since: string, now: number): string {
+  const started = Date.parse(since);
+  if (Number.isNaN(started)) return "waiting";
+
+  const minutes = Math.max(0, Math.floor((now - started) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
 export function groupForTask(input: GroupInput): TaskGroupId {
   if (input.status === "archived") return "archived";
 
@@ -88,10 +169,17 @@ export function groupForTask(input: GroupInput): TaskGroupId {
   ).length;
   if (ungranted > 0) return "needs-you";
 
-  if (stages.some((stage) => stage.status === "awaiting-approval")) return "needs-you";
   // A failed stage cannot resolve itself: someone has to fix the cause and re-open
-  // it, so it is work for a person even though nothing is explicitly asking.
+  // it, so it is work for a person even though nothing is explicitly asking. Checked
+  // before the external gate below, because a broken route is the operator's whatever
+  // else the task is nominally waiting on.
   if (stages.some((stage) => stage.status === "failed")) return "needs-you";
+
+  // Before the approval check, because an external gate is usually sitting at exactly
+  // that status — and it is the reason this group exists.
+  if (externalGateInPlay(input.pipeline)) return "waiting-others";
+
+  if (stages.some((stage) => stage.status === "awaiting-approval")) return "needs-you";
 
   const current = stages.find(
     (stage) => stage.status === "active" || stage.status === "pending",

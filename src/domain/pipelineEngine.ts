@@ -154,6 +154,9 @@ function createStage(
     ...(definition.checklistScope
       ? { checklistScope: definition.checklistScope }
       : {}),
+    ...(definition.checklistAudience
+      ? { checklistAudience: definition.checklistAudience }
+      : {}),
     ...(definition.requiredMcpServers && definition.requiredMcpServers.length > 0
       ? { requiredMcpServers: [...definition.requiredMcpServers] }
       : {}),

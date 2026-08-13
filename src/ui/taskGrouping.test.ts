@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { groupForTask, groupTasks, GROUP_ORDER } from "./taskGrouping";
+import {
+  externalWaitSince,
+  formatWaitingSince,
+  groupForTask,
+  groupTasks,
+  GROUP_ORDER,
+} from "./taskGrouping";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 
 const stage = (over: Partial<TaskStage> = {}): TaskStage =>
@@ -114,6 +120,96 @@ describe("groupForTask", () => {
     expect(
       of(pipeline([stage({ id: "a", status: "passed" }), stage({ id: "b", status: "skipped" })])),
     ).toBe("done");
+  });
+});
+
+describe("a gate somebody else answers", () => {
+  const gate = (over: Partial<TaskStage> = {}) =>
+    stage({
+      id: "uat",
+      name: "UAT acceptance",
+      kind: "humanVerification",
+      checklistScope: "uat",
+      checklistAudience: "others",
+      ...over,
+    });
+
+  it("is waiting on others while its items are outstanding", () => {
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("waiting-others");
+  });
+
+  it("is yours again once the items are ticked", () => {
+    // Approving is a decision only the operator makes, so a gate with nothing
+    // outstanding is a click and belongs back in the list they scan.
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: true, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("stays yours when the gate did not declare an audience", () => {
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval", checklistAudience: undefined }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("does not claim a task whose items belong to an earlier gate", () => {
+    // Per-gate, not pipeline-wide: an item the local gate answers for must not file
+    // the task as waiting on testers.
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "run it locally", checked: false, scope: "local", raisedByStage: "a" }] }),
+      stage({ id: "local", name: "Local check", kind: "humanVerification", status: "awaiting-approval", checklistScope: "local" }),
+      gate({ status: "pending" }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("is yours when a stage failed, whatever the gate is waiting on", () => {
+    const p = pipeline([
+      stage({ id: "a", status: "failed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("outranks the external wait with a held tool call", () => {
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p, 1)).toBe("needs-you");
+  });
+
+  it("reports when the wait started, so a forgotten task is visible", () => {
+    const p = pipeline([
+      stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),
+      gate({ status: "awaiting-approval", startedAt: "2026-08-01T09:00:00.000Z" }),
+    ]);
+    expect(externalWaitSince(p)).toBe("2026-08-01T09:00:00.000Z");
+    expect(externalWaitSince(pipeline([stage({ status: "active" })]))).toBeUndefined();
+  });
+});
+
+describe("formatWaitingSince", () => {
+  const at = (iso: string) => Date.parse(iso);
+
+  it("reports days and hours, not seconds", () => {
+    // These waits are answered on somebody else's schedule, so seconds are
+    // precision about a number nobody acts on.
+    expect(formatWaitingSince("2026-08-13T09:00:00Z", at("2026-08-13T09:30:00Z"))).toBe("30m");
+    expect(formatWaitingSince("2026-08-13T09:00:00Z", at("2026-08-13T14:00:00Z"))).toBe("5h");
+    expect(formatWaitingSince("2026-08-01T09:00:00Z", at("2026-08-13T09:00:00Z"))).toBe("12d");
+  });
+
+  it("does not invent an age it cannot compute", () => {
+    expect(formatWaitingSince("not a date", at("2026-08-13T09:00:00Z"))).toBe("waiting");
   });
 });
 

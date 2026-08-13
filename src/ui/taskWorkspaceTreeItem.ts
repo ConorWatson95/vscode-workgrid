@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { TaskGroupId } from "./taskGrouping";
+import { externalWaitSince, formatWaitingSince, TaskGroupId } from "./taskGrouping";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import {
   taskStatusPresentation,
@@ -103,6 +103,15 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     );
 
     const descriptionParts = [statusLabel];
+    // Moving these tasks out of the scan list is the point, but a delegated task is a
+    // task you forget — testers do not notify the tree. The age is what stops one that
+    // has sat for a fortnight looking like one handed over this morning.
+    const externalSince = externalWaitSince(task.pipeline);
+    if (externalSince) {
+      descriptionParts.unshift(
+        `with others — ${formatWaitingSince(externalSince, Date.now())}`,
+      );
+    }
     // Lead with the block: a route waiting on an answer is doing nothing, and
     // that is invisible otherwise.
     if (heldCallCount > 0) {
@@ -510,6 +519,7 @@ export class TaskGroupTreeItem extends vscode.TreeItem {
 const GROUP_ICONS: Record<TaskGroupId, string> = {
   "needs-you": "person",
   working: "loading~spin",
+  "waiting-others": "organization",
   parked: "circle-outline",
   done: "pass-filled",
   "no-route": "comment-discussion",
@@ -519,6 +529,7 @@ const GROUP_ICONS: Record<TaskGroupId, string> = {
 const GROUP_COLOURS: Record<TaskGroupId, vscode.ThemeColor | undefined> = {
   "needs-you": new vscode.ThemeColor("charts.yellow"),
   working: new vscode.ThemeColor("charts.blue"),
+  "waiting-others": new vscode.ThemeColor("charts.purple"),
   parked: undefined,
   done: new vscode.ThemeColor("charts.green"),
   "no-route": undefined,
@@ -529,6 +540,8 @@ const GROUP_TOOLTIPS: Record<TaskGroupId, string> = {
   "needs-you":
     "Stopped until you act: a gate awaiting approval, an unanswered question, a held tool call, a failed stage, or verification items outstanding at a sign-off.",
   working: "An agent is running a stage right now.",
+  "waiting-others":
+    "Stopped at a verification gate somebody else answers — testers on DEV, or a UAT acceptor. Nothing for you to do until they feed back, so it is kept out of the list above.",
   parked: "Has a route, but nothing is running and nothing is waiting on you. Advance it when you are ready.",
   done: "Every stage resolved.",
   "no-route": "A worktree and a chat, with no stages or gates.",
