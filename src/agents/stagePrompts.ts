@@ -1085,7 +1085,7 @@ export function parseNeedsInfo(text: string): string[] | undefined {
 export function parseSubtaskPlan(text: string): SubtaskSpec[] {
   const specs: SubtaskSpec[] = [];
 
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of unfencedLines(text)) {
     const line = raw.trim();
     const numbered = /^(?:\d+[.)]|[-*+])\s+(.*)$/.exec(line);
     if (!numbered) continue;
@@ -1117,7 +1117,7 @@ export function parseChecklistReply(
   if (/^\s*none\s*$/i.test(text)) return [];
 
   const items: { text: string; scope?: string }[] = [];
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of unfencedLines(text)) {
     const line = raw.trim();
     const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
     if (!bullet) continue;
@@ -1130,6 +1130,29 @@ export function parseChecklistReply(
     items.push(split.scope ? { text: split.text, scope: split.scope } : { text: split.text });
   }
   return items;
+}
+
+/**
+ * A reply's lines with fenced code blocks removed.
+ *
+ * Every parser here reads a bulleted or numbered line as a fact, and a fenced block
+ * is the one place a reply legitimately contains lines of that shape that are not
+ * facts — a split reply quoting a numbered script gains subtasks from its own
+ * example, and a checklist quoting a snippet gains items nobody can tick, which then
+ * hold a gate. Same guard `parsePlanSteps` and `parseReviewFindings` carry, and for
+ * the same reason.
+ */
+function unfencedLines(text: string): string[] {
+  const kept: string[] = [];
+  let inFence = false;
+  for (const raw of text.split(/\r?\n/)) {
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) kept.push(raw);
+  }
+  return kept;
 }
 
 function truncateTitle(text: string): string {

@@ -99,9 +99,32 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     plain = [];
   };
 
+  /** Whether we are inside a fenced code block. */
+  let fenced = false;
+
   for (const rawLine of reply.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
+
+    // A fenced code block is the finding's *evidence*, never findings of its own.
+    //
+    // The plain-line fallback below had no idea fences existed, so a section written
+    // as prose — one bolded sentence per problem, each followed by the offending
+    // three lines in a ```csharp block — parsed to one finding per *line of code*.
+    // A real review of two problems reported seven criticals, three of them
+    // statements out of the middle of a snippet and two of them the fence markers
+    // themselves, which then rendered as empty code boxes because "- ```csharp"
+    // opens a block that nothing closes. The count is what makes this worse than
+    // ugly: `hasBlockingFindings` and the severity summary both read it.
+    //
+    // Skipped rather than attached to the finding above: the snippet is an argument,
+    // and the full reply is shown verbatim under the findings, where there is room
+    // for it. Same trade `deferralHeadline` makes.
+    if (/^(?:`{3,}|~{3,})/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
 
     // A heading may carry the finding with it: "### Critical: the change is against
     // the wrong stored procedure" is one line that is both the section and the

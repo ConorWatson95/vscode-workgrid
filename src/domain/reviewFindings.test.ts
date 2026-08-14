@@ -306,6 +306,50 @@ describe("a heading that carries its finding", () => {
  * displayed them. Three criticals on screen, an empty list in the decision, and a route
  * that carried on to the next stage.
  */
+describe("a fenced code block", () => {
+  // The real review that found this: two problems written as prose, the first with
+  // the three offending lines quoted underneath. It parsed to seven criticals — the
+  // three statements, both fence markers, and the two actual findings — and the
+  // fences rendered as empty code boxes in the report.
+  const WITH_SNIPPET = [
+    "### Critical",
+    "",
+    "**`CreateCSV` discards the override it was just given.** `BaseController.cs:257-260`:",
+    "",
+    "```csharp",
+    "var exportOptions = exportOptionsOverride ?? DefaultCsvExportOptions;",
+    "exportOptions.WritePreamble = false;",
+    "exportOptions.ExportType = DevExpress.Export.ExportType.Default;",
+    "```",
+    "",
+    "The two lines after the resolve stomp ExportType back to Default",
+  ].join("\n");
+
+  it("is evidence for the finding above it, not findings of its own", () => {
+    const findings = parseReviewFindings(WITH_SNIPPET);
+    expect(findings).toHaveLength(2);
+    expect(summariseFindings(findings)).toBe("2 critical");
+  });
+
+  it("leaves no fence marker to render as an empty code block", () => {
+    expect(formatFindings(parseReviewFindings(WITH_SNIPPET))).not.toContain("```");
+  });
+
+  it("does not let a severity word inside code start a section", () => {
+    const findings = parseReviewFindings(
+      ["```", "// Critical", "throw new Exception();", "```"].join("\n"),
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("reads a bulleted section after the block as usual", () => {
+    const findings = parseReviewFindings(
+      ["```sql", "SELECT 1", "```", "", "## Important", "", "- the join double-counts"].join("\n"),
+    );
+    expect(findings).toEqual([{ severity: "important", text: "the join double-counts" }]);
+  });
+});
+
 describe("a section that uses no bullets", () => {
   const UNBULLETED = [
     "Critical",

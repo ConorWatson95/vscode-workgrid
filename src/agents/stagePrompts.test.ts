@@ -322,6 +322,15 @@ describe("parseSubtaskPlan", () => {
     expect(parseSubtaskPlan("- A — do a\n* B — do b")).toHaveLength(2);
   });
 
+  it("ignores a numbered list quoted inside a fenced block", () => {
+    const specs = parseSubtaskPlan(
+      ["1. Map DealerId — add a member mapping", "", "```", "1. old — from the ticket", "```"].join(
+        "\n",
+      ),
+    );
+    expect(specs.map((s) => s.title)).toEqual(["Map DealerId"]);
+  });
+
   it("ignores prose the model wraps around the list", () => {
     const specs = parseSubtaskPlan(`Sure! Here is my plan:
 
@@ -356,6 +365,15 @@ describe("parseChecklistReply", () => {
     expect(
       parseChecklistReply("- Edit an existing customer\n- Run a dealer report"),
     ).toEqual([{ text: "Edit an existing customer" }, { text: "Run a dealer report" }]);
+  });
+
+  it("ignores bullets quoted inside a fenced block", () => {
+    // They would be items nobody can tick, and an outstanding item holds a gate.
+    expect(
+      parseChecklistReply(
+        ["- Edit an existing customer", "", "```csv", "- Name,Code", "```"].join("\n"),
+      ),
+    ).toEqual([{ text: "Edit an existing customer" }]);
   });
 
   it("treats NONE as an empty but valid answer", () => {
