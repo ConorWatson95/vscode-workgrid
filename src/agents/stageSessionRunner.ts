@@ -21,6 +21,13 @@ export interface StageSession {
   /** What the CLI said went wrong, when it did. */
   readonly lastTurnError?: string;
   /**
+   * How the process ended: exit code, and whatever stderr it left.
+   *
+   * The only account available when a session stops having produced no assistant text
+   * — the path that used to report the bare string `session stopped`.
+   */
+  readonly exitDetail?: string;
+  /**
    * Cumulative cost and tokens for the session, once it has reported a result.
    *
    * Read from the session rather than accumulated from `items`: the CLI reports
@@ -368,7 +375,16 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
             ok: status === "stopped" && text.length > 0,
             text,
             sessionId: session.sessionId,
-            error: text.length > 0 ? undefined : `session ${status}`,
+            // `session stopped` on its own is a failure message carrying no
+            // information: a colleague's suggestion scan reported exactly that and
+            // there was nothing to act on. An unavailable MCP server has its own
+            // message and so does a timeout, so this path is everything else — which
+            // is when the CLI's own account of how it exited is the only account
+            // there is.
+            error:
+              text.length > 0
+                ? undefined
+                : `session ${status} — ${session.exitDetail ?? "no exit detail was recorded"}`,
             denials: denials(),
             activity: activity(),
           });

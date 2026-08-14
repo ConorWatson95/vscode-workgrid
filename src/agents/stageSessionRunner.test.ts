@@ -160,6 +160,32 @@ describe("ClaudeStageSessionRunner", () => {
     await expect(b).resolves.toMatchObject({ ok: false });
   });
 
+  it("says how the CLI exited when a stopped session produced nothing", async () => {
+    // `session stopped` on its own carried no information: a colleague's suggestion
+    // scan reported exactly that and there was nothing to act on. An unavailable MCP
+    // server has its own message and so does a timeout, so this path is everything
+    // else — which is when the CLI's own account is the only account there is.
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "scan:jira");
+    sessions.session.exitDetail = "the CLI exited with code 0; stderr: not logged in";
+    sessions.session.settle("stopped");
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("session stopped");
+    expect(result.error).toContain("not logged in");
+  });
+
+  it("says so plainly when even the exit detail is missing", async () => {
+    // Absence of a reason must not read as there being no reason.
+    const sessions = new FakeSessions();
+    const promise = runner(sessions).run(TASK, "p", "scan:jira");
+    sessions.session.settle("stopped");
+
+    const result = await promise;
+    expect(result.error).toContain("no exit detail was recorded");
+  });
+
   it("fails a session that died", async () => {
     const sessions = new FakeSessions();
     const promise = runner(sessions).run(TASK, "p", "stage:sub-1");

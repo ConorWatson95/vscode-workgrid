@@ -161,6 +161,19 @@ export class ClaudeStreamSession {
    * persisted. The one thing a failure has to carry is why.
    */
   lastTurnError?: string;
+
+  /**
+   * How the process ended, once it has: the exit code, and whatever stderr it left.
+   *
+   * Recorded because "stopped" with no assistant text was reported as the bare string
+   * `session stopped` -- a failure message carrying no information at all. A colleague
+   * hit it on a suggestion scan and there was nothing to act on: an MCP server that is
+   * unavailable says so, and a timeout says so, so this path is everything ELSE, which
+   * is precisely when the CLI's own account is the only account there is.
+   *
+   * stderr was already being kept for the turn-error path and thrown away here.
+   */
+  exitDetail?: string;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
   /** Model the CLI reported for this session (short form), once known. */
@@ -269,6 +282,12 @@ export class ClaudeStreamSession {
     this.child.on("close", (code) => {
       this.logger.info(`Claude session closed (code=${code ?? "null"}).`);
       this.busy = false;
+      // Captured before the status change, because setStatus is what wakes the waiting
+      // runner up -- and it reads this to explain an empty result.
+      const detail = this.stderrTail.trim();
+      this.exitDetail =
+        `the CLI exited ${code === null ? "without a code (killed)" : `with code ${code}`}` +
+        (detail ? `; stderr: ${redactSecrets(detail).slice(-600)}` : "; it wrote nothing to stderr");
       this.setStatus(code === 0 || code === null ? "stopped" : "failed");
     });
 
