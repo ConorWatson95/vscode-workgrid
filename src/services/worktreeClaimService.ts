@@ -4,6 +4,7 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import {
   CleanupFacts,
   WorktreeClaim,
+  claimsFromSnapshots,
   decideClaim,
   normaliseWorktreePath,
   planCleanup,
@@ -77,14 +78,14 @@ export class WorktreeClaimService {
   }
 
   /**
-   * Records every worktree that appeared while a stage ran, and reports any that
-   * another task already holds.
+   * Records every worktree a stage took — made, or checked something else out in — and
+   * reports any that another task already holds.
    *
    * Saves through the repository rather than returning a task, because the caller has
    * usually just saved the pipeline and a second in-memory copy would race it: the
    * state file is read-modify-write, and whichever copy was written last would win.
    */
-  async recordAppeared(
+  async recordStageClaims(
     taskId: string,
     before: WorktreeSnapshot | undefined,
     options: { stageId: string; at: string },
@@ -98,10 +99,7 @@ export class WorktreeClaimService {
     const after = await this.git.list(task.repositoryRoot);
     if (!after) return empty;
 
-    const known = new Set(before.map((entry) => normaliseWorktreePath(entry.path)));
-    const appeared = after.filter(
-      (entry) => !known.has(normaliseWorktreePath(entry.path)),
-    );
+    const appeared = claimsFromSnapshots(before, after);
     if (appeared.length === 0) return empty;
 
     // Only this repository's tasks: a claim is a path in one repo's worktree list, and a
@@ -114,8 +112,8 @@ export class WorktreeClaimService {
       const decision = decideClaim({
         taskId,
         path: entry.path,
-        branch: entry.branch ?? "",
-        facts: { exists: true, branch: entry.branch },
+        branch: entry.branch,
+        facts: { exists: true, branch: entry.branch || undefined },
         tasks,
       });
       // A conflict is reported and never forced. Checking out the branch we wanted over
@@ -131,11 +129,13 @@ export class WorktreeClaimService {
 
       const claim: WorktreeClaim = {
         path: entry.path,
-        branch: entry.branch ?? "",
+        branch: entry.branch,
         claimedAt: options.at,
-        // It was not there before this stage ran, so this task made it. That is the
-        // whole basis on which cleanup is allowed to remove it later.
-        created: true,
+        // Read from the observation, never assumed. `created` decides whether cleanup
+        // may remove the directory, and it used to be hardcoded true because appearing
+        // was the only thing detected — so a standing publish tree the stage merely
+        // checked a promotion branch out in was recorded as this task's to delete.
+        created: entry.created,
         stageId: options.stageId,
       };
       updated = recordClaim(updated, claim);
@@ -145,8 +145,12 @@ export class WorktreeClaimService {
     if (outcome.claimed.length > 0) {
       await this.repository.save({ ...updated, updatedAt: options.at });
       this.logger.info(
-        `Harness [${task.name}] claimed ${outcome.claimed.length} worktree(s) created by ` +
-          `"${options.stageId}": ${outcome.claimed.map((c) => c.path).join(", ")}.`,
+        `Harness [${task.name}] claimed ${outcome.claimed.length} worktree(s) during ` +
+          `"${options.stageId}": ` +
+          outcome.claimed
+            .map((c) => `${c.path} (${c.branch}, ${c.created ? "created" : "borrowed"})`)
+            .join(", ") +
+          ".",
       );
     }
     return outcome;

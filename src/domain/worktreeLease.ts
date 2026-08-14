@@ -55,6 +55,66 @@ export function normaliseWorktreePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+/** A worktree entry as git lists it, before or after a stage ran. */
+export interface WorktreeEntry {
+  path: string;
+  branch?: string;
+}
+
+/** A worktree a stage took, and whether taking it meant making it. */
+export interface ClaimCandidate {
+  path: string;
+  branch: string;
+  created: boolean;
+}
+
+/**
+ * What a stage took, from the worktree list before and after it ran.
+ *
+ * Two ways a stage takes one, and only the first was ever detected:
+ *
+ * - **It made it.** A path that was not there before — `promote/<ticket>-uat`, a fresh
+ *   publish tree. Created, and therefore cleanup's business later.
+ * - **It checked something out in a standing tree.** `qube-live-sm` was already there on
+ *   `LIVE_SingleMarket`; the stage put `promote/NMGB-2534-rescura-uat` in it and pushed
+ *   from there. Nothing appeared, so nothing was recorded, and the promotion branch
+ *   belonged to no task at all — which is how a promotion tree came to sit in the orphan
+ *   list as an unadopted stranger, produced by the harness itself.
+ *
+ * The second is a **borrowed** claim: the tree was not made here and must not be removed
+ * here, or the next publish has nowhere to run. `created` is the whole basis on which
+ * cleanup is allowed to act, so it is read from the observation rather than assumed —
+ * before this, every claim in existence said `created: true` because that was the only
+ * branch of code that wrote one.
+ *
+ * A tree that was already on the branch it ends on is not a claim. Every stage of every
+ * route would otherwise claim every worktree in the repository merely by running.
+ */
+export function claimsFromSnapshots(
+  before: readonly WorktreeEntry[],
+  after: readonly WorktreeEntry[],
+): ClaimCandidate[] {
+  const was = new Map(
+    before.map((entry) => [normaliseWorktreePath(entry.path), entry.branch]),
+  );
+  const candidates: ClaimCandidate[] = [];
+
+  for (const entry of after) {
+    const key = normaliseWorktreePath(entry.path);
+    if (!was.has(key)) {
+      candidates.push({ path: entry.path, branch: entry.branch ?? "", created: true });
+      continue;
+    }
+    // A detached tree reports no branch. Treated as no change rather than as a claim on
+    // nothing: there is no branch to attribute, so a claim would name an empty one.
+    if (!entry.branch) continue;
+    if (was.get(key) === entry.branch) continue;
+    candidates.push({ path: entry.path, branch: entry.branch, created: false });
+  }
+
+  return candidates;
+}
+
 /** What git currently reports about a path a task wants to claim. */
 export interface WorktreeFacts {
   exists: boolean;

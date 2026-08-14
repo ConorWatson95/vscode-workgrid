@@ -1033,6 +1033,25 @@ removed, the standing `qube-publish-*` trees must not be, or the next publish ha
 to run. Conflicts hold the stage and are never forced. **Branches are never deleted**: a
 worktree is a checkout that can be remade, a branch may hold the only copy of its commits.
 
+**Borrowing is a claim, and it is the one that was never recorded**
+(`claimsFromSnapshots`, 14 Aug 2026). `created` versus borrowed was documented as the
+distinction cleanup turns on, and only one branch of code ever wrote a claim — a path that
+*appeared* — with `created: true` hardcoded. So every claim in existence said created, and
+the other way a stage takes a worktree recorded nothing at all: a promotion stage checking
+`promote/<ticket>-uat` out **in a standing publish tree** makes no directory appear. Its
+branch therefore belonged to no task, and the tree it made it in was, for the first time,
+correctly attributed and wrongly marked as this task's to delete. Detection now diffs
+(path, branch) rather than path alone — a known path on a new branch is borrowed — off the
+same snapshots, so it costs no extra git call. A tree ending on the branch it started on is
+not a claim, or every stage would claim every worktree merely by running.
+
+**Orphans are excluded by claimed branch as well as claimed path.** A promotion tree is
+not the same directory twice: `promote/NMGB-2534-rescura-uat` was made, pushed and removed,
+and matching on the path read a remade one as belonging to nobody. The branch is what the
+claim is about — it is what the stage created, what carries the commits, and what survives
+the checkout being tidied away. The same set filters **Create Task from Existing Branch**,
+which was offering a task's own promotion branch as unadopted work.
+
 **Claims are recorded on every exit from a subtask**, not only the one that reads the
 reply. The worktrees exist the moment the session ends, whatever the reply is later
 taken to mean — and a promotion stage is the likeliest of all stages to leave by

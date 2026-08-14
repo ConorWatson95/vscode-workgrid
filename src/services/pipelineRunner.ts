@@ -1563,7 +1563,7 @@ export class PipelineRunner {
     // state file is read-modify-write, so a second in-memory copy of the task would
     // overwrite whichever of the two was written first.
     if (claimsBefore) {
-      const outcome = await this.claims!.recordAppeared(saved.id, claimsBefore, {
+      const outcome = await this.claims!.recordStageClaims(saved.id, claimsBefore, {
         stageId: stage.id,
         at: new Date().toISOString(),
       });
@@ -1627,7 +1627,7 @@ export class PipelineRunner {
   ): Promise<TaskWorkspace> {
     if (!claimsBefore || !this.claims) return task;
 
-    const outcome = await this.claims.recordAppeared(task.id, claimsBefore, {
+    const outcome = await this.claims.recordStageClaims(task.id, claimsBefore, {
       stageId: stage.id,
       at: new Date().toISOString(),
     });

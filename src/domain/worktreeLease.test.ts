@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CleanupFacts,
   WorktreeClaim,
+  claimsFromSnapshots,
   decideClaim,
   normaliseWorktreePath,
   planCleanup,
@@ -206,5 +207,71 @@ describe("planCleanup", () => {
   it("handles a task with no claims", () => {
     const plan = planCleanup(task(), []);
     expect(plan).toEqual({ remove: [], retain: [] });
+  });
+});
+
+describe("claimsFromSnapshots", () => {
+  it("claims a worktree that appeared, as created", () => {
+    expect(
+      claimsFromSnapshots(
+        [{ path: "C:/Dev/app-t1", branch: "feature/x" }],
+        [
+          { path: "C:/Dev/app-t1", branch: "feature/x" },
+          { path: "C:/Dev/promote-2792", branch: "promote/NMGB-2792-uat" },
+        ],
+      ),
+    ).toEqual([
+      { path: "C:/Dev/promote-2792", branch: "promote/NMGB-2792-uat", created: true },
+    ]);
+  });
+
+  // The case that recorded nothing at all. A promotion stage checks its branch out in
+  // the standing publish tree and pushes from there; no directory appears, so the
+  // branch it just created belonged to no task and showed up as an orphan.
+  it("claims a standing worktree that changed branch, as borrowed", () => {
+    expect(
+      claimsFromSnapshots(
+        [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
+        [{ path: "C:/Dev/qube-live-sm", branch: "promote/NMGB-2534-rescura-uat" }],
+      ),
+    ).toEqual([
+      {
+        path: "C:/Dev/qube-live-sm",
+        branch: "promote/NMGB-2534-rescura-uat",
+        created: false,
+      },
+    ]);
+  });
+
+  it("claims nothing when nothing moved", () => {
+    const listed = [
+      { path: "C:/Dev/app-t1", branch: "feature/x" },
+      { path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" },
+    ];
+    expect(claimsFromSnapshots(listed, listed)).toEqual([]);
+  });
+
+  it("ignores a worktree that went detached rather than claiming an empty branch", () => {
+    expect(
+      claimsFromSnapshots(
+        [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
+        [{ path: "C:/Dev/qube-live-sm" }],
+      ),
+    ).toEqual([]);
+  });
+
+  it("matches paths across separators and case", () => {
+    expect(
+      claimsFromSnapshots(
+        [{ path: "C:\\Dev\\Qube-Live-SM", branch: "LIVE_SingleMarket" }],
+        [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not care that a worktree disappeared", () => {
+    expect(
+      claimsFromSnapshots([{ path: "C:/Dev/gone", branch: "promote/x" }], []),
+    ).toEqual([]);
   });
 });

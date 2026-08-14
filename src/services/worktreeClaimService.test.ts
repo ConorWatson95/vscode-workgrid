@@ -56,7 +56,7 @@ function fakeGit(
   };
 }
 
-describe("recordAppeared", () => {
+describe("recordStageClaims", () => {
   it("claims a worktree that appeared while a stage ran, as created", () => {
     // Created, because it was not there before the stage: that is the whole basis on
     // which cleanup is later allowed to remove it.
@@ -75,7 +75,7 @@ describe("recordAppeared", () => {
     return (async () => {
       await repo.save(task());
       const before = await service.snapshot("C:/repos/app");
-      const outcome = await service.recordAppeared("t1", before, {
+      const outcome = await service.recordStageClaims("t1", before, {
         stageId: "promote-uat",
         at: AT,
       });
@@ -103,10 +103,49 @@ describe("recordAppeared", () => {
     await repo.save(task());
 
     const before = await service.snapshot("C:/repos/app");
-    const outcome = await service.recordAppeared("t1", before, { stageId: "s", at: AT });
+    const outcome = await service.recordStageClaims("t1", before, { stageId: "s", at: AT });
 
     expect(outcome).toEqual({ claimed: [], conflicts: [] });
     expect((await repo.get("t1"))?.worktreeClaims).toBeUndefined();
+  });
+
+  it("claims a standing worktree a stage checked a branch out in, as borrowed", async () => {
+    // The case that left `promote/NMGB-2534-rescura-uat` belonging to no task at all.
+    // Nothing appeared — the tree was already there — so nothing was recorded, and the
+    // promotion branch the stage had just created sat in the orphan list.
+    const git = fakeGit({
+      lists: [
+        [
+          { path: "C:/repos/app-t1", branch: "feature/NMGB-2792" },
+          { path: "C:/repos/qube-live-sm", branch: "LIVE_SingleMarket" },
+        ],
+        [
+          { path: "C:/repos/app-t1", branch: "feature/NMGB-2792" },
+          { path: "C:/repos/qube-live-sm", branch: "promote/NMGB-2792-uat" },
+        ],
+      ],
+    });
+    const repo = new InMemoryTaskRepository();
+    const service = new WorktreeClaimService(git, repo, logger);
+    await repo.save(task());
+
+    const before = await service.snapshot("C:/repos/app");
+    const outcome = await service.recordStageClaims("t1", before, {
+      stageId: "promote-uat",
+      at: AT,
+    });
+
+    expect(outcome.claimed).toEqual([
+      {
+        path: "C:/repos/qube-live-sm",
+        branch: "promote/NMGB-2792-uat",
+        claimedAt: AT,
+        // Borrowed: the tree was not made here, so cleanup must leave it exactly where
+        // it found it or the next publish has nowhere to run.
+        created: false,
+        stageId: "promote-uat",
+      },
+    ]);
   });
 
   it("reports a conflict instead of claiming a worktree another task holds", async () => {
@@ -136,7 +175,7 @@ describe("recordAppeared", () => {
     );
 
     const before = await service.snapshot("C:/repos/app");
-    const outcome = await service.recordAppeared("t1", before, { stageId: "publish", at: AT });
+    const outcome = await service.recordStageClaims("t1", before, { stageId: "publish", at: AT });
 
     expect(outcome.claimed).toEqual([]);
     expect(outcome.conflicts[0].reason).toContain("NMGB-2801");
@@ -147,7 +186,7 @@ describe("recordAppeared", () => {
     const repo = new InMemoryTaskRepository();
     const service = new WorktreeClaimService(fakeGit(), repo, logger);
     await repo.save(task());
-    expect(await service.recordAppeared("t1", undefined, { stageId: "s", at: AT })).toEqual({
+    expect(await service.recordStageClaims("t1", undefined, { stageId: "s", at: AT })).toEqual({
       claimed: [],
       conflicts: [],
     });

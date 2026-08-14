@@ -91,9 +91,17 @@ export function reconcileTasks(
   // a task whose worktree has gone missing is marked failed rather than deleted, and
   // the trees it claimed are still its responsibility until someone says otherwise.
   const claimedPaths = new Set<string>();
+  // Claimed *branches* too, because a promotion tree is not the same directory twice.
+  // `promote/NMGB-2534-rescura-uat` was made, pushed and removed, then remade at another
+  // path by a later stage — and matching on the path alone read the second one as
+  // belonging to nobody. The branch is what the claim is really about: it is what the
+  // stage created, what carries the commits, and what survives the checkout being
+  // tidied away.
+  const claimedBranches = new Set<string>();
   for (const task of storedTasks) {
     for (const claim of task.worktreeClaims ?? []) {
       claimedPaths.add(normalizePath(claim.path));
+      if (claim.branch) claimedBranches.add(claim.branch);
     }
   }
 
@@ -102,9 +110,9 @@ export function reconcileTasks(
     if (wt.bare) continue;
     if (isPrimaryWorktree(wt, repositoryRoot)) continue;
     const key = normalizePath(wt.path);
-    if (!matchedPaths.has(key) && !claimedPaths.has(key)) {
-      orphans.push({ worktree: wt });
-    }
+    if (matchedPaths.has(key) || claimedPaths.has(key)) continue;
+    if (wt.branch && claimedBranches.has(wt.branch)) continue;
+    orphans.push({ worktree: wt });
   }
 
   return { tasks, orphans };

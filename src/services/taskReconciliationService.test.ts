@@ -122,7 +122,8 @@ describe("claimed worktrees", () => {
       })),
     }) as unknown as TaskWorkspace;
 
-  const wt = (path: string) => ({ path, branch: "promote/x" }) as GitWorktree;
+  const wt = (path: string, branch = "promote/x") =>
+    ({ path, branch }) as GitWorktree;
 
   // A stage creating a promote/* tree is a task accounting for it. Before claims
   // existed these appeared as unadopted strangers — the harness filling its own
@@ -139,10 +140,26 @@ describe("claimed worktrees", () => {
   it("still reports a worktree nobody claimed", () => {
     const result = reconcileTasks(
       [taskAt("C:/repos/app-t1", ["C:/repos/promote-uat"])],
-      [wt("C:/repos/app-t1"), wt("C:/repos/promote-uat"), wt("C:/repos/stray")],
+      [
+        wt("C:/repos/app-t1"),
+        wt("C:/repos/promote-uat"),
+        wt("C:/repos/stray", "someone/else"),
+      ],
       REPO,
     );
     expect(result.orphans.map((o) => o.worktree.path)).toEqual(["C:/repos/stray"]);
+  });
+
+  // A promotion tree is not the same directory twice: the one for NMGB-2534 was made,
+  // pushed and removed, and a later stage remade it elsewhere. The branch is what the
+  // claim is really about, and it outlives any particular checkout of it.
+  it("does not report a claimed branch checked out at another path as an orphan", () => {
+    const result = reconcileTasks(
+      [taskAt("C:/repos/app-t1", ["C:/repos/promote-uat"])],
+      [wt("C:/repos/app-t1"), wt("C:/repos/promote-uat-2", "promote/x")],
+      REPO,
+    );
+    expect(result.orphans).toEqual([]);
   });
 
   // Windows hands back both spellings of the same directory.

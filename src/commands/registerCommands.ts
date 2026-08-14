@@ -36,6 +36,7 @@ import {
   CLAUDE_EXTENSION_ID,
 } from "./commandContext";
 import { createTaskWorkspaceCommand } from "./createTaskWorkspaceCommand";
+import { pickBaseBranch } from "./pickBaseBranch";
 import {
   linkSuggestionToTaskCommand,
   openSuggestionCommand,
@@ -3556,6 +3557,14 @@ async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
   // already a task does not need adopting.
   const tasks = await ctx.repository.getByRepository(repositoryRoot);
   const taken = new Set(tasks.map((task) => task.branchName));
+  // A branch a stage created is already somebody's work, whether or not a checkout of it
+  // still exists. `promote/NMGB-2534-rescura-uat` was offered here as unadopted work,
+  // when it is the Rescura task's own UAT promotion.
+  for (const task of tasks) {
+    for (const claim of task.worktreeClaims ?? []) {
+      if (claim.branch) taken.add(claim.branch);
+    }
+  }
   const worktrees = await ctx.worktrees.listWorktrees(repositoryRoot);
   if (worktrees.ok) {
     for (const worktree of worktrees.value) {
@@ -3573,6 +3582,7 @@ async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
   const branchName = await vscode.window.showQuickPick(candidates, {
     title: "Create Task from Existing Branch",
     placeHolder: "Which branch holds the work?",
+    ignoreFocusOut: true,
   });
   if (!branchName) return;
 
@@ -3580,6 +3590,7 @@ async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
     title: "Create Task from Existing Branch",
     prompt: "Task name",
     value: branchName.replace(/^.*\//, "").replace(/[-_]+/g, " ").trim(),
+    ignoreFocusOut: true,
     validateInput: (value) =>
       value.trim().length === 0 ? "Task name is required." : undefined,
   });
@@ -3587,18 +3598,12 @@ async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
 
   // Asked, never guessed. This is what later stages diff against, so a wrong answer
   // makes every review read the wrong set of changes.
-  let defaultBase = ctx.configuration.defaultBaseBranch(scope);
-  if (!defaultBase) {
-    const current = await ctx.worktrees.getCurrentBranch(repositoryRoot);
-    defaultBase = current.ok && current.value ? current.value : "HEAD";
-  }
-  const baseBranch = await vscode.window.showInputBox({
-    title: "Create Task from Existing Branch",
-    prompt: "Base branch — what this work should be compared against",
-    value: defaultBase,
-    validateInput: (value) =>
-      value.trim().length === 0 ? "Base branch is required." : undefined,
-  });
+  const baseBranch = await pickBaseBranch(
+    ctx,
+    repositoryRoot,
+    scope,
+    "Create Task from Existing Branch",
+  );
   if (!baseBranch) return;
 
   const created = await withStatus(`Adopting ${branchName}`, async (step) => {
@@ -3607,7 +3612,7 @@ async function adoptBranchCommand(ctx: CommandContext): Promise<void> {
       repositoryRoot,
       name,
       branchName,
-      baseBranch: baseBranch.trim(),
+      baseBranch,
       configuredParentDir: ctx.configuration.worktreeParentDir(scope),
     });
   });
