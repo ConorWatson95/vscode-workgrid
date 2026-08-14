@@ -10,9 +10,16 @@ let tempCounter = 0;
  * that touches `fs`, so everything above it is testable with a fake.
  */
 export class NodeStateFileIo implements StateFileIo {
+  /**
+   * Retried on the same transient codes as the write, and for a sharper reason: a
+   * read that fails is not merely an error message. `undefined` here means *no state
+   * file*, which is the marker for "this repository has not adopted the Memento
+   * yet" — so an out-of-descriptors burst must never be allowed to look like one.
+   * Hence the retry, and hence only `ENOENT` returning undefined.
+   */
   async read(filePath: string): Promise<string | undefined> {
     try {
-      return await fs.readFile(filePath, "utf8");
+      return await retryOnTransientFsError(() => fs.readFile(filePath, "utf8"));
     } catch (error) {
       if (isNotFound(error)) return undefined;
       throw error;
@@ -41,7 +48,9 @@ export class NodeStateFileIo implements StateFileIo {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const temp = `${filePath}.${process.pid}.${tempCounter++}.tmp`;
     try {
-      await fs.writeFile(temp, contents, "utf8");
+      // The scratch write is retried too: it is a fresh descriptor under exactly the
+      // burst that exhausts them, and failing here loses the transition entirely.
+      await retryOnTransientFsError(() => fs.writeFile(temp, contents, "utf8"));
       await retryOnTransientFsError(() => fs.rename(temp, filePath));
     } catch (error) {
       // Leaving scratch files behind would accumulate in the git dir forever.

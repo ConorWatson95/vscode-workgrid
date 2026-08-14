@@ -15,6 +15,13 @@ describe("isTransientFsError", () => {
     expect(isTransientFsError(fsError("EBUSY"))).toBe(true);
   });
 
+  it("treats running out of descriptors as transient", () => {
+    // A render's 18 concurrent git spawns alongside a running stage: a burst, not a
+    // file that cannot be opened.
+    expect(isTransientFsError(fsError("EMFILE"))).toBe(true);
+    expect(isTransientFsError(fsError("ENFILE"))).toBe(true);
+  });
+
   it("does not treat a missing path or a plain error as transient", () => {
     expect(isTransientFsError(fsError("ENOENT"))).toBe(false);
     expect(isTransientFsError(new Error("boom"))).toBe(false);

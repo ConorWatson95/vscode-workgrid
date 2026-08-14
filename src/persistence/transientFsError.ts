@@ -18,8 +18,25 @@
  * a locked file.
  */
 
-/** Errors that mean "someone else has it open", not "you may not do this". */
-const TRANSIENT_CODES = new Set(["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
+/**
+ * Errors that mean "not right now", not "you may not do this".
+ *
+ * `EMFILE`/`ENFILE` are the second kind and arrived the same way as the first: a
+ * single tree render is 18 concurrent git spawns holding three pipes each, and with
+ * a stage session running and the report provider's timer re-reading a 3MB state
+ * file, the host momentarily has no descriptors left. It is a burst, it clears in
+ * milliseconds, and nothing about it says the file cannot be read — but reported
+ * raw it reads as the state file being unopenable, which is the most alarming thing
+ * this extension can say.
+ */
+const TRANSIENT_CODES = new Set([
+  "EPERM",
+  "EACCES",
+  "EBUSY",
+  "ENOTEMPTY",
+  "EMFILE",
+  "ENFILE",
+]);
 
 export function isTransientFsError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
