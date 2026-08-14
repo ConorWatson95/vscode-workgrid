@@ -6,6 +6,7 @@ import { RouteDefinition, assessmentStageDefinition } from "../domain/taskRoute"
 import { createPipeline } from "../domain/pipelineEngine";
 import { loadHarness } from "../services/reviewRulesService";
 import { withStatus } from "../ui/statusProgress";
+import { pickBaseBranch } from "./pickBaseBranch";
 
 /**
  * Multi-step create flow: name → branch type → base branch → description,
@@ -37,6 +38,11 @@ export async function createTaskWorkspaceCommand(
     prompt: "Task name",
     value: prefill?.name,
     placeHolder: "e.g. Campaign performance report",
+    // Every step of this flow survives focus loss. The answers are cumulative and
+    // several of them need looking something up — a ticket, a branch, what is already
+    // deployed — so a prompt that vanishes when you go and check throws the whole
+    // sequence away, and the next attempt is made from memory instead.
+    ignoreFocusOut: true,
     validateInput: (value) =>
       value.trim().length === 0 ? "Task name is required." : undefined,
   });
@@ -46,22 +52,16 @@ export async function createTaskWorkspaceCommand(
   const branchPrefix = await vscode.window.showQuickPick(prefixes, {
     title: "Create Task Workspace",
     placeHolder: "Branch type",
+    ignoreFocusOut: true,
   });
   if (!branchPrefix) return;
 
-  // Resolve default base branch (config, else current HEAD branch).
-  let defaultBase = ctx.configuration.defaultBaseBranch(scope);
-  if (!defaultBase) {
-    const current = await ctx.worktrees.getCurrentBranch(repositoryRoot);
-    defaultBase = current.ok && current.value ? current.value : "HEAD";
-  }
-  const baseBranch = await vscode.window.showInputBox({
-    title: "Create Task Workspace",
-    prompt: "Base branch",
-    value: defaultBase,
-    validateInput: (value) =>
-      value.trim().length === 0 ? "Base branch is required." : undefined,
-  });
+  const baseBranch = await pickBaseBranch(
+    ctx,
+    repositoryRoot,
+    scope,
+    "Create Task Workspace",
+  );
   if (!baseBranch) return;
 
   // Choosing a route is what harnesses the task: it fixes the stages the work
@@ -108,6 +108,7 @@ export async function createTaskWorkspaceCommand(
   const routeChoice = await vscode.window.showQuickPick(items, {
     title: "Create Task Workspace",
     placeHolder: "How should this work be run?",
+    ignoreFocusOut: true,
   });
   if (!routeChoice) return;
 
@@ -138,6 +139,7 @@ export async function createTaskWorkspaceCommand(
       {
         title: "Has any of this work already been done?",
         placeHolder: "Including work done by hand, or deployed but never committed.",
+        ignoreFocusOut: true,
       },
     );
     if (!started) return;
@@ -156,6 +158,7 @@ export async function createTaskWorkspaceCommand(
     placeHolder: routeChoice.route
       ? "A ticket reference is fine; stages will ask if they need more."
       : "What is this task about?",
+    ignoreFocusOut: true,
   });
   // A cancelled (Escape) description returns undefined; treat as no description.
 
