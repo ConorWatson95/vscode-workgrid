@@ -1033,6 +1033,27 @@ removed, the standing `qube-publish-*` trees must not be, or the next publish ha
 to run. Conflicts hold the stage and are never forced. **Branches are never deleted**: a
 worktree is a checkout that can be remade, a branch may hold the only copy of its commits.
 
+**A worktree appearing during a stage says nothing about who made it**
+(`domain/claimEvidence.ts`, 14 Aug 2026). Detection diffed the repository's worktree list
+before and after a stage and recorded everything that appeared as the stage's doing —
+which is an inference about the clock, not about the agent, over a window minutes long on
+a repository one operator and several concurrent tasks all work in. The operator created
+`C:/Dev/qube-live-sm` by hand for unrelated work while a promotion stage happened to be
+running; it was filed as that task's, `created: true`, the class cleanup may delete. The
+same window catches another task's concurrent stage and a branch switched by hand.
+Attribution now needs evidence the harness already holds: a claim requires the path to
+have appeared **and** one of the stage's own commands to name it — `SubtaskActivity.commands`
+are recorded verbatim for exactly this kind of after-the-fact question. Three rules. The
+match is on the **last path segment**, deliberately looser than comparing whole paths,
+because a command spells a path however its own shell does (`C:/Dev/x`, `/c/Dev/x`,
+`../x`) and a claim lost to a spelling difference is a real worktree attributed to nobody
+— loose is safe only as a *conjunction* with having appeared. The commands come from the
+**reply**, never re-read from the pipeline: every early exit reverts the subtask, which
+discards its activity, and those are exactly the paths a promotion stage leaves by. And
+the failure direction is chosen — a tree the stage really made but never named is claimed
+by nobody and lists as an orphan, which is visible and reversible, where the other
+failure deletes somebody's directory.
+
 **Borrowing is a claim, and it is the one that was never recorded**
 (`claimsFromSnapshots`, 14 Aug 2026). `created` versus borrowed was documented as the
 distinction cleanup turns on, and only one branch of code ever wrote a claim — a path that

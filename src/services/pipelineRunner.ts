@@ -1160,6 +1160,7 @@ export class PipelineRunner {
             claimsBefore,
             stage,
             steps,
+            reply.activity?.commands ?? [],
           ),
           failed: false,
           denied: denials,
@@ -1180,6 +1181,7 @@ export class PipelineRunner {
           claimsBefore,
           stage,
           steps,
+          reply.activity?.commands ?? [],
         ),
         failed: false,
         cancelled: true,
@@ -1210,6 +1212,7 @@ export class PipelineRunner {
           claimsBefore,
           stage,
           steps,
+          reply.activity?.commands ?? [],
         ),
         failed: false,
         question,
@@ -1566,6 +1569,7 @@ export class PipelineRunner {
       const outcome = await this.claims!.recordStageClaims(saved.id, claimsBefore, {
         stageId: stage.id,
         at: new Date().toISOString(),
+        commands: reply.activity?.commands ?? [],
       });
       if (outcome.claimed.length > 0) {
         saved = (await this.repository.get(saved.id)) ?? saved;
@@ -1624,12 +1628,14 @@ export class PipelineRunner {
     claimsBefore: WorktreeSnapshot | undefined,
     stage: TaskStage,
     steps: string[],
+    commands: readonly string[],
   ): Promise<TaskWorkspace> {
     if (!claimsBefore || !this.claims) return task;
 
     const outcome = await this.claims.recordStageClaims(task.id, claimsBefore, {
       stageId: stage.id,
       at: new Date().toISOString(),
+      commands,
     });
     if (outcome.claimed.length === 0 && outcome.conflicts.length === 0) return task;
 

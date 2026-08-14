@@ -1,4 +1,5 @@
 import { TaskWorkspace } from "./taskWorkspace";
+import { pathNamedInCommands } from "./claimEvidence";
 
 /**
  * Who owns which worktree, and which ones a finished task may tidy away.
@@ -89,10 +90,15 @@ export interface ClaimCandidate {
  *
  * A tree that was already on the branch it ends on is not a claim. Every stage of every
  * route would otherwise claim every worktree in the repository merely by running.
+ *
+ * Appearing is necessary and **not sufficient**: the stage's own commands must name the
+ * path, or the claim is an inference about the clock rather than about the agent. See
+ * `claimEvidence.ts` for the hand-made worktree that was filed as a task's to delete.
  */
 export function claimsFromSnapshots(
   before: readonly WorktreeEntry[],
   after: readonly WorktreeEntry[],
+  commands: readonly string[],
 ): ClaimCandidate[] {
   const was = new Map(
     before.map((entry) => [normaliseWorktreePath(entry.path), entry.branch]),
@@ -101,6 +107,9 @@ export function claimsFromSnapshots(
 
   for (const entry of after) {
     const key = normaliseWorktreePath(entry.path);
+    // Both kinds need the evidence, not only the created ones: a branch switched by hand
+    // in a standing tree during a stage is the same false attribution one level down.
+    if (!pathNamedInCommands(entry.path, commands)) continue;
     if (!was.has(key)) {
       candidates.push({ path: entry.path, branch: entry.branch ?? "", created: true });
       continue;

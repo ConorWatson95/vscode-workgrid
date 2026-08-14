@@ -78,6 +78,7 @@ describe("recordStageClaims", () => {
       const outcome = await service.recordStageClaims("t1", before, {
         stageId: "promote-uat",
         at: AT,
+        commands: ["git worktree add C:/repos/promote-2792-uat -b promote/NMGB-2792-uat"],
       });
 
       expect(outcome.conflicts).toEqual([]);
@@ -95,6 +96,36 @@ describe("recordStageClaims", () => {
     })();
   });
 
+  it("claims nothing when a worktree appeared that the stage never named", async () => {
+    // 14 Aug 2026: the operator created C:/Dev/qube-live-sm by hand for unrelated work
+    // while a promotion stage happened to be running. It was filed as that task's, in
+    // the class cleanup may delete. The stage's commands are the evidence; the clock is
+    // not.
+    const git = fakeGit({
+      lists: [
+        [{ path: "C:/repos/app-t1", branch: "feature/NMGB-2792" }],
+        [
+          { path: "C:/repos/app-t1", branch: "feature/NMGB-2792" },
+          { path: "C:/repos/qube-live-sm", branch: "LIVE_SingleMarket" },
+        ],
+      ],
+    });
+    const repo = new InMemoryTaskRepository();
+    const service = new WorktreeClaimService(git, repo, logger);
+    await repo.save(task());
+
+    const before = await service.snapshot("C:/repos/app");
+    const outcome = await service.recordStageClaims("t1", before, {
+      stageId: "promote-uat",
+      at: AT,
+      // Nothing here names the worktree that appeared, so nothing is claimed.
+      commands: ["git status --porcelain", "git log origin/DEV --oneline -n 5"],
+    });
+
+    expect(outcome).toEqual({ claimed: [], conflicts: [] });
+    expect((await repo.get("t1"))?.worktreeClaims).toBeUndefined();
+  });
+
   it("claims nothing when the stage created nothing", async () => {
     const listed = [{ path: "C:/repos/app-t1", branch: "feature/NMGB-2792" }];
     const git = fakeGit({ lists: [listed] });
@@ -103,7 +134,11 @@ describe("recordStageClaims", () => {
     await repo.save(task());
 
     const before = await service.snapshot("C:/repos/app");
-    const outcome = await service.recordStageClaims("t1", before, { stageId: "s", at: AT });
+    const outcome = await service.recordStageClaims("t1", before, {
+      stageId: "s",
+      at: AT,
+      commands: [],
+    });
 
     expect(outcome).toEqual({ claimed: [], conflicts: [] });
     expect((await repo.get("t1"))?.worktreeClaims).toBeUndefined();
@@ -133,6 +168,7 @@ describe("recordStageClaims", () => {
     const outcome = await service.recordStageClaims("t1", before, {
       stageId: "promote-uat",
       at: AT,
+      commands: ["git -C C:/repos/qube-live-sm checkout promote/NMGB-2792-uat"],
     });
 
     expect(outcome.claimed).toEqual([
@@ -175,7 +211,11 @@ describe("recordStageClaims", () => {
     );
 
     const before = await service.snapshot("C:/repos/app");
-    const outcome = await service.recordStageClaims("t1", before, { stageId: "publish", at: AT });
+    const outcome = await service.recordStageClaims("t1", before, {
+      stageId: "publish",
+      at: AT,
+      commands: ["git worktree add C:/repos/qube-publish-sm live"],
+    });
 
     expect(outcome.claimed).toEqual([]);
     expect(outcome.conflicts[0].reason).toContain("NMGB-2801");
@@ -186,7 +226,11 @@ describe("recordStageClaims", () => {
     const repo = new InMemoryTaskRepository();
     const service = new WorktreeClaimService(fakeGit(), repo, logger);
     await repo.save(task());
-    expect(await service.recordStageClaims("t1", undefined, { stageId: "s", at: AT })).toEqual({
+    expect(await service.recordStageClaims("t1", undefined, {
+        stageId: "s",
+        at: AT,
+        commands: [],
+      })).toEqual({
       claimed: [],
       conflicts: [],
     });

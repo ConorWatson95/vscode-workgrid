@@ -21,11 +21,12 @@ import {
  *
  * **Claims are detected, not requested.** The worktrees this exists to track are made
  * by an agent inside a stage — `git worktree add promote/<ticket>-uat` — not by the
- * extension, so there is no call to hook. What the harness can do is look at the
- * worktree list before and after such a stage: anything that appeared, this task
- * created. Anything that was already there, it borrowed. That is precisely the
- * created-versus-borrowed distinction cleanup turns on, and it comes out of the
- * observation for free rather than relying on a stage to declare it.
+ * extension, so there is no call to hook. What the harness can do is compare the worktree
+ * list before and after such a stage against the commands the stage actually ran: a path
+ * that appeared is created, a path already there on a new branch is borrowed, and either
+ * way one of the stage's own commands has to name it. That last requirement is not
+ * belt-and-braces — see `claimEvidence.ts`. Without it the detection is about the clock,
+ * and it filed a worktree the operator made by hand as a task's to delete.
  */
 
 /** The git operations claim-keeping needs, and nothing else. */
@@ -88,7 +89,7 @@ export class WorktreeClaimService {
   async recordStageClaims(
     taskId: string,
     before: WorktreeSnapshot | undefined,
-    options: { stageId: string; at: string },
+    options: { stageId: string; at: string; commands: readonly string[] },
   ): Promise<ClaimOutcome> {
     const empty: ClaimOutcome = { claimed: [], conflicts: [] };
     if (!before) return empty;
@@ -99,7 +100,13 @@ export class WorktreeClaimService {
     const after = await this.git.list(task.repositoryRoot);
     if (!after) return empty;
 
-    const appeared = claimsFromSnapshots(before, after);
+    // The commands come from the reply the caller is holding, not from the pipeline.
+    // Every early exit — a question, a stop, a held permission — *reverts* the subtask,
+    // which discards its activity, and those are exactly the paths a promotion stage
+    // leaves by. Read from the pipeline, the evidence would be gone precisely when it
+    // was needed. A stage that recorded no commands claims nothing, which is right:
+    // there is nothing to say it touched a worktree.
+    const appeared = claimsFromSnapshots(before, after, options.commands);
     if (appeared.length === 0) return empty;
 
     // Only this repository's tasks: a claim is a path in one repo's worktree list, and a

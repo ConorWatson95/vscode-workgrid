@@ -211,6 +211,10 @@ describe("planCleanup", () => {
 });
 
 describe("claimsFromSnapshots", () => {
+  const MADE_PROMOTE = [
+    "git worktree add C:/Dev/promote-2792 -b promote/NMGB-2792-uat origin/UAT",
+  ];
+
   it("claims a worktree that appeared, as created", () => {
     expect(
       claimsFromSnapshots(
@@ -219,6 +223,7 @@ describe("claimsFromSnapshots", () => {
           { path: "C:/Dev/app-t1", branch: "feature/x" },
           { path: "C:/Dev/promote-2792", branch: "promote/NMGB-2792-uat" },
         ],
+        MADE_PROMOTE,
       ),
     ).toEqual([
       { path: "C:/Dev/promote-2792", branch: "promote/NMGB-2792-uat", created: true },
@@ -233,6 +238,7 @@ describe("claimsFromSnapshots", () => {
       claimsFromSnapshots(
         [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
         [{ path: "C:/Dev/qube-live-sm", branch: "promote/NMGB-2534-rescura-uat" }],
+        ["git -C C:/Dev/qube-live-sm checkout promote/NMGB-2534-rescura-uat"],
       ),
     ).toEqual([
       {
@@ -243,12 +249,54 @@ describe("claimsFromSnapshots", () => {
     ]);
   });
 
+  // The 14 Aug 2026 incident. The operator made this worktree by hand for unrelated work
+  // while a promotion stage happened to be running; it was filed as that task's, in the
+  // class cleanup may delete. Appearing during a window says nothing about who acted.
+  it("claims nothing the stage's own commands do not name", () => {
+    expect(
+      claimsFromSnapshots(
+        [{ path: "C:/Dev/app-t1", branch: "feature/x" }],
+        [
+          { path: "C:/Dev/app-t1", branch: "feature/x" },
+          { path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" },
+        ],
+        ["git status --porcelain", "git log origin/DEV --oneline -n 5"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("claims nothing when the stage recorded no commands at all", () => {
+    expect(
+      claimsFromSnapshots(
+        [],
+        [{ path: "C:/Dev/promote-2792", branch: "promote/NMGB-2792-uat" }],
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  // A command spells a path however its own shell does. A claim lost to a spelling
+  // difference is a real worktree attributed to nobody, so the last segment decides —
+  // safe only because appearing in this repository during this stage is also required.
+  it("matches a path a command spelt differently", () => {
+    const after = [{ path: "C:/Dev/worktrees/promote-2792", branch: "promote/x" }];
+    for (const command of [
+      "git worktree add /c/Dev/worktrees/promote-2792 promote/x",
+      "cd ..\\PROMOTE-2792 && git push",
+      "git -C ../promote-2792 status",
+    ]) {
+      expect(claimsFromSnapshots([], after, [command])).toHaveLength(1);
+    }
+  });
+
   it("claims nothing when nothing moved", () => {
     const listed = [
       { path: "C:/Dev/app-t1", branch: "feature/x" },
       { path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" },
     ];
-    expect(claimsFromSnapshots(listed, listed)).toEqual([]);
+    expect(claimsFromSnapshots(listed, listed, ["git -C C:/Dev/qube-live-sm log"])).toEqual(
+      [],
+    );
   });
 
   it("ignores a worktree that went detached rather than claiming an empty branch", () => {
@@ -256,6 +304,7 @@ describe("claimsFromSnapshots", () => {
       claimsFromSnapshots(
         [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
         [{ path: "C:/Dev/qube-live-sm" }],
+        ["git -C C:/Dev/qube-live-sm checkout --detach"],
       ),
     ).toEqual([]);
   });
@@ -265,13 +314,18 @@ describe("claimsFromSnapshots", () => {
       claimsFromSnapshots(
         [{ path: "C:\\Dev\\Qube-Live-SM", branch: "LIVE_SingleMarket" }],
         [{ path: "C:/Dev/qube-live-sm", branch: "LIVE_SingleMarket" }],
+        ["git -C C:/Dev/qube-live-sm status"],
       ),
     ).toEqual([]);
   });
 
   it("does not care that a worktree disappeared", () => {
     expect(
-      claimsFromSnapshots([{ path: "C:/Dev/gone", branch: "promote/x" }], []),
+      claimsFromSnapshots(
+        [{ path: "C:/Dev/gone", branch: "promote/x" }],
+        [],
+        ["git worktree remove C:/Dev/gone"],
+      ),
     ).toEqual([]);
   });
 });

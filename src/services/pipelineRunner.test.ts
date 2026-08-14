@@ -70,7 +70,10 @@ function task(): TaskWorkspace {
 
 /** Records prompts and replies with canned text, keyed by label prefix. */
 function fakeSessions(
-  replies: Record<string, { ok?: boolean; text: string }> = {},
+  replies: Record<
+    string,
+    { ok?: boolean; text: string; activity?: { commands?: string[] } }
+  > = {},
 ): StageSessionRunner & { calls: { label: string; prompt: string }[] } {
   const calls: { label: string; prompt: string }[] = [];
   return {
@@ -86,6 +89,9 @@ function fakeSessions(
         ok: reply?.ok ?? true,
         text: reply?.text ?? "done",
         error: (reply?.ok ?? true) ? undefined : "agent failed",
+        // Commands are what a worktree claim is attributed by, so a test about claims has
+        // to say what the stage ran.
+        activity: reply?.activity,
       };
     },
   };
@@ -1982,7 +1988,16 @@ describe("worktree claims", () => {
   it("records a worktree the stage created against the task", async () => {
     // The stage makes it with `git worktree add`, not the extension, so the only way to
     // know is that it was not in the list before the stage ran.
-    const sessions = fakeSessions({ "": { text: "Cherry-picked and pushed." } });
+    const sessions = fakeSessions({
+      "": {
+        text: "Cherry-picked and pushed.",
+        // The attribution: the stage's own commands name the tree. Appearing in the list
+        // is necessary and not sufficient — see claimEvidence.ts.
+        activity: {
+          commands: ["git worktree add C:/repos/promote-uat -b promote/t1-uat origin/UAT"],
+        },
+      },
+    });
     const { runner, repo } = moverRunner(sessions, [
       [{ path: "C:/repos/app-t1", branch: "bug/dealer-mapping" }],
       [
@@ -2013,7 +2028,12 @@ describe("worktree claims", () => {
   it("holds the stage when the worktree belongs to another task", async () => {
     // Two tasks promoting through one tree interleave their cherry-picks. The previous
     // warning was an agent noticing it in `git worktree list` and saying so in prose.
-    const sessions = fakeSessions({ "": { text: "Cherry-picked." } });
+    const sessions = fakeSessions({
+      "": {
+        text: "Cherry-picked.",
+        activity: { commands: ["git worktree add C:/repos/qube-publish-sm live"] },
+      },
+    });
     const { runner, repo } = moverRunner(sessions, [
       [{ path: "C:/repos/app-t1" }],
       [{ path: "C:/repos/app-t1" }, { path: "C:/repos/qube-publish-sm", branch: "live" }],
@@ -2048,7 +2068,12 @@ describe("worktree claims", () => {
   // an orphan the harness itself created.
   it("records a worktree even when the stage ends by asking a question", async () => {
     const sessions = fakeSessions({
-      "": { text: "NEEDS-INFO:\n1. Which environment should this promote to?" },
+      "": {
+        text: "NEEDS-INFO:\n1. Which environment should this promote to?",
+        activity: {
+          commands: ["git worktree add C:/repos/promote-uat -b promote/t1-uat origin/UAT"],
+        },
+      },
     });
     const { runner, repo } = moverRunner(sessions, [
       [{ path: "C:/repos/app-t1", branch: "bug/dealer-mapping" }],
@@ -2076,7 +2101,13 @@ describe("worktree claims", () => {
     const sessions: StageSessionRunner = {
       async run() {
         controller.abort();
-        return { ok: true, text: "Cherry-picked." };
+        return {
+          ok: true,
+          text: "Cherry-picked.",
+          activity: {
+            commands: ["git worktree add C:/repos/promote-uat -b promote/t1-uat origin/UAT"],
+          },
+        };
       },
     };
     const { runner, repo } = moverRunner(sessions, [
