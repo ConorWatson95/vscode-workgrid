@@ -4,6 +4,7 @@ import { resolveTask } from "./registerCommands";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { MergeOutcome } from "../git/mergeOutcome";
 import { withStatus } from "../ui/statusProgress";
+import { describeDiscard } from "../domain/worktreeDiscard";
 
 /**
  * Brings a branch — the task's base by default — into the task's worktree.
@@ -32,6 +33,28 @@ export async function mergeIntoTaskCommand(
 
   const branch = await chooseBranch(ctx, task);
   if (!branch) return;
+
+  // Before the tree is read, so the commit-or-stash question is asked about work rather
+  // than about environment. Without this the command offered to commit a Web.config
+  // transformed to run the solution against another tenant, and eight tracked build
+  // artifacts a build had rewritten with the other line ending — nine files, none of
+  // them work, and the two ways out were to commit them or to stash and restore them.
+  //
+  // Same call the runner makes before a stage's `verify`, and it announces itself the
+  // same way: this is the one thing here that destroys work rather than reporting on
+  // it, so it is never silent, and a staged change is never touched — staging one is
+  // how a real Web.config edit is kept through this.
+  const discarded = await withStatus(`Checking "${task.name}" for local changes`, () =>
+    ctx.discards.discard(task.worktreePath),
+  );
+  const announcement = discarded ? describeDiscard(discarded) : undefined;
+  if (announcement) {
+    ctx.logger.warn(`Merge into "${task.name}": ${announcement}`);
+    void vscode.window.showInformationMessage(announcement.split("\n")[0], "Show Log")
+      .then((choice) => {
+        if (choice === "Show Log") ctx.logger.show?.();
+      });
+  }
 
   // After the branch is chosen, not before. Committing or stashing is a real change to
   // the worktree, and doing it in front of a picker the user then escapes would leave

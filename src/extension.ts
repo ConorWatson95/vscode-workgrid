@@ -1014,6 +1014,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     worktrees: worktreeService,
     status: statusService,
     merges: mergeService,
+    discards: worktreeDiscards,
     repository,
     configuration,
     terminals,

@@ -986,6 +986,15 @@ Five rules, each load-bearing:
   check failing for the wrong reason, and failing the stage on its own account would trade
   one spurious failure for another.
 
+**A dirty tree blocks two things, so the discard has two call sites.** The second is
+`mergeIntoTaskCommand`, before `getLiveState`: that command answers a dirty worktree by
+offering to commit or stash, which is right for work and wrong for environment — it was
+offering to *commit* a Web.config pointed at another tenant's database. Both callers run
+it at the same moment for the same reason, before anything reads the tree, and neither
+suppresses the announcement. Note where it is **not**: `firstBlocker` still refuses a
+running session and a branch mismatch before any of this, because a tree being altered
+under a live agent is a different problem that a discard would make worse.
+
 The honest fix for the build output is still to untrack it — `.gitignore` covers
 `QubeAutoApp.Mapping.Services/bin/` and not `QubeAutoApp.Mapping.Data/bin/`, which is the
 whole bug. This makes the routes work meanwhile.

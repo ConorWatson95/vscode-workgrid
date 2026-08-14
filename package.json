@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.97.0",
+  "version": "0.97.1",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",

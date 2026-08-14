@@ -3,6 +3,7 @@ import { TaskWorkspaceService } from "../services/taskWorkspaceService";
 import { GitWorktreeService } from "../git/gitWorktreeService";
 import { GitStatusService } from "../git/gitStatusService";
 import { GitMergeService } from "../git/gitMergeService";
+import { WorktreeDiscardService } from "../services/worktreeDiscardService";
 import { TaskRepository } from "../persistence/taskRepository";
 import { ExtensionConfiguration } from "../configuration/extensionConfiguration";
 import { TerminalManager } from "../processes/terminalManager";
@@ -34,6 +35,14 @@ export interface CommandContext {
   status: GitStatusService;
   /** Brings a branch into a task's worktree; see `mergeIntoTaskCommand`. */
   merges: GitMergeService;
+  /**
+   * Restores the tracked paths `worktree.discardPaths` declares to be local environment.
+   *
+   * Here as well as in `PipelineRunner` because a dirty tree blocks two different
+   * things, and both were asking the operator about files that are not work: a stage's
+   * `verify`, and the merge command's commit-or-stash question.
+   */
+  discards: WorktreeDiscardService;
   repository: TaskRepository;
   configuration: ExtensionConfiguration;
   terminals: TerminalManager;
