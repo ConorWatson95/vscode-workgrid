@@ -32,6 +32,22 @@ export interface CommandPlaceholders {
   /** Absolute path of the task's worktree. */
   worktreePath: string;
   /**
+   * Absolute path of the repository the task belongs to.
+   *
+   * For naming a check's own script. A command runs with the **worktree** as its working
+   * directory — which is right, since a check inspects the tree it is certifying — so a
+   * relative path like `tools/git/Test-WorkPromoted.ps1` resolves to the *branch's* copy.
+   * The declaration is read from the repository root precisely so a branch cannot choose
+   * the command that certifies it, and that was enforced on the string while the file it
+   * named came from the branch anyway.
+   *
+   * The benign version is staleness, and it happened: a task branch cut before two fixes
+   * to a promotion check ran the old script and failed on a bug fixed days earlier, with
+   * a message describing the fixed behaviour. The sharp version is a branch editing the
+   * script to `exit 0` and passing its own gate.
+   */
+  repoRoot: string;
+  /**
    * The ticket this task is about, or undefined when nothing establishes one.
    *
    * Undefined is a real answer rather than an empty string: a check scoped by ticket
@@ -41,7 +57,14 @@ export interface CommandPlaceholders {
   ticket?: string;
 }
 
-const KNOWN = ["taskName", "branch", "baseBranch", "worktreePath", "ticket"] as const;
+const KNOWN = [
+  "taskName",
+  "branch",
+  "baseBranch",
+  "worktreePath",
+  "repoRoot",
+  "ticket",
+] as const;
 
 export interface Substitution {
   command: string;

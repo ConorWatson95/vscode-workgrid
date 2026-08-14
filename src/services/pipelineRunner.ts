@@ -388,6 +388,11 @@ export class PipelineRunner {
       branch: task.branchName,
       baseBranch: task.baseBranch,
       worktreePath: task.worktreePath,
+      // So a check can name its own script from the root. The command runs with the
+      // worktree as cwd, so a relative path runs the branch's copy — which is how a task
+      // branch cut before two fixes to a promotion check ran the old one and failed on a
+      // bug already fixed on DEV, with a message describing the fixed behaviour.
+      repoRoot: task.repositoryRoot,
       // What the task was linked to, else whatever its name carries. A promotion check
       // is scoped by ticket and fails when it matches nothing, so a task whose name has
       // no reference failed its promotion while every commit on its branch named one.

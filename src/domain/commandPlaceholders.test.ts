@@ -6,7 +6,29 @@ const VALUES = {
   branch: "feature/NMGB-2792-ev-share",
   baseBranch: "DEV",
   worktreePath: "C:/repos/app-NMGB-2792",
+  repoRoot: "C:/Dev/qubeautoapp",
 };
+
+describe("${repoRoot}", () => {
+  it("lets a check name its own script from the root", () => {
+    // The command runs with the worktree as cwd, so a relative path runs the branch's
+    // copy. A task branch cut before two fixes to a promotion check ran the old one and
+    // failed on a bug already fixed on DEV, reporting the fixed behaviour's own message.
+    const result = substitutePlaceholders(
+      'powershell.exe -File "${repoRoot}/tools/git/Test-WorkPromoted.ps1"',
+      VALUES,
+    );
+    expect(result.command).toBe(
+      'powershell.exe -File "C:/Dev/qubeautoapp/tools/git/Test-WorkPromoted.ps1"',
+    );
+    expect(result.used).toEqual(["repoRoot"]);
+  });
+
+  it("is distinct from the worktree, which is what makes it worth having", () => {
+    const result = substitutePlaceholders("${repoRoot} ${worktreePath}", VALUES);
+    expect(result.command).toBe("C:/Dev/qubeautoapp C:/repos/app-NMGB-2792");
+  });
+});
 
 describe("substitutePlaceholders", () => {
   it("substitutes every known placeholder", () => {

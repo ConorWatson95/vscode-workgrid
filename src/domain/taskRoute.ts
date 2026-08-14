@@ -252,9 +252,14 @@ export interface RouteStageDefinition {
    * Read from the repository root like the rest of the harness config, never from a
    * worktree — a branch must not be able to choose the command that certifies it.
    *
-   * May name `${taskName}`, `${branch}`, `${baseBranch}`, `${worktreePath}` and
-   * `${ticket}`, which are substituted before the command runs; anything else in
-   * `${...}` reaches the shell as written. See `domain/commandPlaceholders.ts` — without
+   * May name `${taskName}`, `${branch}`, `${baseBranch}`, `${worktreePath}`,
+   * `${repoRoot}` and `${ticket}`, which are substituted before the command runs;
+   * anything else in `${...}` reaches the shell as written.
+   *
+   * **Name a check's own script with `${repoRoot}`.** The command runs with the worktree
+   * as its working directory, so a relative path runs the *branch's* copy of the script —
+   * and this declaration is read from the root precisely so a branch cannot choose what
+   * certifies it. See `domain/commandPlaceholders.ts` — without
    * them a check cannot tell which ticket it is certifying, which is how one degraded
    * into an existence check.
    *

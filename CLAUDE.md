@@ -1312,6 +1312,29 @@ Four rules:
   dead end one level up — a `${ticket}` route no task could ever pass — and the harness must
   never make the absence of a ticket system an unpassable gate.
 
+### The branch chose the script that certified it
+
+`verify` is read from the repository root, "never from a worktree — a branch must not be
+able to choose the command that certifies it". That was enforced on the **string** and
+defeated by the **file it names**: the command runs with the worktree as its working
+directory, which is right, since a check inspects the tree it certifies — so
+`tools/git/Test-WorkPromoted.ps1` resolves to the branch's copy. Declaration root-owned,
+executable branch-owned.
+
+Found as staleness, which is the benign version. A task branch cut before two fixes to a
+promotion check ran the old script and failed reporting `10 of 8 commit(s)` with duplicate
+SHAs, and demanded a tooling commit whose subject carries no ticket at all — every symptom
+of two bugs fixed on DEV days earlier, one of them (`--no-merges` + SHA dedup) *whose own
+commit message describes this exact count mismatch*. The sharp version is a branch editing
+the script to `exit 0` and passing its own gate.
+
+`${repoRoot}` is the fix: a route names its check as
+`-File "${repoRoot}/tools/git/Test-WorkPromoted.ps1"` and gets the root's copy, while cwd
+stays the worktree so tree checks still work. **Opt-in rather than enforced** — the harness
+cannot tell a script path from any other argument without parsing shell syntax for two
+shells, and rewriting a command it half-understands is worse than the hole. So the
+placeholder exists, the route author uses it, and `taskRoute.ts` says why.
+
 ### Suggested work, and what a scan costs
 
 `domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`
