@@ -43,6 +43,29 @@ describe("substitutePlaceholders", () => {
 
   it("leaves a command with no placeholders untouched", () => {
     const result = substitutePlaceholders("dotnet build", VALUES);
-    expect(result).toEqual({ command: "dotnet build", used: [], unknown: [] });
+    expect(result).toEqual({ command: "dotnet build", used: [], unknown: [], missing: [] });
+  });
+
+  it("substitutes a ticket when the task has one", () => {
+    const result = substitutePlaceholders('-Ticket "${ticket}"', {
+      ...VALUES,
+      ticket: "NMGB-2534",
+    });
+    expect(result.command).toBe('-Ticket "NMGB-2534"');
+    expect(result.used).toEqual(["ticket"]);
+    expect(result.missing).toEqual([]);
+  });
+
+  it("leaves a known placeholder verbatim when nothing establishes a value", () => {
+    // Blanking it would silently unscope a check whose entire value is being scoped —
+    // and `Test-WorkPromoted.ps1` fails on an empty ticket anyway, saying only that
+    // something was empty. Left verbatim, the failure names its own cause.
+    const result = substitutePlaceholders('-Ticket "${ticket}"', VALUES);
+    expect(result.command).toBe('-Ticket "${ticket}"');
+    expect(result.missing).toEqual(["ticket"]);
+    expect(result.used).toEqual([]);
+    // Not "unknown": the remedies are opposites, and an unknown name usually needs
+    // nothing done at all.
+    expect(result.unknown).toEqual([]);
   });
 });

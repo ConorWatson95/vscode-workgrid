@@ -37,6 +37,7 @@ import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
 import { summariseIntent } from "../domain/routeSummary";
 import { substitutePlaceholders } from "../domain/commandPlaceholders";
+import { taskTicket } from "../domain/ticketReference";
 import { describeDiscard, DiscardSelection } from "../domain/worktreeDiscard";
 import {
   CommandOutcome,
@@ -375,12 +376,28 @@ export class PipelineRunner {
     // A check written once for a route could not name the task it was certifying, so a
     // script that had to reject a worktree parked on *another* ticket degraded into an
     // existence check — one that passes in exactly the case that matters.
-    const { command, used, unknown } = substitutePlaceholders(declared, {
+    const { command, used, unknown, missing } = substitutePlaceholders(declared, {
       taskName: task.name,
       branch: task.branchName,
       baseBranch: task.baseBranch,
       worktreePath: task.worktreePath,
+      // What the task was linked to, else whatever its name carries. A promotion check
+      // is scoped by ticket and fails when it matches nothing, so a task whose name has
+      // no reference failed its promotion while every commit on its branch named one.
+      ticket: taskTicket(task),
     });
+    if (missing.length > 0) {
+      // Its own warning, and worded as a remedy: the placeholder is left verbatim, so
+      // the check fails — correctly, since a scoped check must not run unscoped — and
+      // this is the only thing that says the cause is a task with nothing linked to it
+      // rather than a promotion that did not happen.
+      this.logger.warn(
+        `Harness [${task.name}] "${stage.name}" verification names ` +
+          `${missing.map((name) => `\${${name}}`).join(", ")}, which nothing about this ` +
+          "task establishes — link the task to its ticket, or put the reference in its " +
+          "name. The check runs unsubstituted and will fail.",
+      );
+    }
     if (unknown.length > 0) {
       // Not an error: `${...}` is shell syntax, so most of these are deliberate. Said
       // out loud because the other cause is a misspelled placeholder, and that reaches

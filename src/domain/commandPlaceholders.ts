@@ -31,9 +31,17 @@ export interface CommandPlaceholders {
   baseBranch: string;
   /** Absolute path of the task's worktree. */
   worktreePath: string;
+  /**
+   * The ticket this task is about, or undefined when nothing establishes one.
+   *
+   * Undefined is a real answer rather than an empty string: a check scoped by ticket
+   * must not run scoped to nothing, and the two are told apart in `missing` below.
+   * See `domain/ticketReference.ts`.
+   */
+  ticket?: string;
 }
 
-const KNOWN = ["taskName", "branch", "baseBranch", "worktreePath"] as const;
+const KNOWN = ["taskName", "branch", "baseBranch", "worktreePath", "ticket"] as const;
 
 export interface Substitution {
   command: string;
@@ -47,6 +55,21 @@ export interface Substitution {
    * without this deciding that a working command is wrong.
    */
   unknown: string[];
+  /**
+   * Names this knows but has no value for, left verbatim in the command.
+   *
+   * Separate from `unknown`, because the remedies are opposites: an unknown name is
+   * usually a shell variable and needs nothing done, while a missing one is a fact
+   * about the task that nothing established — a promotion check scoped by ticket, on a
+   * task linked to no ticket.
+   *
+   * Left verbatim rather than blanked, so the failure names its own cause. A script
+   * reporting `no ticket reference could be found in '${ticket}'` says the placeholder
+   * did not resolve; the same message about `''` says only that something was empty.
+   * Substituting nothing would also silently *unscope* a check whose entire value is
+   * being scoped — the failure this exists to prevent.
+   */
+  missing: string[];
 }
 
 /**
@@ -65,6 +88,7 @@ export function substitutePlaceholders(
 ): Substitution {
   const used: string[] = [];
   const unknown: string[] = [];
+  const missing: string[] = [];
 
   const substituted = command.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (whole, name: string) => {
     const known = KNOWN.find((candidate) => candidate === name);
@@ -72,9 +96,14 @@ export function substitutePlaceholders(
       if (!unknown.includes(name)) unknown.push(name);
       return whole;
     }
+    const value = values[known];
+    if (value === undefined) {
+      if (!missing.includes(known)) missing.push(known);
+      return whole;
+    }
     if (!used.includes(known)) used.push(known);
-    return values[known];
+    return value;
   });
 
-  return { command: substituted, used, unknown };
+  return { command: substituted, used, unknown, missing };
 }
