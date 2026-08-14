@@ -5,7 +5,9 @@ import { loadHarness } from "../services/reviewRulesService";
 import { scanFailures, scannedSuggestions } from "../services/suggestionScanService";
 import { SuggestionTreeItem } from "../ui/taskWorkspaceTreeItem";
 import { withStatus } from "../ui/statusProgress";
+import { SuggestionSource } from "../domain/suggestionSourceFile";
 import { TaskWorkspace } from "../domain/taskWorkspace";
+import { isTicketReference } from "../domain/ticketReference";
 
 /**
  * Commands for suggested work: scanning for it, and turning one into a task.
@@ -189,6 +191,173 @@ export async function linkSuggestionToTaskCommand(
   void vscode.window.showInformationMessage(
     `"${result.value.name}" is now ${item.suggestion.ref}. It has left the suggestions list.`,
   );
+}
+
+/**
+ * Gives a task a ticket reference, verifying it against the source first.
+ *
+ * The way in for every task that did not come from a suggestion, which is most of them.
+ * Linking was reachable only from a suggestion row, so only work the last scan returned
+ * could be linked — and a scan lists what is *outstanding*, so a task already under way
+ * is precisely the one whose ticket is absent from it. "I can't link a task I can't see"
+ * is the exact shape of the bug: a real task failed its UAT promotion because `${ticket}`
+ * resolved to nothing, and nothing in the UI could supply one.
+ *
+ * Verified rather than typed, because an unverified ref is worse than none: it scopes a
+ * promotion check, and a mistyped key matches no commits, which the check reports as the
+ * work not having landed. The failure surfaces a stage later, wearing someone else's
+ * clothes.
+ *
+ * **Unless there is nothing to verify against.** A project with no sources configured
+ * would otherwise have a `${ticket}` route no task could ever pass — the dead end this
+ * command exists to remove, reintroduced one level up. So a shape-checked ref is accepted
+ * unverified there, and the confirmation says so rather than implying a check happened.
+ */
+export async function setTicketReferenceCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = resolveTaskArg(arg);
+  if (!task) return;
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) return;
+
+  if (task.origin) {
+    // The service refuses this too; said here so the refusal names the existing link.
+    void vscode.window.showWarningMessage(
+      `"${task.name}" is already ${task.origin.ref}. Unlink it first if it is really ` +
+        "for something else.",
+    );
+    return;
+  }
+
+  const harness = loadHarness(repositoryRoot, {
+    configuredPath: ctx.configuration.harnessConfigPath(ctx.repositoryUri()),
+  });
+  for (const problem of harness.problems) ctx.logger.warn(`Harness config: ${problem}`);
+
+  const source = await pickLookupSource(harness.suggestionSources);
+  if (source === CANCELLED) return;
+
+  const typed = await vscode.window.showInputBox({
+    title: `Ticket reference for "${task.name}"`,
+    prompt: source
+      ? `Checked against ${source.label} before it is recorded.`
+      : "No suggestion source is configured, so this cannot be checked against anything.",
+    placeHolder: "e.g. NMGB-2534",
+    validateInput: (value) =>
+      value.trim().length === 0 || isTicketReference(value, source?.refPattern)
+        ? undefined
+        : "That does not look like a reference this project uses.",
+  });
+  const ref = typed?.trim();
+  if (!ref) return;
+
+  const origin = source
+    ? await verifiedOrigin(ctx, repositoryRoot, source, ref)
+    : { sourceId: MANUAL_SOURCE_ID, ref };
+  if (!origin) return;
+
+  const result = await ctx.service.setTaskOrigin(task.id, {
+    ...origin,
+    at: new Date().toISOString(),
+  });
+  if (!result.ok) {
+    void vscode.window.showErrorMessage(
+      "message" in result.error ? result.error.message : "Could not set the reference.",
+    );
+    return;
+  }
+
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    source
+      ? `"${result.value.name}" is now ${origin.ref}.`
+      : `"${result.value.name}" is now ${origin.ref}. Nothing verified it — no ` +
+          "suggestion source is configured for this project.",
+  );
+}
+
+/**
+ * The source a lookup runs against, or undefined when the project has none.
+ *
+ * `CANCELLED` is distinct from `undefined` because they mean opposite things: one is a
+ * user who closed the picker and wants nothing to happen, the other is a project with no
+ * ticketing at all, which is the case that must still be allowed through.
+ */
+const CANCELLED = Symbol("cancelled");
+
+/** Recorded as the source when nothing verified the ref. Never matches a real source's id. */
+export const MANUAL_SOURCE_ID = "manual";
+
+async function pickLookupSource(
+  sources: readonly SuggestionSource[],
+): Promise<SuggestionSource | undefined | typeof CANCELLED> {
+  if (sources.length === 0) return undefined;
+  if (sources.length === 1) return sources[0];
+
+  type Pick = vscode.QuickPickItem & { source: SuggestionSource };
+  const choice = await vscode.window.showQuickPick<Pick>(
+    sources.map((entry) => ({ label: entry.label, description: entry.id, source: entry })),
+    { title: "Which system is this ticket in?" },
+  );
+  return choice ? choice.source : CANCELLED;
+}
+
+/** Looks the ref up, and returns an origin only if the source confirmed it. */
+async function verifiedOrigin(
+  ctx: CommandContext,
+  repositoryRoot: string,
+  source: SuggestionSource,
+  ref: string,
+): Promise<{ sourceId: string; ref: string; url?: string } | undefined> {
+  if (!ctx.suggestionScans) {
+    void vscode.window.showWarningMessage(
+      `${ref} cannot be checked: no agent session could be prepared.`,
+    );
+    return undefined;
+  }
+
+  const result = await withStatus(`Checking ${ref}`, async (step) => {
+    step(source.label);
+    return ctx.suggestionScans!.lookup(repositoryRoot, source, ref);
+  });
+
+  if ("failure" in result) {
+    // Never reported as "no such ticket": an unavailable MCP server and a ref that does
+    // not exist produce the same silence, and conflating them tells somebody their real
+    // ticket is imaginary.
+    ctx.logger.warn(`Ticket lookup for ${ref} failed: ${result.failure}`);
+    void vscode.window.showErrorMessage(
+      `Could not check ${ref} against ${source.label}: ${result.failure}. Nothing was recorded.`,
+    );
+    return undefined;
+  }
+
+  const outcome = result.outcome;
+  if (outcome.kind === "notFound") {
+    void vscode.window.showErrorMessage(
+      `${source.label} has no item ${ref}. Nothing was recorded.`,
+    );
+    return undefined;
+  }
+  if (outcome.kind === "unreadable") {
+    ctx.logger.warn(`Ticket lookup for ${ref} returned nothing readable:\n${outcome.reply}`);
+    void vscode.window.showErrorMessage(
+      `The check for ${ref} did not come back with an answer about it. Nothing was ` +
+        "recorded — see the log for what it said.",
+    );
+    return undefined;
+  }
+
+  const found = outcome.suggestion;
+  // The source's own spelling, not what was typed. It is what the promotion check will
+  // match against commit subjects, and the system is the authority on how it is written.
+  return {
+    sourceId: source.id,
+    ref: found.ref,
+    ...(found.url ? { url: found.url } : {}),
+  };
 }
 
 /**

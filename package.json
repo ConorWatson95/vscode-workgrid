@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.98.4",
+  "version": "0.99.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -214,6 +214,12 @@
         "title": "Link to an Existing Task…",
         "category": "Task Workspaces",
         "icon": "$(link)"
+      },
+      {
+        "command": "taskWorkspaces.setTicketReference",
+        "title": "Set Ticket Reference…",
+        "category": "Task Workspaces",
+        "icon": "$(tag)"
       },
       {
         "command": "taskWorkspaces.unlinkTaskOrigin",
@@ -433,9 +439,14 @@
           "group": "1_actions@1"
         },
         {
+          "command": "taskWorkspaces.setTicketReference",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/ && !(viewItem =~ /linkedToSuggestion/)",
+          "group": "9_link@0"
+        },
+        {
           "command": "taskWorkspaces.unlinkTaskOrigin",
           "when": "view == taskWorkspaces.tree && viewItem =~ /linkedToSuggestion/",
-          "group": "9_link@0"
+          "group": "9_link@1"
         },
         {
           "command": "taskWorkspaces.allowAllDenials",

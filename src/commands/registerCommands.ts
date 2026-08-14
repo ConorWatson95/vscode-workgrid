@@ -40,6 +40,7 @@ import {
   linkSuggestionToTaskCommand,
   openSuggestionCommand,
   scanForWorkCommand,
+  setTicketReferenceCommand,
   startTaskFromSuggestionCommand,
   unlinkTaskOriginCommand,
 } from "./suggestionCommands";
@@ -117,6 +118,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       linkSuggestionToTaskCommand(ctx, arg),
     ),
     register("taskWorkspaces.unlinkTaskOrigin", (arg) => unlinkTaskOriginCommand(ctx, arg)),
+    register("taskWorkspaces.setTicketReference", (arg) =>
+      setTicketReferenceCommand(ctx, arg),
+    ),
     register("taskWorkspaces.toggleHiddenSuggestions", () => {
       const showing = ctx.tree.toggleHiddenSuggestions();
       void vscode.commands.executeCommand(

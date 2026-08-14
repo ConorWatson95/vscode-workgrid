@@ -167,3 +167,81 @@ describe("buildScanPrompt", () => {
     expect(buildScanPrompt(source())).toContain("read-only");
   });
 });
+
+/**
+ * Looking one ref up, for a task that did not come from a suggestion.
+ *
+ * The gap: linking was reachable only from a suggestion row, and a scan lists what is
+ * outstanding — so a task already under way is exactly the one whose ticket the list does
+ * not hold.
+ */
+describe("lookup", () => {
+  it("asks the source about one ref, with that source's servers and model", async () => {
+    const runner = new FakeRunner({
+      "lookup:jira": {
+        ok: true,
+        text: "SUGGESTION: NMGB-2534 | In Progress | Rescura\nURL: https://j/NMGB-2534",
+      },
+    });
+    const service = new SuggestionScanService(runner, clock);
+
+    const result = await service.lookup("C:/Dev/qubeautoapp", source(), "NMGB-2534");
+
+    expect(runner.calls[0].servers).toEqual(["atlassian"]);
+    expect(runner.calls[0].prompt).toContain("NMGB-2534");
+    expect(result).toEqual({
+      outcome: {
+        kind: "found",
+        suggestion: {
+          sourceId: "jira",
+          ref: "NMGB-2534",
+          title: "Rescura",
+          rank: "In Progress",
+          url: "https://j/NMGB-2534",
+        },
+      },
+    });
+  });
+
+  it("does not record the lookup as a scan", async () => {
+    // A lookup answers a question about a named ticket. Folded into the list it would put
+    // an item on screen the source never offered as outstanding work — usually one
+    // already being done, which is the list's whole failure mode.
+    const runner = new FakeRunner({
+      "lookup:jira": { ok: true, text: "SUGGESTION: NMGB-2534 | Done | Rescura" },
+    });
+    const service = new SuggestionScanService(runner, clock);
+
+    await service.lookup("C:/Dev/qubeautoapp", source(), "NMGB-2534");
+
+    expect(service.lastScan("C:/Dev/qubeautoapp")).toBeUndefined();
+  });
+
+  it("reports a failed session as a failure, never as a missing ticket", async () => {
+    // An unavailable MCP server and a ref that does not exist produce the same silence.
+    // Reported as the latter, it tells somebody their real ticket is imaginary.
+    const runner = new FakeRunner({
+      "lookup:jira": { ok: false, text: "", error: "atlassian is unavailable" },
+    });
+    const service = new SuggestionScanService(runner, clock);
+
+    const result = await service.lookup("C:/Dev/qubeautoapp", source(), "NMGB-2534");
+    expect(result).toEqual({ failure: "atlassian is unavailable" });
+  });
+
+  it("reports a thrown runner as a failure", async () => {
+    const runner = new FakeRunner({ "lookup:jira": new Error("no session") });
+    const service = new SuggestionScanService(runner, clock);
+
+    const result = await service.lookup("C:/Dev/qubeautoapp", source(), "NMGB-2534");
+    expect(result).toEqual({ failure: "no session" });
+  });
+
+  it("passes a real not-found through", async () => {
+    const runner = new FakeRunner({ "lookup:jira": { ok: true, text: "NOT-FOUND" } });
+    const service = new SuggestionScanService(runner, clock);
+
+    const result = await service.lookup("C:/Dev/qubeautoapp", source(), "NMGB-9999");
+    expect(result).toEqual({ outcome: { kind: "notFound" } });
+  });
+});

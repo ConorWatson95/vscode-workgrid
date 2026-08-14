@@ -1833,6 +1833,76 @@ describe("verification command substitution", () => {
     expect(stage?.subtasks[0].failureReason).toContain("Fix dealer mapping");
     expect(stage?.subtasks[0].activity?.commands).toEqual([command]);
   });
+
+  /**
+   * A check it cannot scope is a check it must not run.
+   *
+   * Running it was defensible — a scoped check must never run unscoped, so failing is
+   * right — but it failed as a *check result*, and a promotion check reporting exit 4
+   * says "this work is not on the target branch". A real task's UAT promotion failed
+   * that way while its work was committed and pushed; the actual cause was a task
+   * linked to no ticket, legible only as a warning in the output channel.
+   */
+  const SCOPED: RouteDefinition = {
+    id: "scoped",
+    label: "Scoped",
+    description: "d",
+    stages: [
+      {
+        id: "promote",
+        label: "Promote",
+        kind: "deployment",
+        intent: "Promote it.",
+        splittable: false,
+        gate: "auto",
+        verify: 'Test-WorkPromoted.ps1 -Ticket "${ticket}"',
+      },
+    ],
+  };
+
+  it("does not run a check whose ticket nothing establishes", async () => {
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo, verified } = makeRunner(sessions, { verify: {} });
+    // Neither linked to a suggestion nor named for a ticket.
+    const subject = {
+      ...task(),
+      name: "Nissan GB - Data Load - Rescura",
+      pipeline: createPipeline(SCOPED),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(verified).toEqual([]);
+    const stage = (await repo.get(subject.id))?.pipeline?.stages[0];
+    expect(stage?.status).toBe("failed");
+    // The remedy, not an exit code.
+    expect(stage?.subtasks[0].failureReason).toContain("${ticket}");
+    expect(stage?.subtasks[0].failureReason).toContain("Link the task to its ticket");
+    // Nothing certified anything, so nothing may be recorded as having done so —
+    // `stageEvidence` reads this to say what backs the stage.
+    expect(stage?.verification).toBeUndefined();
+  });
+
+  it("runs the check once the task carries a ticket", async () => {
+    const command = 'Test-WorkPromoted.ps1 -Ticket "NMGB-2534"';
+    const sessions = fakeSessions({ "": { text: "Done." } });
+    const { runner, repo, verified } = makeRunner(sessions, {
+      verify: { [command]: { exitCode: 0 } },
+    });
+    const subject = {
+      ...task(),
+      name: "Nissan GB - Data Load - Rescura",
+      origin: { sourceId: "jira", ref: "NMGB-2534", at: "2026-08-14T09:00:00.000Z" },
+      pipeline: createPipeline(SCOPED),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(verified).toEqual([command]);
+    expect((await repo.get(subject.id))?.pipeline?.stages[0].status).toBe("passed");
+  });
 });
 
 describe("worktree claims", () => {

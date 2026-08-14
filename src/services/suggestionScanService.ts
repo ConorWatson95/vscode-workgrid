@@ -1,4 +1,9 @@
 import { SuggestionSource } from "../domain/suggestionSourceFile";
+import {
+  buildLookupPrompt,
+  LookupOutcome,
+  parseLookupReply,
+} from "../domain/suggestionLookup";
 import { parseSuggestions, TaskSuggestion } from "../domain/taskSuggestion";
 
 /**
@@ -118,6 +123,47 @@ export class SuggestionScanService {
     const result: ScanResult = { outcomes, scannedAt: this.clock.now() };
     this.latest.set(key(repositoryRoot), result);
     return result;
+  }
+
+  /**
+   * Asks one source about one ref, without touching the held scan.
+   *
+   * Deliberately not recorded as a scan result: a lookup answers a question about a
+   * ticket somebody named, and folding it into the list would put an item on screen that
+   * the source never offered as outstanding work — usually one already being done, which
+   * is the list's whole failure mode.
+   */
+  async lookup(
+    repositoryRoot: string,
+    source: SuggestionSource,
+    ref: string,
+  ): Promise<{ outcome: LookupOutcome } | { failure: string }> {
+    let reply: { ok: boolean; text: string; error?: string };
+    try {
+      reply = await this.runner.run(
+        repositoryRoot,
+        buildLookupPrompt(source, ref),
+        `lookup:${source.id}`,
+        {
+          ...(source.requiredMcpServers
+            ? { requiredMcpServers: source.requiredMcpServers }
+            : {}),
+          ...(source.model ? { model: source.model } : {}),
+        },
+      );
+    } catch (error) {
+      return { failure: (error as Error).message };
+    }
+
+    if (!reply.ok) {
+      // A failed session is never "no such ticket". Told apart for the same reason a
+      // failed scan is told apart from an empty board: an unavailable MCP server yields
+      // exactly the same silence as a ref that does not exist, and reported as the
+      // latter it tells somebody their real ticket is imaginary.
+      return { failure: reply.error ?? "the lookup session did not complete" };
+    }
+
+    return { outcome: parseLookupReply(reply.text, source.id, ref) };
   }
 
   private async scanOne(

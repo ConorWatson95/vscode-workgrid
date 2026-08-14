@@ -36,6 +36,40 @@ export function findTicketReference(text: string | undefined): string | undefine
 }
 
 /**
+ * True when the whole of some text is a reference, for a box somebody types into.
+ *
+ * Anchored where `findTicketReference` is not, and the difference matters: searching a
+ * task *name* for a reference is right, because the rest of the name is prose. Searching
+ * what was typed into a field asking for a ticket accepts "the one about NMGB-2534 maybe"
+ * and links the task to something the typist did not quite say.
+ *
+ * `pattern` is the **source's** shape, from its `refPattern`, because a ref is opaque to
+ * the runtime everywhere else and a source keyed on numbers or GUIDs would otherwise have
+ * every one of its real refs refused. `TICKET_PATTERN` is the fallback when no source
+ * declares one, not the rule.
+ *
+ * A shape check only. It says the text could be a reference, never that the reference
+ * exists — that is what the lookup is for, and the two must not be confused, since a
+ * well-formed key for a ticket nobody ever raised scopes a check to nothing just as
+ * completely as an empty one.
+ *
+ * An uncompilable pattern accepts anything rather than nothing. Parsing rejects those, so
+ * reaching here means the check itself is broken — and refusing every ref because the
+ * runtime cannot read its own config blocks work over a config error the typist did not
+ * make and cannot see from the box they are standing in.
+ */
+export function isTicketReference(text: string, pattern?: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const source = pattern ?? TICKET_PATTERN.source;
+  try {
+    return new RegExp(`^(?:${source})$`).test(trimmed);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The task's ticket: what it was linked to, else whatever its name carries.
  *
  * The fallback is what makes this safe to adopt. Every route today passes `${taskName}`

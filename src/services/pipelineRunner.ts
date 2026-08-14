@@ -357,7 +357,14 @@ export class PipelineRunner {
     declared: string,
     signal?: AbortSignal,
   ): Promise<
-    { command: string; outcome: CommandOutcome; discarded?: string } | undefined
+    | {
+        command: string;
+        outcome: CommandOutcome;
+        discarded?: string;
+        /** Placeholders nothing established, when the check was not run at all. */
+        unresolved?: string[];
+      }
+    | undefined
   > {
     // Before the tree is judged, not after: the whole point is that these paths are
     // local environment and never work, so a check reading them as uncommitted work
@@ -387,16 +394,35 @@ export class PipelineRunner {
       ticket: taskTicket(task),
     });
     if (missing.length > 0) {
-      // Its own warning, and worded as a remedy: the placeholder is left verbatim, so
-      // the check fails — correctly, since a scoped check must not run unscoped — and
-      // this is the only thing that says the cause is a task with nothing linked to it
-      // rather than a promotion that did not happen.
-      this.logger.warn(
-        `Harness [${task.name}] "${stage.name}" verification names ` +
-          `${missing.map((name) => `\${${name}}`).join(", ")}, which nothing about this ` +
-          "task establishes — link the task to its ticket, or put the reference in its " +
-          "name. The check runs unsubstituted and will fail.",
+      // Not run at all, which is the correction. Running it was defensible — a scoped
+      // check must never run unscoped, so failing is right — but it failed as a *check
+      // result*, and a promotion check reporting exit 4 says "this work is not on the
+      // target branch". The real cause was a task linked to no ticket, and it was
+      // legible only as a warning in the output channel, several layers from the
+      // failure. An operator read the script's own error text to find it.
+      //
+      // So the stage still stops, and the reason now names its own remedy. The
+      // distinction is exactly the one `stageEvidence` insists on elsewhere: a check
+      // that could not be scoped never ran, and must not be recorded as one that did.
+      const named = missing.map((name) => `\${${name}}`).join(", ");
+      this.logger.error(
+        `Harness [${task.name}] "${stage.name}" verification names ${named}, which ` +
+          "nothing about this task establishes. The check was not run.",
       );
+      return {
+        command,
+        unresolved: missing,
+        outcome: {
+          exitCode: -1,
+          output:
+            `The check declares ${named}, and nothing about this task establishes ` +
+            `${missing.length > 1 ? "them" : "it"}.\n\n` +
+            "It was not run: a check scoped by ticket must never run unscoped, and a " +
+            "failure from running it anyway reads as the work not being done.\n\n" +
+            "Link the task to its ticket (Set Ticket Reference…), or put the reference " +
+            "in the task's name.",
+        },
+      };
     }
     if (unknown.length > 0) {
       // Not an error: `${...}` is shell syntax, so most of these are deliberate. Said
@@ -1209,7 +1235,10 @@ export class PipelineRunner {
       // must not have to go looking for.
       steps.push(`"${stage.name}": ${verification.discarded.split("\n")[0]}`);
     }
-    if (verification) {
+    if (verification && !verification.unresolved) {
+      // Only a check that ran. `TaskStage.verification` means "something other than the
+      // agent certified this", and a command the runner declined to execute certifies
+      // nothing — recording it would make the stage report claim a check happened.
       const noted = recordVerification(pipeline, stage.id, {
         command: verification.command,
         exitCode: verification.outcome.exitCode,
@@ -1217,7 +1246,20 @@ export class PipelineRunner {
       });
       if (noted.ok) pipeline = noted.value;
     }
-    if (verification && verification.outcome.exitCode !== 0) {
+    if (verification?.unresolved) {
+      // Stops the stage exactly as a failed check does, but says why in the words of
+      // the remedy rather than in an exit code.
+      const named = verification.unresolved.map((name) => `\${${name}}`).join(", ");
+      reply = {
+        ...reply,
+        ok: false,
+        error:
+          `The check for this stage names ${named}, which nothing about this task ` +
+          "establishes, so it was not run. Link the task to its ticket, or put the " +
+          "reference in the task's name, then re-run this stage.",
+      };
+      steps.push(`"${stage.name}" could not be verified: ${named} is not established.`);
+    } else if (verification && verification.outcome.exitCode !== 0) {
       // Overrides the reply: the session ended cleanly and the work is not proven.
       reply = {
         ...reply,

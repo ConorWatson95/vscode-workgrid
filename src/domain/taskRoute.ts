@@ -252,11 +252,16 @@ export interface RouteStageDefinition {
    * Read from the repository root like the rest of the harness config, never from a
    * worktree — a branch must not be able to choose the command that certifies it.
    *
-   * May name `${taskName}`, `${branch}`, `${baseBranch}` and `${worktreePath}`, which
-   * are substituted before the command runs; anything else in `${...}` reaches the
-   * shell as written. See `domain/commandPlaceholders.ts` — without them a check
-   * cannot tell which ticket it is certifying, which is how one degraded into an
-   * existence check.
+   * May name `${taskName}`, `${branch}`, `${baseBranch}`, `${worktreePath}` and
+   * `${ticket}`, which are substituted before the command runs; anything else in
+   * `${...}` reaches the shell as written. See `domain/commandPlaceholders.ts` — without
+   * them a check cannot tell which ticket it is certifying, which is how one degraded
+   * into an existence check.
+   *
+   * A check naming a placeholder nothing establishes is **not run at all**, and the
+   * stage fails saying so. Running it unsubstituted fails too, but as a check *result* —
+   * and a promotion check reporting a non-zero exit means "this work did not land",
+   * which is a different and more alarming claim than "this task has no ticket".
    */
   verify?: string;
   /**

@@ -84,6 +84,27 @@ describe("parseSuggestionSources", () => {
   it("reports a suggestions field that is not an array", () => {
     expect(parseSuggestionSources({ jira: JIRA }).problems[0]).toContain("must be an array");
   });
+
+  it("keeps a source's own ref shape", () => {
+    // A ref is opaque to the runtime, so its shape belongs to the source. The built-in
+    // JIRA shape is a default, not an assumption.
+    const parsed = parseSuggestionSources([{ ...JIRA, refPattern: "[0-9]+" }]);
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.sources[0].refPattern).toBe("[0-9]+");
+  });
+
+  it("rejects a refPattern that does not compile", () => {
+    // Ignored, it would fall back to the JIRA shape — so the source appears to work while
+    // refusing every ref that is not JIRA-shaped, and the author's evidence is a
+    // rejection of a ticket they can see on their own board.
+    const parsed = parseSuggestionSources([{ ...JIRA, refPattern: "([unclosed" }]);
+    expect(parsed.sources).toEqual([]);
+    expect(parsed.problems[0]).toContain("not a valid regular expression");
+  });
+
+  it("leaves refPattern absent when nothing declares one", () => {
+    expect(parseSuggestionSources([JIRA]).sources[0].refPattern).toBeUndefined();
+  });
 });
 
 describe("orderLookup", () => {

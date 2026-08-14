@@ -1216,6 +1216,62 @@ The ref is shown on the task row, not only in the tooltip. It is how the task is
 to everywhere outside the extension — a commit subject, a standup, the board — and a task
 list that cannot be matched to a ticket list is two lists.
 
+### You cannot link a task to a ticket you cannot see
+
+The above was reachable **only from a suggestion row**, so only work the last scan returned
+could be linked — and a scan lists what is *outstanding*, which is precisely the wrong set.
+A task already under way is in progress or closed on the board, so the one ticket it is
+plainly for is the one ticket absent from the list. Every task not started from a suggestion
+was therefore unlinkable, and there was no rename command either: a task could reach
+`${ticket}` with no way on earth to establish one.
+
+It bit on a live UAT promotion. `Test-WorkPromoted.ps1 -Ticket "${ticket}"` on a task named
+"Nissan GB - Data Load - Rescura" — no `origin`, no reference in the name — failed **exit 4**
+while its work was committed, pushed and correct. Three separate defects, all in one failure:
+
+- **A check that cannot be scoped is no longer run** (`pipelineRunner`, `unresolved`). It
+  used to substitute nothing, run the command knowing it would fail, and log a `warn`. The
+  stage still stops — a scoped check must never run unscoped — but the failure now names its
+  own remedy instead of an exit code. That distinction is the whole fix: a promotion check
+  reporting exit 4 *means* "this work is not on the target branch", so the harness was
+  reporting the wrong fact confidently. The operator diagnosed it from the script's own
+  error text. **Nothing is recorded in `TaskStage.verification`**, because a command that
+  never executed certifies nothing, and `stageEvidence` reads that field to claim a stage
+  was checked.
+- **Set Ticket Reference…** (`setTicketReferenceCommand`) on any unlinked task row. The way
+  in for every task that did not come from a suggestion, which is most of them.
+- **A ref's shape belongs to the source** (`SuggestionSource.refPattern`). `TICKET_PATTERN`
+  is JIRA's, hardcoded in a domain whose entire suggestion design says a `ref` is opaque and
+  the extension ships no sources. It is now the fallback when nothing declares one, never
+  the rule; a source keyed on numbers or GUIDs would otherwise have every real ref refused.
+  An uncompilable pattern is rejected at parse time and, if one ever reaches the check,
+  accepts everything — blocking work over a config error the typist cannot see from the box
+  they are standing in is the worse failure.
+
+**Verified against the source, not typed** (`domain/suggestionLookup.ts`). An unverified ref
+is worse than none: it scopes the promotion check, a mistyped key matches no commits, and the
+check reports that as the work not having landed — the same wrong fact, one stage later. The
+lookup is a session in the same shape as a scan (same runner, same required servers, same
+reply format, same parser), because a second transport to ask a smaller question would be the
+runtime learning to speak JIRA. It includes the source's own `scanPrompt` for its access
+knowledge and then **overrides its idea of which items count**, since the whole point is
+returning a ticket that is closed or in progress.
+
+Four rules:
+
+- **The reply must echo the system's own spelling**, and a ref that comes back different is
+  not a find. Asking for the system's spelling is what makes the comparison worth anything —
+  echoing back what was asked is the cheapest possible hallucination.
+- **A failed session is never "no such ticket".** An unavailable MCP server and a ref that
+  does not exist produce identical silence, and conflating them tells somebody their real
+  ticket is imaginary. The same distinction `SourceScanOutcome.failure` exists for.
+- **Unreadable is its own outcome**, apart from `notFound`, because the remedies are
+  opposites: fix the ref, versus the lookup did not work.
+- **A project with no sources accepts a shape-checked ref unverified**, recorded under
+  `sourceId: "manual"` and said plainly in the confirmation. Refusing would reintroduce the
+  dead end one level up — a `${ticket}` route no task could ever pass — and the harness must
+  never make the absence of a ticket system an unpassable gate.
+
 ### Suggested work, and what a scan costs
 
 `domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`

@@ -54,6 +54,20 @@ export interface SuggestionSource {
    * model tier, not the prompt, is the lever.
    */
   model?: string;
+  /**
+   * What one of this source's refs looks like, as a regular expression.
+   *
+   * Here rather than in the domain because a `ref` is opaque to the runtime — the same
+   * rule that keeps priority names, states and queries in config. The built-in shape is
+   * JIRA's (`PROJECT-123`), which is fine as a default and wrong as an assumption: a
+   * source keyed on numbers, GUIDs or `#1234` has refs the runtime would refuse to
+   * accept for a ticket that plainly exists.
+   *
+   * Matched against the **whole** ref, so a pattern need not anchor itself. Only used
+   * to check what a human typed before a lookup is paid for; the source itself is still
+   * the authority on whether the ref exists.
+   */
+  refPattern?: string;
   /** The source's rank vocabulary and what it hides by default. */
   order: SuggestionSourceOrder;
 }
@@ -153,11 +167,29 @@ export function parseSuggestionSources(raw: unknown): ParsedSuggestionSources {
       return;
     }
 
+    const refPattern = str(source.refPattern);
+    if (refPattern) {
+      try {
+        new RegExp(refPattern);
+      } catch (error) {
+        // Rejected rather than ignored, for the reason `showFrom` is: a pattern that
+        // does not compile would fall back to the built-in shape, so the source appears
+        // to work while refusing every ref that is not JIRA-shaped — and the author's
+        // evidence is a rejection of a ticket they can see on their own board.
+        problems.push(
+          `Suggestion source "${id}": "refPattern" is not a valid regular expression ` +
+            `(${(error as Error).message}).`,
+        );
+        return;
+      }
+    }
+
     seen.add(id.toLowerCase());
     sources.push({
       id,
       label: str(source.label) ?? id,
       scanPrompt,
+      ...(refPattern ? { refPattern } : {}),
       // Blank rather than absent leaves the default in place, matching how a route stage
       // treats a blank model: passing an empty --model is worse than passing none.
       ...(str(source.model) ? { model: str(source.model) as string } : {}),
