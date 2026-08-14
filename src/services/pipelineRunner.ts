@@ -37,6 +37,7 @@ import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
 import { summariseIntent } from "../domain/routeSummary";
 import { substitutePlaceholders } from "../domain/commandPlaceholders";
+import { describeDiscard, DiscardSelection } from "../domain/worktreeDiscard";
 import {
   CommandOutcome,
   VerificationCommandRunner,
@@ -312,6 +313,23 @@ export class PipelineRunner {
      * rather than found by eye.
      */
     private readonly staleAfterMs: () => number = () => 60 * 60 * 1000,
+    /**
+     * Restores the tracked paths the project declared to be local environment, before a
+     * stage's check reads the tree.
+     *
+     * Runs on **stages only**, which is why it lives here rather than anywhere a chat
+     * session could reach it: a hand-driven session must never have files removed from
+     * under it. Optional like the rest — a project declaring none, or a runner built
+     * without this, behaves exactly as before.
+     *
+     * This is the one injected dependency that destroys work rather than reporting on
+     * it, so what it did is announced in the stage's own report and never only in the
+     * log. See `domain/worktreeDiscard.ts`.
+     */
+    private readonly discardLocalChanges?: (
+      worktreePath: string,
+      signal?: AbortSignal,
+    ) => Promise<DiscardSelection | undefined>,
   ) {}
 
   /**
@@ -337,7 +355,23 @@ export class PipelineRunner {
     stage: TaskStage,
     declared: string,
     signal?: AbortSignal,
-  ): Promise<{ command: string; outcome: CommandOutcome } | undefined> {
+  ): Promise<
+    { command: string; outcome: CommandOutcome; discarded?: string } | undefined
+  > {
+    // Before the tree is judged, not after: the whole point is that these paths are
+    // local environment and never work, so a check reading them as uncommitted work
+    // fails a stage whose work is committed and pushed. It happened on four worktrees
+    // at once, on the check standing between a route and a live publish.
+    const selection = this.discardLocalChanges
+      ? await this.discardLocalChanges(task.worktreePath, signal)
+      : undefined;
+    const discarded = selection ? describeDiscard(selection) : undefined;
+    if (discarded) {
+      // warn, not info: this removed files. Someone reading the log for why a change
+      // vanished must find it without knowing to look.
+      this.logger.warn(`Harness [${task.name}] "${stage.name}": ${discarded}`);
+    }
+
     // A check written once for a route could not name the task it was certifying, so a
     // script that had to reject a worktree parked on *another* ticket degraded into an
     // existence check — one that passes in exactly the case that matters.
@@ -372,7 +406,16 @@ export class PipelineRunner {
     // The substituted command travels with the outcome: it is what actually ran, so it
     // is what the failure reason and the stage's activity must show. Reporting the
     // declared form would send a reader to run something different by hand.
-    return { command, outcome };
+    return {
+      command,
+      // Carried into the recorded output, so the stage report shows it beside the check
+      // it enabled. A discard visible only in the log is one nobody reading the report
+      // can connect to the file that is no longer changed.
+      outcome: discarded
+        ? { ...outcome, output: `${discarded}\n\n${outcome.output}` }
+        : outcome,
+      ...(discarded ? { discarded } : {}),
+    };
   }
 
   private async branchState(
@@ -1143,6 +1186,12 @@ export class PipelineRunner {
     // Recorded whichever way it went, and before the outcome is decided: absence has
     // to mean "no check ran", or a stage that declared one and never executed it is
     // indistinguishable from one whose build went green. See `stageEvidence`.
+    if (verification?.discarded) {
+      // In the steps as well as the report: the steps are what the operator reads to
+      // see what the advance did, and "files were restored" is the kind of thing they
+      // must not have to go looking for.
+      steps.push(`"${stage.name}": ${verification.discarded.split("\n")[0]}`);
+    }
     if (verification) {
       const noted = recordVerification(pipeline, stage.id, {
         command: verification.command,

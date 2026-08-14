@@ -30,6 +30,7 @@ import { deriveAgentActivity } from "./ui/statusPresentation";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
+import { WorktreeDiscardService } from "./services/worktreeDiscardService";
 import { SuggestionScanService } from "./services/suggestionScanService";
 import { refreshGateDeclarations } from "./domain/stageRefresh";
 import {
@@ -673,6 +674,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
   };
 
+  /**
+   * Restores the paths the project declared to be local environment before a stage's
+   * check reads the tree. Empty config means it never does anything.
+   */
+  const worktreeDiscards = new WorktreeDiscardService(
+    gitClient,
+    () => currentHarness()?.discardPaths ?? [],
+    logger,
+  );
+
   const permissionRules = new PermissionRulesService(logger);
   // Shared: also used when granting a rule, to refresh an existing worktree's copy.
   const provisioner = new WorktreeProvisioner(logger);
@@ -862,6 +873,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // stage timeout plus a margin, because a live owner would have failed it at
     // the timeout — so anything older has no owner left to come back for it.
     () => configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000 + 5 * 60 * 1000,
+    // Restores the tracked paths `worktree.discardPaths` declares to be local
+    // environment, so a stage's check stops failing on a transformed Web.config and
+    // tracked build output while the work is committed and pushed. Read per stage from
+    // the repository root, so a branch cannot add to the list of files deleted on its
+    // own way past a gate.
+    (worktreePath, signal) => worktreeDiscards.discard(worktreePath, signal),
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

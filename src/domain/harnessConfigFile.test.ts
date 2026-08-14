@@ -268,3 +268,43 @@ describe("sendBackTo", () => {
     expect(parsed.problems.join(" ")).toContain("array of stage ids");
   });
 });
+
+describe("worktree.discardPaths", () => {
+  it("reads the declared paths", () => {
+    const parsed = parseHarnessConfig({
+      worktree: { discardPaths: ["QubeAutoApp/Web.config", "bin/Debug/"] },
+    });
+    expect(parsed.discardPaths).toEqual(["QubeAutoApp/Web.config", "bin/Debug/"]);
+    expect(parsed.problems).toEqual([]);
+  });
+
+  it("declares none when the section is absent", () => {
+    // No config means nothing is ever discarded. There is no fallback here, and the
+    // reason is stronger than for rules: a default would delete files.
+    expect(parseHarnessConfig({ routes: [] }).discardPaths).toEqual([]);
+  });
+
+  it("rejects an absolute path", () => {
+    const parsed = parseHarnessConfig({
+      worktree: { discardPaths: ["C:/Dev/other/Web.config", "bin/Debug/"] },
+    });
+    expect(parsed.discardPaths).toEqual(["bin/Debug/"]);
+    expect(parsed.problems.join(" ")).toContain("is absolute");
+  });
+
+  it("rejects a path climbing out of the repository", () => {
+    const parsed = parseHarnessConfig({
+      worktree: { discardPaths: ["../sibling/Web.config"] },
+    });
+    expect(parsed.discardPaths).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("climbs outside");
+  });
+
+  it("rejects the whole list when it is not an array of strings", () => {
+    // Partial acceptance is right for a route and wrong here: where this has to guess,
+    // the cost of guessing is a deleted file.
+    const parsed = parseHarnessConfig({ worktree: { discardPaths: "Web.config" } });
+    expect(parsed.discardPaths).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("must be an array");
+  });
+});

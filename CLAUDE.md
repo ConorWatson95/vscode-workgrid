@@ -942,6 +942,54 @@ check in:
   285 state a database, and a check that fails on 88 files of history is one people learn
   to skip.
 
+### Files that are local environment, not work
+
+`domain/worktreeDiscard.ts` + `services/worktreeDiscardService.ts` + `worktree.discardPaths`
+in `harness.json`. A stage's `verify` runs against the worktree, so anything permanently
+dirty in it fails the check — and `Test-WorkLandedOnDev.ps1` refused to promote a task
+whose work was **committed and pushed**, because the tree held nine files that were never
+work: `QubeAutoApp/Web.config`, transformed to run the solution from Visual Studio against
+a non-default tenant, and eight tracked files under various `bin/Debug/` that every build
+rewrites with the other line ending — `Renci.SshNet.xml` reporting 46,114 changed lines
+containing no change. Four worktrees were failing that way at once, on the check standing
+between a route and a live publish. A gate that fails on something the operator cannot act
+on is one they learn to click past, which is the failure the harness exists to prevent.
+
+**Discarded, not ignored.** The script already has `IgnorePath` and widening it was the
+obvious move; it is the wrong one, because the tree stays dirty and the next stage
+inherits it, so the next check fails for the same reason. A clean tree is the actual
+requirement. Ignoring also cannot be scoped — it would have to hold for every route and
+every task forever, where a discard leaves a trace each time it happens.
+
+Five rules, each load-bearing:
+
+- **Announced in the stage report, never only in the log.** This is the one part of the
+  runtime that destroys work rather than reporting on it, and `Web.config` does take real
+  changes — a new `appSettings` key lands there. Announced, a wrongly removed change is a
+  line someone can see and recover from the commit; silent, it is indistinguishable from
+  a change never made. The same rule truncated command output follows.
+- **Never an untracked file, a staged change, or a conflicted path.** Restoring a tracked
+  file is a checkout from a commit; deleting an untracked one is unrecoverable, and
+  untracked is where new work lives. Staging is deliberate — it is also how you *keep* a
+  Web.config change past this. A conflict is a state a human is mid-way through.
+- **Read from the repository root**, like rules and routes, so a branch cannot add its own
+  files to the list of things deleted on its way past a gate.
+- **No fallback and no default.** A project declaring nothing discards nothing, and an
+  unreadable config discards nothing rather than reusing the last known list. The
+  no-fallback rule rules already follow, for a stronger reason: a default here deletes
+  files. Parsing likewise **rejects a malformed list outright** rather than accepting it
+  in part, which is the opposite of how routes and sources parse — where this would have
+  to guess, guessing wrong costs a file.
+- **Stages only, before `verify`.** A hand-driven chat session must never have files
+  removed from under it, which is why it is injected into `PipelineRunner` rather than
+  anywhere a session could reach. A git failure is non-fatal: the discard exists to stop a
+  check failing for the wrong reason, and failing the stage on its own account would trade
+  one spurious failure for another.
+
+The honest fix for the build output is still to untrack it — `.gitignore` covers
+`QubeAutoApp.Mapping.Services/bin/` and not `QubeAutoApp.Mapping.Data/bin/`, which is the
+whole bug. This makes the routes work meanwhile.
+
 ### Keeping a worktree the checkout it claims to be
 
 Two rules in `worktreeProvisioner.ts`, both learned from a task that was dirty before

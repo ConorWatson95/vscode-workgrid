@@ -32,6 +32,12 @@ export interface LoadedHarness extends LoadedReviewRules {
    * would be the extension inventing where a team's work lives.
    */
   suggestionSources: SuggestionSource[];
+  /**
+   * Tracked paths a stage's check may restore before reading the tree. Empty unless the
+   * project declared some — nothing is discarded by default, because a default here
+   * deletes files.
+   */
+  discardPaths: string[];
 }
 
 export interface LoadedReviewRules {
@@ -99,6 +105,7 @@ export function loadHarness(
   return {
     routes: [...BUILT_IN_ROUTES],
     suggestionSources: [],
+    discardPaths: [],
     usingBuiltInRoutes: true,
     rules: [],
     problems: [],
@@ -123,6 +130,9 @@ function parseHarnessContents(
       // An unreadable config is not a project without sources; scanning is simply
       // unavailable until it parses, which the problem list says out loud.
       suggestionSources: [],
+      // Nothing is discarded from an unreadable config. The list destroys files, so
+      // "we could not read it" must mean none rather than the last known set.
+      discardPaths: [],
       sourcePath,
       problems: [
         `${sourcePath} is not valid JSON (${(error as Error).message}). ` +
@@ -138,6 +148,7 @@ function parseHarnessContents(
     usingBuiltInRoutes: parsed.routes.length === 0,
     rules: parsed.rules,
     suggestionSources: parsed.suggestions,
+    discardPaths: parsed.discardPaths,
     sourcePath,
     problems: parsed.problems,
     noRulesConfigured: parsed.rules.length === 0,
@@ -159,6 +170,7 @@ export function loadReviewRules(
     routes: _routes,
     usingBuiltInRoutes: _builtIn,
     suggestionSources: _sources,
+    discardPaths: _discardPaths,
     ...rules
   } = loadHarness(repositoryRoot, options);
   return rules;

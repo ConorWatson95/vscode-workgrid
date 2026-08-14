@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PipelineRunner, StageSessionRunner } from "./pipelineRunner";
+import { DiscardSelection } from "../domain/worktreeDiscard";
 import { ReviewPlanService, ChangedPathsSource } from "./reviewPlanService";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
 import { TaskWorkspace } from "../domain/taskWorkspace";
@@ -117,10 +118,15 @@ function makeRunner(
     humanWaits?: number[];
     /** How old an unowned `active` subtask must be before `reclaimStale` takes it. */
     staleAfterMs?: number;
+    /** What the declared-path discard reports having done, if the project declared any. */
+    discard?: DiscardSelection;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
   const verified: string[] = [];
+  // Ordering is the whole claim: a discard after the check has read the tree fixes
+  // nothing, so the two record into one list rather than two.
+  const events: string[] = [];
   const changed: ChangedPathsSource = {
     getChangedPaths: async () => ok(options.paths ?? []),
   };
@@ -146,6 +152,7 @@ function makeRunner(
         : {
             run: async (command) => {
               verified.push(command);
+              events.push(`verify:${command}`);
               const canned = options.verify?.[command] ?? { exitCode: 0 };
               return { exitCode: canned.exitCode, output: canned.output ?? "", spawnError: canned.spawnError };
             },
@@ -163,8 +170,15 @@ function makeRunner(
             return readings.length > 1 ? readings.shift()! : readings[0];
           },
       () => options.staleAfterMs ?? 60 * 60 * 1000,
+      options.discard === undefined
+        ? undefined
+        : async () => {
+            events.push("discard");
+            return options.discard;
+          },
     ),
     verified,
+    events,
   };
 }
 
@@ -1431,6 +1445,87 @@ describe("declared verification", () => {
     const build = saved?.pipeline?.stages.find((s) => s.id === "build");
     expect(build?.status).toBe("failed");
     expect(build?.subtasks[0].failureReason).toContain("CS1002");
+  });
+
+  describe("discarding declared local paths", () => {
+    it("discards before the check reads the tree, not after", async () => {
+      // The whole feature. A real task was failed by this check with its work committed
+      // and pushed, because the tree held a transformed Web.config and eight tracked
+      // build artifacts rewritten with the other line ending. Discarding after the check
+      // has already read the tree fixes nothing at all.
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo, events } = makeRunner(sessions, {
+        verify: { "dotnet build": { exitCode: 0 } },
+        discard: { discard: ["QubeAutoApp/Web.config"], withheld: [] },
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      expect(events).toEqual(["discard", "verify:dotnet build"]);
+    });
+
+    it("announces what it discarded in the stage's own record", async () => {
+      // This is the one thing here that destroys work rather than reporting on it, and
+      // Web.config does take real changes. Announced, a wrongly removed change is a line
+      // someone can see; silent, it is indistinguishable from one never made.
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { "dotnet build": { exitCode: 0, output: "Build succeeded" } },
+        discard: { discard: ["QubeAutoApp/Web.config"], withheld: [] },
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(report.steps.join(" ")).toContain("Discarded 1 local change(s)");
+      const saved = await repo.get(subject.id);
+      const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+      const recorded = JSON.stringify(build?.subtasks[0].activity ?? {});
+      expect(recorded).toContain("QubeAutoApp/Web.config");
+      // The check's own output survives alongside it.
+      expect(recorded).toContain("Build succeeded");
+    });
+
+    it("says nothing when the project declared no paths", async () => {
+      // No config means the old behaviour exactly, down to the report.
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo, events } = makeRunner(sessions, {
+        verify: { "dotnet build": { exitCode: 0 } },
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(events).toEqual(["verify:dotnet build"]);
+      expect(report.steps.join(" ")).not.toContain("Discarded");
+    });
+
+    it("still fails the check when a declared path was withheld", async () => {
+      // An untracked or staged path is never discarded, so it is still dirty and the
+      // check still fails on it. Saying why is the only thing that stops the operator
+      // concluding the feature is broken.
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const withheld: DiscardSelection = {
+        discard: [],
+        withheld: [{ path: "QubeAutoApp/Web.config", reason: "staged, so the change was deliberate" }],
+      };
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { "dotnet build": { exitCode: 1, output: "1 uncommitted change(s)" } },
+        discard: withheld,
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(report.steps.join(" ")).toContain("Kept QubeAutoApp/Web.config");
+      const saved = await repo.get(subject.id);
+      expect(saved?.pipeline?.stages.find((s) => s.id === "build")?.status).toBe("failed");
+    });
   });
 
   it("passes a stage whose check passes", async () => {

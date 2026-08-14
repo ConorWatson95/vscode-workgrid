@@ -52,6 +52,18 @@ export interface ParsedHarnessConfig {
    * so a project with no sources is offered no suggestions rather than a guess.
    */
   suggestions: SuggestionSource[];
+  /**
+   * Tracked paths that are local environment rather than work, restored before a stage's
+   * check reads the tree. See `domain/worktreeDiscard.ts` for what that costs and why it
+   * is a discard rather than an exclusion.
+   *
+   * Read from the **repository root** like the rest of this file, which is what stops a
+   * branch adding its own files to the list and having them deleted on the way past a
+   * gate. Empty means the project declared none, and nothing is ever discarded — the
+   * same no-fallback rule as rules and suggestions, and for a stronger reason: a default
+   * here destroys files.
+   */
+  discardPaths: string[];
   problems: string[];
 }
 
@@ -66,7 +78,10 @@ export function parseHarnessConfig(raw: unknown): ParsedHarnessConfig {
 
   let routes: RouteDefinition[] = [];
   let suggestions: SuggestionSource[] = [];
+  let discardPaths: string[] = [];
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    discardPaths = parseDiscardPaths((raw as { worktree?: unknown }).worktree, problems);
+
     const routesField = (raw as { routes?: unknown }).routes;
     if (routesField !== undefined) {
       if (Array.isArray(routesField)) {
@@ -83,7 +98,55 @@ export function parseHarnessConfig(raw: unknown): ParsedHarnessConfig {
     problems.push(...parsedSources.problems);
   }
 
-  return { routes, rules: rulesResult.rules, suggestions, problems };
+  return { routes, rules: rulesResult.rules, suggestions, discardPaths, problems };
+}
+
+/**
+ * Reads `worktree.discardPaths`.
+ *
+ * Every malformed shape is **rejected outright rather than partially accepted**, which
+ * is the opposite of how routes and sources are parsed. The difference is what a wrong
+ * answer costs: a skipped route is a picker entry that does not appear, while a
+ * misread discard path is a file deleted from someone's worktree. Where partial
+ * acceptance would have to guess, this stops.
+ *
+ * An absolute path or one climbing out of the repository is refused for the same
+ * reason `worktreePath` is normalised — the list is repository-relative, and anything
+ * else is either a mistake or an attempt to reach a file outside the checkout.
+ */
+function parseDiscardPaths(worktree: unknown, problems: string[]): string[] {
+  if (worktree === undefined) return [];
+  if (!worktree || typeof worktree !== "object" || Array.isArray(worktree)) {
+    problems.push('"worktree" must be an object.');
+    return [];
+  }
+  const field = (worktree as { discardPaths?: unknown }).discardPaths;
+  if (field === undefined) return [];
+  const paths = strList(field);
+  if (!paths) {
+    problems.push('"worktree.discardPaths" must be an array of repository-relative paths.');
+    return [];
+  }
+
+  const kept: string[] = [];
+  for (const entry of paths) {
+    const path = entry.trim().replace(/\\/g, "/");
+    if (path.startsWith("/") || /^[a-zA-Z]:/.test(path)) {
+      problems.push(
+        `"worktree.discardPaths" entry "${entry}" is absolute; paths are relative to ` +
+          "the repository root.",
+      );
+      continue;
+    }
+    if (path.split("/").includes("..")) {
+      problems.push(
+        `"worktree.discardPaths" entry "${entry}" climbs outside the repository.`,
+      );
+      continue;
+    }
+    kept.push(path);
+  }
+  return kept;
 }
 
 function parseRoutes(entries: unknown[], problems: string[]): RouteDefinition[] {
