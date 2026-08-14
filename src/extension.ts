@@ -213,7 +213,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Reuses the git file listing the chat panel already relies on.
   const visualStudio = new VisualStudioService(logger, async (worktreePath) => {
     const result = await worktreeService.listFiles(worktreePath);
-    return result.ok ? result.value : [];
+    // Thrown rather than flattened to `[]`. An empty array is a real answer — a
+    // checkout with no files — and returning it for a git failure is what let one
+    // failed listing be cached as "no solution here", so the command opened the folder
+    // instead of the .sln from then on. `detect` declines to cache what it could not
+    // read, and it can only do that if the failure reaches it.
+    if (!result.ok) {
+      throw new Error(
+        `Could not list files in ${worktreePath}: ${
+          result.error.kind === "git" ? result.error.error.message : result.error.message
+        }`,
+      );
+    }
+    return result.value;
   });
 
   const nativeWatcher = new NativeSessionWatcher(os.homedir(), logger);

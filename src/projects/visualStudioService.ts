@@ -31,24 +31,62 @@ export class VisualStudioService {
     private readonly listFiles: (worktreePath: string) => Promise<string[]>,
   ) {}
 
-  /** Scans a worktree unless it has been scanned already. */
+  /**
+   * Scans a worktree unless it has been scanned already.
+   *
+   * **A scan that could not run is never cached.** It used to be: the result was stored
+   * on every path including the `catch`, and the injected lister answers a git failure
+   * with an empty array — so one failed `git ls-files` became a permanent "this worktree
+   * has no solution" for the lifetime of the window, and "Open in Visual Studio" opened
+   * the *folder* instead of the .sln from then on. Nothing said why, because falling
+   * back to the folder is a deliberate feature.
+   *
+   * That is absence of evidence cached as evidence of absence, which this codebase
+   * refuses everywhere else — an activity record that is missing means unmeasured, not
+   * zero. The distinction is worth the retry: caching exists because this runs on every
+   * details render, and a repository with no solution still answers from cache.
+   */
   async detect(worktreePath: string): Promise<VisualStudioProject | undefined> {
-    const cached = this.cache.get(worktreePath);
-    if (cached !== undefined || this.cache.has(worktreePath)) return cached;
+    if (this.cache.has(worktreePath)) return this.cache.get(worktreePath);
+
+    let files: string[];
+    try {
+      files = await this.listFiles(worktreePath);
+    } catch (error) {
+      // Detection is cosmetic — never let it break the details view. But not cached, so
+      // the next invocation tries again rather than inheriting this answer.
+      this.logger.debug(`Visual Studio detection failed for ${worktreePath}: ${String(error)}`);
+      return undefined;
+    }
+
+    // An empty listing is the same fault wearing different clothes: a checkout with no
+    // files at all is a listing that did not work, and the lister cannot tell us so
+    // because it reports a git failure as an empty array. Treated as unscanned.
+    if (files.length === 0) {
+      this.logger.debug(`Visual Studio detection found no files in ${worktreePath}.`);
+      return undefined;
+    }
 
     let result: VisualStudioProject | undefined;
-    try {
-      const files = await this.listFiles(worktreePath);
-      const found = detectFromFiles(files);
-      if (found) {
+    const found = detectFromFiles(files);
+    if (found) {
+      try {
         result = { ...found, flavour: await this.classify(worktreePath, found.projects) };
+      } catch (error) {
+        // The solution is what the command needs; the flavour is decoration. Losing the
+        // classification must not lose the .sln with it — that was the original bug's
+        // shape, one layer in.
+        this.logger.debug(`Visual Studio flavour detection failed: ${String(error)}`);
+        result = { ...found, flavour: "unknown" };
       }
-    } catch (error) {
-      // Detection is cosmetic — never let it break the details view.
-      this.logger.debug(`Visual Studio detection failed for ${worktreePath}: ${String(error)}`);
     }
     this.cache.set(worktreePath, result);
     return result;
+  }
+
+  /** Forgets a worktree's scan, so the next detect runs afresh. */
+  forget(worktreePath: string): void {
+    this.cache.delete(worktreePath);
   }
 
   private async classify(worktreePath: string, projects: string[]): Promise<DotnetFlavour> {

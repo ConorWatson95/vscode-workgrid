@@ -2481,6 +2481,14 @@ async function openInVisualStudioCommand(ctx: CommandContext, arg: unknown): Pro
   const target = detected?.solution
     ? path.join(task.worktreePath, detected.solution)
     : task.worktreePath;
+  // Said out loud when it happens. The fallback is deliberate, but silently opening a
+  // folder is indistinguishable from opening the solution and getting it wrong — which
+  // is exactly how a cached failed scan went unnoticed: the command "worked" every time.
+  if (!detected?.solution) {
+    ctx.logger.warn(
+      `No solution detected in ${task.worktreePath}; opening the folder instead.`,
+    );
+  }
 
   const devenv = await ctx.visualStudio.findDevenv();
   if (!devenv) {
