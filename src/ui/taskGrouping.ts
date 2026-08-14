@@ -103,16 +103,39 @@ export interface GroupInput {
 export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | undefined {
   if (!pipeline) return undefined;
 
-  const gate =
-    pipeline.stages.find(
-      (stage) => stage.kind === "humanVerification" && stage.status === "awaiting-approval",
-    ) ??
-    pipeline.stages.find(
-      (stage) =>
-        stage.kind === "humanVerification" &&
-        (stage.status === "active" || stage.status === "pending"),
-    );
+  // Only a gate the route has actually REACHED. `pending` used to be accepted here, and
+  // it is the one status that means nobody has been asked anything yet — which is the
+  // rule this module already claimed to follow: an item routed to a gate nothing has
+  // reached must not file the task as delegated.
+  //
+  // It went wrong on a real task exactly as you would predict. `sql-change` declares no
+  // checklist scopes, so the 7 items a passed behaviour review raised pooled onto the
+  // first verification gate, `sc-signoff` — audience "others", status pending, three
+  // stages away. The task was actually stopped at `sc-verify`, a test gate awaiting the
+  // operator's own approval, and "Verify on DEV" is the operator verifying. It was filed
+  // under "Waiting on others" with no age against it, because a pending stage has no
+  // `startedAt` — which is the tell, since a delegated task with no visible age is the
+  // thing `formatWaitingSince` exists to prevent.
+  const gate = pipeline.stages.find(
+    (stage) =>
+      stage.kind === "humanVerification" &&
+      (stage.status === "awaiting-approval" || stage.status === "active"),
+  );
   if (!gate || gate.checklistAudience !== "others") return undefined;
+
+  // And nothing earlier may still want the operator. `groupForTask` checks this before
+  // its own `awaiting-approval` branch — deliberately, since an external gate normally
+  // *is* that stage — so without this an external gate later in the route outranks an
+  // approval that is unambiguously the operator's. A route stops at its first unresolved
+  // stage, so if that stage is not this gate, this gate is not what the task is waiting
+  // on.
+  const firstUnresolved = pipeline.stages.find(
+    (stage) =>
+      stage.status === "awaiting-approval" ||
+      stage.status === "active" ||
+      stage.status === "pending",
+  );
+  if (firstUnresolved && firstUnresolved.id !== gate.id) return undefined;
 
   if (itemsForGate(pipeline, gate.id).length > 0) return gate;
 

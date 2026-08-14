@@ -261,3 +261,81 @@ describe("groupTasks", () => {
     }
   });
 });
+
+describe("a gate the route has not reached", () => {
+  /**
+   * The real shape, from `sql-change` on "Nissan GB Campaigns - Disc Quantity Error".
+   *
+   * A passed behaviour review raised 7 items; the route declares no checklist scopes, so
+   * they pool onto the first verification gate. That gate is `sc-signoff` — audience
+   * "others", still pending, three stages away. The route is stopped at `sc-verify`,
+   * awaiting the operator's own approval.
+   */
+  const atOwnApproval = () =>
+    pipeline([
+      stage({
+        id: "r-runtime-qa-plan",
+        kind: "behaviourReview",
+        status: "passed",
+        checklist: Array.from({ length: 7 }, (_, i) => ({
+          id: `c${i}`,
+          text: `check ${i}`,
+          checked: false,
+        })),
+      } as Partial<TaskStage>),
+      stage({ id: "sc-verify", kind: "test", status: "awaiting-approval" }),
+      stage({ id: "sc-dev-promote", kind: "deployment", status: "pending" }),
+      stage({
+        id: "sc-signoff",
+        kind: "humanVerification",
+        status: "pending",
+        checklistAudience: "others",
+      } as Partial<TaskStage>),
+    ]);
+
+  it("does not file a task as delegated for a pending external gate", () => {
+    // "Verify on DEV" is the operator verifying. Filing it under waiting-on-others moves
+    // it out of the list they scan to decide what to pick up — the exact sifting failure
+    // the group exists to prevent, in reverse.
+    expect(of(atOwnApproval())).toBe("needs-you");
+    // And nothing to show an age against, which is the tell: a pending stage never started.
+    expect(externalWaitSince(atOwnApproval())).toBeUndefined();
+  });
+
+  it("still files a task as delegated once the external gate is the stage in play", () => {
+    // The feature has to keep working: same route, same items, gate reached.
+    const reached = pipeline([
+      stage({
+        id: "r-runtime-qa-plan",
+        kind: "behaviourReview",
+        status: "passed",
+        checklist: [{ id: "c0", text: "check", checked: false }],
+      } as Partial<TaskStage>),
+      stage({ id: "sc-verify", kind: "test", status: "passed" }),
+      stage({
+        id: "sc-signoff",
+        kind: "humanVerification",
+        status: "awaiting-approval",
+        checklistAudience: "others",
+        startedAt: "2026-08-14T06:00:00.000Z",
+      } as Partial<TaskStage>),
+    ]);
+    expect(of(reached)).toBe("waiting-others");
+    expect(externalWaitSince(reached)).toBe("2026-08-14T06:00:00.000Z");
+  });
+
+  it("keeps a failed stage ahead of a reached external gate", () => {
+    // A broken route is the operator's whatever the task is nominally waiting on.
+    const broken = pipeline([
+      stage({ id: "sc-migration", status: "failed" }),
+      stage({
+        id: "sc-signoff",
+        kind: "humanVerification",
+        status: "awaiting-approval",
+        checklistAudience: "others",
+        checklist: [{ id: "c0", text: "check", checked: false }],
+      } as Partial<TaskStage>),
+    ]);
+    expect(of(broken)).toBe("needs-you");
+  });
+});
