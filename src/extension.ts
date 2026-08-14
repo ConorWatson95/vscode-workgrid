@@ -102,7 +102,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Declared before `repositoryRoot` exists, and read on every call, because the
   // active repository is resolved after the service graph is built and can
   // change while the window is open.
+  /**
+   * Resolves once the active repository is known. Assigned below, where resolution is
+   * started; read here because every task read has to wait for it.
+   */
+  let repositoryReady: Promise<void> | undefined;
   const repository = new RoutedTaskRepository(async () => {
+    // Awaited before concluding there is no repository, and this is load-bearing.
+    // Resolution is deliberately not awaited at activation — it is git spawns plus a
+    // skill write, and awaiting it delayed the tree, the views and every command
+    // registration behind it. But `repositoryRoot` is undefined until it finishes, so
+    // for the first second or so of a window every read fell through to the Memento —
+    // which is a *backup*, not the source of truth. A command run in that window looked
+    // up its task, did not find it there, and returned silently: right-click "Re-run
+    // This Stage…" showed "Activating Extensions…" and then nothing at all.
+    //
+    // Worse than the silence, `save` routed the same way, so a write in that window
+    // would have landed in the backup while the state file held the truth. Waiting is
+    // the whole fix, and it belongs here rather than in each command: this is the one
+    // place that knows the answer is not ready yet.
+    if (repositoryReady) await repositoryReady;
     if (!repositoryRoot) return undefined;
     try {
       return await stateStore.forRepository(repositoryRoot);
@@ -165,7 +184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // nothing and delayed the tree, the views and every command registration behind it.
   // Activation is the one path where that cost shows up as the extension being dead.
   // The three places below that genuinely need a resolved root chain onto this promise.
-  const repositoryReady = resolveRepository();
+  repositoryReady = resolveRepository();
 
   // --- Agents -----------------------------------------------------------
   const terminals = new TerminalManager();

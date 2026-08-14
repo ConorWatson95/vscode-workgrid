@@ -29,7 +29,7 @@ import {
   parseReviewFindings,
   summariseFindings,
 } from "../domain/reviewFindings";
-import { TaskStage } from "../domain/taskPipeline";
+import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -743,8 +743,8 @@ async function applyCorrection(
  */
 async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "correct this stage");
+  if (!task) return;
 
   if (ctx.runner.isRunning(task.id)) {
     void vscode.window.showInformationMessage(
@@ -837,8 +837,8 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
  */
 async function undoCorrectionCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "undo that correction");
+  if (!task) return;
 
   if (ctx.runner.isRunning(task.id)) {
     void vscode.window.showInformationMessage(
@@ -1074,8 +1074,8 @@ async function revertToStageCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "re-run this stage");
+  if (!task) return;
 
   if (ctx.runner.isRunning(task.id)) {
     void vscode.window.showInformationMessage(
@@ -1184,8 +1184,8 @@ async function sendBackToStageCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "send this back");
+  if (!task) return;
 
   if (ctx.runner.isRunning(task.id)) {
     void vscode.window.showInformationMessage(
@@ -1388,8 +1388,8 @@ async function approveStageCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "approve this stage");
+  if (!task) return;
 
   // Approval is the one moment a human has just read what a stage produced and
   // knows something the route does not — "deploy only this project", "leave the
@@ -1586,8 +1586,8 @@ async function toggleChecklistItemCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof ChecklistTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "update that checklist item");
+  if (!task) return;
 
   const checking = !arg.item.checked;
   const result = setChecklistItem(task.pipeline, arg.item.id, {
@@ -1631,8 +1631,8 @@ async function noteChecklistItemCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof ChecklistTreeItem)) return;
-  const task = await ctx.repository.get(arg.task.id);
-  if (!task?.pipeline) return;
+  const task = await rowPipelineTask(ctx, arg, "add that note");
+  if (!task) return;
 
   const note = await vscode.window.showInputBox({
     title: arg.item.text,
@@ -2594,6 +2594,39 @@ function contextOptions(ctx: CommandContext, task: TaskWorkspace) {
  * failure is invisible: an unresolved task means the command returns having done
  * nothing, which several of them do legitimately.
  */
+/**
+ * A tree row's task, reloaded from the repository, with its pipeline.
+ *
+ * Every stage command reloaded the task and returned silently when it had no pipeline.
+ * That looked like a defensive nicety and was hiding a real fault: during activation the
+ * repository falls through to the Memento — a backup, not the source of truth — so the
+ * task was genuinely not there, and right-clicking "Re-run This Stage…" showed
+ * "Activating Extensions…" and then nothing at all. Seven commands were dead in that
+ * window and none of them said so.
+ *
+ * The wait is fixed at the source (see the repository resolver in `extension.ts`). This
+ * is the second half: the row the user right-clicked is proof the task exists, so
+ * failing to load it is a fault to report rather than a condition to ignore.
+ */
+async function rowPipelineTask(
+  ctx: CommandContext,
+  row: { task: TaskWorkspace },
+  action: string,
+  // The narrowing the inline check used to give callers: every one of them reads
+  // task.pipeline straight afterwards, so the guarantee has to survive the extraction.
+): Promise<(TaskWorkspace & { pipeline: TaskPipeline }) | undefined> {
+  const task = await ctx.repository.get(row.task.id);
+  if (task?.pipeline) return task as TaskWorkspace & { pipeline: TaskPipeline };
+  void vscode.window.showWarningMessage(
+    `Could not load "${row.task.name}" to ${action}. ` +
+      "If this window has only just opened, try again in a moment.",
+  );
+  ctx.logger.warn(
+    `Could not ${action} for task ${row.task.id}: no task with a pipeline was loaded.`,
+  );
+  return undefined;
+}
+
 export async function resolveTask(
   ctx: CommandContext,
   arg: unknown,
