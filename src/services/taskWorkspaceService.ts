@@ -269,7 +269,14 @@ export class TaskWorkspaceService {
     task: TaskWorkspace,
     signal?: AbortSignal,
   ): Promise<TaskWorkspaceLiveState> {
-    const status = await this.status.getStatus(task.worktreePath, signal);
+    // Both git calls are issued together: the ahead count does not depend on the status,
+    // and running them in sequence doubled the latency of every row in the tree. A
+    // missing worktree fails both, so nothing is wasted in the case the sequence was
+    // guarding against.
+    const [status, ahead] = await Promise.all([
+      this.status.getStatus(task.worktreePath, signal),
+      this.status.getCommitsAhead(task.worktreePath, task.baseBranch, signal),
+    ]);
     if (!status.ok) {
       return {
         worktreeExists: false,
@@ -278,11 +285,6 @@ export class TaskWorkspaceService {
         commitsAhead: 0,
       };
     }
-    const ahead = await this.status.getCommitsAhead(
-      task.worktreePath,
-      task.baseBranch,
-      signal,
-    );
     return {
       worktreeExists: true,
       isDirty: status.value.isDirty,

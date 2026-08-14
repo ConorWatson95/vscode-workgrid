@@ -195,18 +195,22 @@ export class TaskWorkspaceTreeProvider
       return [new MessageTreeItem(msg, "add"), ...suggestions];
     }
 
-    const taskItems: TaskWorkspaceTreeItem[] = [];
-    for (const { task } of reconciled) {
-      const live = await this.service.getLiveState(task);
-      taskItems.push(
-        new TaskWorkspaceTreeItem(
+    // Concurrent, because `getLiveState` is two git processes per task and this loop
+    // used to await both before starting the next one. On a repository with a dozen
+    // tasks that is two dozen serial spawns before a single row appears, which is most
+    // of what "the tree takes an age" was. Order is preserved by `Promise.all`, so the
+    // grouping below is unaffected.
+    const taskItems = await Promise.all(
+      reconciled.map(async ({ task }) => {
+        const live = await this.service.getLiveState(task);
+        return new TaskWorkspaceTreeItem(
           task,
           live,
           this.getAgentActivity(task),
           this.getHeldCalls(task.id).length,
-        ),
-      );
-    }
+        );
+      }),
+    );
 
     // Grouped by what each task needs, because a task can sit at a verification
     // gate for days: a flat list makes finding the one that moved a matter of

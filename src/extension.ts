@@ -159,7 +159,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
-  await resolveRepository();
+  // Not awaited. Resolving the repository is git spawns plus a skill write, and every
+  // consumer of `repositoryRoot` reads it through a closure — so awaiting here bought
+  // nothing and delayed the tree, the views and every command registration behind it.
+  // Activation is the one path where that cost shows up as the extension being dead.
+  // The three places below that genuinely need a resolved root chain onto this promise.
+  const repositoryReady = resolveRepository();
 
   // --- Agents -----------------------------------------------------------
   const terminals = new TerminalManager();
@@ -899,7 +904,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.warn(`Could not sweep for abandoned stage subtasks: ${String(error)}`);
     }
   };
-  void sweepStaleSubtasks();
+  void repositoryReady.then(() => sweepStaleSubtasks());
   const staleSweep = setInterval(() => void sweepStaleSubtasks(), 10 * 60 * 1000);
   context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
 
@@ -953,20 +958,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.warn(`Could not sync gate declarations: ${String(error)}`);
     }
   };
-  void syncGateDeclarations();
+  void repositoryReady.then(() => syncGateDeclarations());
   // Watched as a *file*, because that is what it is. `onDidChangeConfiguration` fires for
   // VS Code settings and never for `harness.json`, so hooking it would have looked
   // correct and only ever run at activation — which is the same class of mistake as the
   // bug this repairs. Editing the route file is the moment a user expects a new audience
   // to take effect.
-  if (repositoryRoot) {
+  void repositoryReady.then(() => {
+    if (!repositoryRoot) return;
     const configWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(repositoryRoot, ".taskworkspaces/*.json"),
     );
     configWatcher.onDidChange(() => void syncGateDeclarations());
     configWatcher.onDidCreate(() => void syncGateDeclarations());
     context.subscriptions.push(configWatcher);
-  }
+    // The tree rendered against no repository while this was resolving, so it has to be
+    // told the root now exists — otherwise the view says "open a git repository" until
+    // something else happens to refresh it.
+    tree.refresh();
+  });
 
   // Lets an open report show a stage's commands as they run, rather than nothing
   // until the subtask ends. Set here because the runner holds the live copy and is
