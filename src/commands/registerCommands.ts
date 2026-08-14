@@ -103,7 +103,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
 
   return [
     register("taskWorkspaces.create", () => createTaskWorkspaceCommand(ctx)),
-    register("taskWorkspaces.refresh", () => ctx.tree.refresh()),
+    // refreshNow, not refresh: asking to look again must not wait out the render
+    // interval, or the button reads as broken.
+    register("taskWorkspaces.refresh", () => ctx.tree.refreshNow()),
     register("taskWorkspaces.open", (arg) => openCommand(ctx, arg)),
     register("taskWorkspaces.detail", (arg) => openDetailCommand(ctx, arg)),
     register("taskWorkspaces.showDiff", (arg) => showDiffCommand(ctx, arg)),

@@ -886,6 +886,49 @@ looking for a decision.
   unmeasured, not zero**, so the wait is reported beside the elapsed time rather than
   only subtracted from it.
 
+### The UI's own latency, which is a different problem entirely
+
+Measured 14 Aug 2026 on a repository with nine tasks, after "the whole UI is slow again".
+Recorded because every part of the guess was wrong, and because the numbers point at
+*coalescing* rather than at anything being individually slow.
+
+| what | cost |
+|---|---|
+| one tree render (9 tasks) | **401ms** — 18 concurrent git spawns |
+| one `git status --porcelain` on a worktree | 250–280ms |
+| `git worktree list` | 64ms |
+| state file read + parse (3.09MB) | 7ms + 6ms |
+| `for-each-ref` for the branch picker | 59ms |
+
+**The state file is not the bottleneck**, which is worth knowing before anyone optimises it
+— 13ms to read and parse 3MB, against 400ms of git. (235KB of one task is
+`activity.output`; that is what makes it 3MB, and it costs almost nothing to load.)
+
+The defect was that **nothing coalesced**. `refresh()` fired the tree's emitter
+immediately, from around forty call sites plus every session status change, and there was
+no debounce anywhere in the codebase — so a running route turned a burst of events into
+overlapping 400ms git storms. The cost lands on the extension host, which is why the
+symptom was never confined to the tree: the base-branch picker's 110ms of git read as
+"ages" because it queued behind renders nobody asked for. A slow-feeling UI here is
+contention, not a slow path.
+
+`utilities/renderThrottle.ts` + `MIN_RENDER_INTERVAL_MS`, and three rules each with a
+failure behind it: **trailing edge**, because leading-edge drops what arrives during the
+window and the last state of a burst is the one worth showing; **the first render after a
+quiet period is not delayed**, or the throttle adds the lag it exists to remove; and
+**`refresh()` drops the memo before requesting a render**, because a command that has just
+changed something must never be shown a row computed before its change. A deliberate
+action — the Refresh button, the archived toggle — calls `refreshNow()` and skips the
+interval, since a button that waits out a throttle reads as broken.
+
+Also **single-flight on the root render**: VS Code asks for the root more than once per
+redraw, and each ask used to start its own 18 spawns.
+
+Not yet done, and both measured rather than suspected: `ReportContentProvider`'s 2s timer
+re-reads and re-parses the whole state file per open report, from activation, forever
+(~15ms each, permanent); and a first render still costs its 400ms, which only a two-phase
+render — rows now, live state filled in after — would fix.
+
 ### The first latency measurement, and what it ruled out
 
 Taken 11 Aug 2026 against a live 23-stage `report-change` route. Recorded here because

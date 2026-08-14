@@ -14,6 +14,13 @@ const TYPE_IT = "$(edit) Type a branch name…";
  * Falls back to a free-text box when the branches cannot be listed, and offers one from
  * the list as well: a base may name a remote-only branch or a tag, and a picker that
  * cannot express those would be narrower than the box it replaced.
+ *
+ * **Shown before the git calls finish**, which is the difference between this and the
+ * first version. Awaiting them first put ~110ms of git in the middle of an interactive
+ * flow — and when the extension host was busy, that became a pause long enough to read as
+ * the command having failed. A `createQuickPick` appears immediately with `busy` set and
+ * fills in when the answers arrive, so the flow never has a dead moment; the two calls run
+ * concurrently rather than one after the other, since neither needs the other's answer.
  */
 export async function pickBaseBranch(
   ctx: CommandContext,
@@ -21,24 +28,42 @@ export async function pickBaseBranch(
   scope: vscode.Uri | undefined,
   title: string,
 ): Promise<string | undefined> {
-  let defaultBase = ctx.configuration.defaultBaseBranch(scope);
-  if (!defaultBase) {
-    const current = await ctx.worktrees.getCurrentBranch(repositoryRoot);
-    defaultBase = current.ok && current.value ? current.value : "HEAD";
-  }
+  const configured = ctx.configuration.defaultBaseBranch(scope);
 
-  const listed = await ctx.merges.listBranches(repositoryRoot);
+  const pick = vscode.window.createQuickPick();
+  pick.title = title;
+  pick.placeholder = "Base branch — what this work is compared against";
+  pick.ignoreFocusOut = true;
+  pick.busy = true;
+  pick.show();
+
+  const [current, listed] = await Promise.all([
+    configured ? undefined : ctx.worktrees.getCurrentBranch(repositoryRoot),
+    ctx.merges.listBranches(repositoryRoot),
+  ]);
+
+  const defaultBase =
+    configured || (current?.ok && current.value ? current.value : "HEAD");
+
   if (!listed.ok) {
     ctx.logger.warn("Could not list branches for the base-branch picker.");
+    pick.dispose();
     return typeBaseBranch(title, defaultBase);
   }
 
   const choices = orderBaseBranchChoices(listed.value, defaultBase);
-  const picked = await vscode.window.showQuickPick([...choices, TYPE_IT], {
-    title,
-    placeHolder: "Base branch — what this work is compared against",
-    ignoreFocusOut: true,
+  pick.items = [...choices, TYPE_IT].map((label) => ({ label }));
+  // The default is pre-selected rather than merely first, so Enter alone still accepts
+  // it — the one keystroke the free-text box used to cost.
+  pick.activeItems = pick.items.slice(0, 1);
+  pick.busy = false;
+
+  const picked = await new Promise<string | undefined>((resolve) => {
+    pick.onDidAccept(() => resolve(pick.selectedItems[0]?.label));
+    pick.onDidHide(() => resolve(undefined));
   });
+  pick.dispose();
+
   if (!picked) return undefined;
   if (picked === TYPE_IT) return typeBaseBranch(title, defaultBase);
   return picked;

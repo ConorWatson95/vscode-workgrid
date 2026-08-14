@@ -30,6 +30,7 @@ import {
   scannedSuggestions,
 } from "../services/suggestionScanService";
 import { suggestionGroupDescription } from "./suggestionRow";
+import { createRenderThrottle } from "../utilities/renderThrottle";
 
 type TreeNode =
   | TaskGroupTreeItem
@@ -45,6 +46,17 @@ type TreeNode =
   | SuggestionTreeItem;
 
 /**
+ * The shortest gap between two renders of the tree.
+ *
+ * Chosen against the measured cost of one: ~400ms of git for nine tasks, dominated by a
+ * `git status --porcelain` that takes 250–280ms per worktree on a large solution. Set
+ * below that and a busy route can still queue renders faster than they complete, which is
+ * the saturation this exists to stop; set it much above and a row that has genuinely
+ * changed sits stale long enough to be noticed.
+ */
+const MIN_RENDER_INTERVAL_MS = 400;
+
+/**
  * Tree data provider for the Task Workspaces view. Resolves the active
  * repository, reconciles tasks against git, and renders one node per task with
  * live status/dirty information.
@@ -54,6 +66,17 @@ export class TaskWorkspaceTreeProvider
 {
   private readonly emitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly throttle = createRenderThrottle(() => this.emitter.fire(), {
+    minIntervalMs: MIN_RENDER_INTERVAL_MS,
+  });
+  /**
+   * The root render in flight, shared by every caller until the next `refresh()`.
+   *
+   * VS Code asks for the root more than once per redraw — a reveal, a selection, the
+   * detail view following along — and each ask used to start its own 18 git spawns.
+   * Cleared by `refresh()`, so it can never serve a row from before a change.
+   */
+  private rootRender?: Promise<TreeNode[]>;
   private showArchived = false;
   /**
    * Whether filtered-out suggestions are shown.
@@ -95,21 +118,47 @@ export class TaskWorkspaceTreeProvider
       undefined,
   ) {}
 
+  /**
+   * Asks for a redraw, at most once per {@link MIN_RENDER_INTERVAL_MS}.
+   *
+   * Throttled because a render is expensive and this is called from around forty places
+   * plus every session status change: `getLiveState` is two git processes per task, so one
+   * render of nine tasks is 18 concurrent spawns and ~400ms. Uncoalesced, a burst during a
+   * running route became overlapping git storms that saturated the extension host — which
+   * is why the symptom was never confined to the tree, and why 110ms of git in the
+   * base-branch picker took "ages".
+   *
+   * The memo is dropped first, so the render that does happen reads git afresh. That
+   * ordering is the whole correctness argument: a command that has just changed something
+   * calls this, and must not be shown a row computed before its change.
+   */
   refresh(): void {
-    this.emitter.fire();
+    this.rootRender = undefined;
+    this.throttle.request();
+  }
+
+  /**
+   * Redraws now, for a deliberate user action.
+   *
+   * The Refresh command means "go and look again", and making it wait out an interval is
+   * how a button comes to feel broken.
+   */
+  refreshNow(): void {
+    this.rootRender = undefined;
+    this.throttle.flush();
   }
 
   /** Toggles whether archived tasks are shown; returns the new state. */
   toggleArchived(): boolean {
     this.showArchived = !this.showArchived;
-    this.emitter.fire();
+    this.refreshNow();
     return this.showArchived;
   }
 
   /** Toggles whether filtered-out suggestions are shown; returns the new state. */
   toggleHiddenSuggestions(): boolean {
     this.showHiddenSuggestions = !this.showHiddenSuggestions;
-    this.emitter.fire();
+    this.refreshNow();
     return this.showHiddenSuggestions;
   }
 
@@ -163,6 +212,13 @@ export class TaskWorkspaceTreeProvider
     if (element instanceof SuggestionGroupTreeItem) return element.children;
     if (element) return [];
 
+    // Single-flight per redraw: concurrent asks for the root share one set of git calls.
+    this.rootRender ??= this.computeRoot();
+    return this.rootRender;
+  }
+
+  /** Everything under the root: reconciliation, one row per task, orphans, suggestions. */
+  private async computeRoot(): Promise<TreeNode[]> {
     const repositoryRoot = this.resolveRepositoryRoot();
     if (!repositoryRoot) {
       return [
@@ -313,6 +369,9 @@ export class TaskWorkspaceTreeProvider
   }
 
   dispose(): void {
+    // Before the emitter: a pending render firing into a disposed emitter throws on the
+    // way out of the window.
+    this.throttle.dispose();
     this.emitter.dispose();
   }
 }
