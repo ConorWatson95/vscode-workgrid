@@ -14,6 +14,10 @@ import {
   StandingApproval,
 } from "../domain/permissionGatePolicy";
 import {
+  credentialExposureReason,
+  findCredentialExposure,
+} from "../domain/credentialExposure";
+import {
   interjectionDenialReason,
   isDeliverableInterjection,
   StageInterjection,
@@ -392,6 +396,26 @@ export class PermissionGateService {
         );
         this.answer(taskId, id, "deny", interjectionDenialReason(interjection.text));
         this.onInterjectionDelivered?.(interjection);
+        continue;
+      }
+
+      // Ahead of the policy, because this is not a policy question. `gateVerdict`
+      // decides whether a human needs to see a call; this decides whether running it
+      // writes a secret into a file the harness owns — `SubtaskActivity.commands` is
+      // recorded verbatim, so a password on a command line is persisted in
+      // `state.json` and rendered into the stage report. Measured: 150 such commands
+      // across seven tasks.
+      //
+      // Refused rather than held: a hold waits for a human and an unattended stage
+      // would simply stop, where a denial returns into the same turn and the agent
+      // re-issues the call in a form that does not leak. A wrong refusal costs one
+      // round trip; a wrong allow persists a live credential.
+      const exposure = findCredentialExposure(describeGateRequest(request));
+      if (exposure) {
+        this.logger.warn(
+          `Permission gate: refused a ${request.toolName} call carrying a secret (${exposure.kind}).`,
+        );
+        this.answer(taskId, id, "deny", credentialExposureReason(exposure));
         continue;
       }
 

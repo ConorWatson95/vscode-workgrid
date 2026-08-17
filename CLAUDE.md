@@ -1126,9 +1126,40 @@ than a misread reply.
 
 **Found on the way, and not a latency problem:** 150 commands across 7 tasks carry an
 inline credential (`sqlcmd -S … -P <password>`), recorded verbatim in `state.json` and
-rendered into stage reports. Same root cause — with no helper that takes a profile name,
-a stage pastes the password — so the tooling fix closes both. Worth deciding on
-separately and sooner than the latency it sits next to.
+rendered into stage reports.
+
+Two halves, and they needed different answers. The project half was that seven stages
+*instructed* it — "Build the connection string directly from `tools/mcp/profiles/<Manu>.dev.env`"
+— so the stages doing this were following their brief exactly; `qubeautoapp` 7fe00c7e8
+points them at the tooling instead. The runtime half is `domain/credentialExposure.ts`:
+the gate refuses a call that carries a secret on the command line.
+
+Admissible where safety classification is not, and the distinction is load-bearing.
+`permissionGatePolicy` refuses to replicate the CLI's "is this command safe" judgement,
+because that means guessing another tool's policy and being wrong in the direction of
+blocking `git status`. This asks a different question — does running it write a secret
+into a file **this harness owns** — which is a fact about the runtime's own persistence
+that no execution engine can know on its behalf. Four rules:
+
+- **Denied, not held.** A hold waits for a human and an unattended stage stops; a denial
+  returns into the same turn and the agent re-issues the call. A wrong refusal costs one
+  round trip, a wrong allow persists a live credential.
+- **Narrow, because a false positive is how a check like this gets switched off.** A bare
+  `-P` is not enough — `grep -P` is a Perl regex — so the flag counts only alongside a
+  named database client, and only with a value that is not itself a flag, since `-P` with
+  none is the interactive form the fix produces.
+- **No project knowledge in the message.** The harness may say a secret must not reach a
+  command line; only a repository can say which script resolves one.
+- **Command lines only, never file contents.** A stage spotted the gap the first time the
+  rule ran and it is deliberate: `commands` are recorded verbatim, a write records only
+  `pathsWritten`. A secret a project puts in a config file is its own business; one that
+  lands in `state.json` because a stage typed it is the runtime's doing.
+
+Verified end to end, and the first attempt proved the harness rather than the rule: gating
+only `Bash`, the CLI reached for `PowerShell` and the gate never saw the call. The
+extension's default set already covers both. With it, the refusal reached the agent
+verbatim, it quoted the reason back, declined to route around it, and the secret never
+entered the reply.
 
 ### The first latency measurement, and what it ruled out
 

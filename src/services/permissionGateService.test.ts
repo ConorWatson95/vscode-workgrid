@@ -336,6 +336,63 @@ describe("deciding", () => {
   });
 });
 
+describe("a command carrying a secret", () => {
+  let fs: ReturnType<typeof memoryFs>;
+  let service: PermissionGateService;
+
+  beforeEach(() => {
+    const made = make();
+    fs = made.fs;
+    service = made.service;
+    service.prepare("t1");
+  });
+
+  it("is refused with a reason, not held for a human", () => {
+    // A hold would stop an unattended stage; a denial returns into the same turn and
+    // the agent re-issues the call in a form that does not leak.
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: 'sqlcmd -S h -U u -P hunter2 -Q "SELECT 1"' } }),
+    );
+    service.sweep("t1", INBOX);
+
+    const decision = decisionFor(fs, "r1");
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason).toMatch(/carries a secret on the command line/i);
+    expect(service.waiting("t1")).toHaveLength(0);
+  });
+
+  it("never echoes the secret back", () => {
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "sqlcmd -S h -U u -P hunter2" } }),
+    );
+    service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1").reason).not.toContain("hunter2");
+  });
+
+  it("leaves an ordinary call to the policy, which passes it", () => {
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "grep -P '\\d+' notes.txt" } }),
+    );
+    service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1")).toEqual({ decision: "pass" });
+  });
+
+  it("yields to an operator interjection, whose voice outranks it", () => {
+    // Both refuse the same call; the operator's message is the one worth spending it
+    // on, and the credential refusal will catch the retry if it still leaks.
+    service.interject("t1", "stop and talk to me");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "sqlcmd -S h -U u -P hunter2" } }),
+    );
+    service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1").reason).toContain("stop and talk to me");
+  });
+});
+
 describe("operator interjection", () => {
   let fs: ReturnType<typeof memoryFs>;
   let service: PermissionGateService;
