@@ -31,6 +31,7 @@ import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { WorktreeDiscardService } from "./services/worktreeDiscardService";
+import { parsePorcelainChanges } from "./domain/worktreeDiscard";
 import { SuggestionScanService } from "./services/suggestionScanService";
 import { refreshGateDeclarations } from "./domain/stageRefresh";
 import {
@@ -277,6 +278,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // agent reports that it cannot ask, which is the dead end this replaces.
     () =>
       configuration.interactiveQuestions(repositoryUri) ? [ASK_TOOL_ALLOW_RULE] : [],
+    undefined,
+    // The other half of `worktree.discardPaths`. The discard keeps a stage's check from
+    // failing on a transformed `Web.config`; it runs after the session, so it has never
+    // been able to keep that file out of the commit the session just made. This refuses a
+    // `git add -A` / `git commit -a` that would sweep one in, while letting the file be
+    // named explicitly — see `domain/stagedEnvironmentPaths.ts`.
+    //
+    // `currentHarness` is declared further down and only ever called from a sweep, which
+    // cannot run before a stage has been prepared — long after activation returns.
+    () => currentHarness()?.discardPaths ?? [],
+    async (cwd) => {
+      // `status.relativePaths=false` because the CLI's cwd may be a subdirectory of the
+      // worktree, and git would otherwise report paths relative to *it* — which would
+      // silently stop matching a repository-relative declaration. The discard service
+      // needs no such flag: it is handed the worktree root.
+      const status = await gitClient.run(
+        ["-c", "status.relativePaths=false", "status", "--porcelain"],
+        { cwd },
+      );
+      return status.ok ? parsePorcelainChanges(status.value.stdout) : undefined;
+    },
   );
   context.subscriptions.push({ dispose: () => permissionGate.dispose() });
 

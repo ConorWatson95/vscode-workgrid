@@ -18,6 +18,12 @@ import {
   findCredentialExposure,
 } from "../domain/credentialExposure";
 import {
+  environmentStagingReason,
+  findEnvironmentStaging,
+  stagesInBulk,
+} from "../domain/stagedEnvironmentPaths";
+import { WorktreeChange } from "../domain/worktreeDiscard";
+import {
   interjectionDenialReason,
   isDeliverableInterjection,
   StageInterjection,
@@ -97,6 +103,26 @@ export class PermissionGateService {
     /** Rules the settings file should allow outright; see buildGateSettings. */
     private readonly allowRules: () => string[] = () => [],
     private readonly now: () => string = () => new Date().toISOString(),
+    /**
+     * `worktree.discardPaths` from the project's `harness.json`.
+     *
+     * A function for the same reason `WorktreeDiscardService` takes one: it is read from
+     * the repository root, so a task in flight picks up a change to it. Optional, so a
+     * gate built without it behaves exactly as before.
+     */
+    private readonly discardPaths: () => readonly string[] = () => [],
+    /**
+     * The dirty state of the worktree a call is about to run in.
+     *
+     * Injected rather than a `GitClient` so the rules stay testable without a
+     * repository, and read **only** for a command that could stage by sweep — the gate
+     * fires on every tool call, and a `git status` in front of each one would add a
+     * quarter of a second to every command a stage runs. See
+     * `domain/stagedEnvironmentPaths.ts`.
+     */
+    private readonly worktreeChanges?: (
+      cwd: string,
+    ) => Promise<readonly WorktreeChange[] | undefined>,
   ) {}
 
   private readonly refused = new Map<string, Set<string>>();
@@ -113,6 +139,8 @@ export class PermissionGateService {
    */
   private readonly inboxes = new Map<string, string>();
   private readonly watchers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Tasks with a sweep in flight, so overlapping ticks cannot double-answer a call. */
+  private readonly sweeping = new Set<string>();
   private readonly listeners = new Set<() => void>();
 
   /**
@@ -348,21 +376,82 @@ export class PermissionGateService {
    * inconsistently across network and local paths; a quarter-second poll over a
    * directory that holds at most a handful of files is cheap and never misses.
    */
+  /**
+   * Whether this call is worth reading the worktree for — synchronously, and cheaply.
+   *
+   * The gate fires on **every** tool call, so this is the filter that keeps a quarter of
+   * a second of `git status` off the front of every command a stage runs. It is also what
+   * keeps the sweep synchronous for everything else; see the call site.
+   */
+  private mayStageEnvironment(request: GateRequest): boolean {
+    if (!this.worktreeChanges || !request.cwd) return false;
+    if (this.discardPaths().length === 0) return false;
+    return stagesInBulk(describeGateRequest(request));
+  }
+
+  /**
+   * Which declared paths this call would sweep into a commit, having passed the filter.
+   *
+   * `request.cwd` is where the CLI ran the call, which is the worktree whose tree is
+   * about to be committed — the right question to ask even when a task holds more than
+   * one.
+   *
+   * **A read that fails passes the call.** The check exists to stop one thing reaching a
+   * branch; refusing a stage because git was momentarily unreadable would trade that for
+   * a stage stopped for a reason it cannot act on, which is the failure direction
+   * `WorktreeDiscardService` chose for the same reason.
+   */
+  private async environmentStagingFor(
+    request: GateRequest,
+  ): Promise<{ paths: string[] } | undefined> {
+    if (!this.worktreeChanges || !request.cwd) return undefined;
+    const command = describeGateRequest(request);
+
+    let changes: readonly WorktreeChange[] | undefined;
+    try {
+      changes = await this.worktreeChanges(request.cwd);
+    } catch (error) {
+      this.logger.warn(
+        `Permission gate could not read ${request.cwd} to check for local environment: ${String(error)}`,
+      );
+      return undefined;
+    }
+    if (!changes) return undefined;
+
+    return findEnvironmentStaging({
+      command,
+      patterns: this.discardPaths(),
+      changes,
+    });
+  }
+
   private watch(taskId: string, inboxPath: string): void {
     const existing = this.watchers.get(taskId);
     if (existing) clearInterval(existing);
     const timer = setInterval(() => {
-      try {
-        this.sweep(taskId, inboxPath);
-      } catch (error) {
-        this.logger.error(`Permission gate sweep failed: ${String(error)}`);
-      }
+      // Skipped rather than queued while one is in flight. A sweep may now read the
+      // worktree, which costs about as long as the poll interval — so overlapping ticks
+      // are the normal case, not a defensive edge, and two sweeps racing the same
+      // request file could raise or answer it twice.
+      if (this.sweeping.has(taskId)) return;
+      this.sweeping.add(taskId);
+      void this.sweep(taskId, inboxPath)
+        .catch((error) => {
+          this.logger.error(`Permission gate sweep failed: ${String(error)}`);
+        })
+        .finally(() => this.sweeping.delete(taskId));
     }, POLL_INTERVAL_MS);
     this.watchers.set(taskId, timer);
   }
 
-  /** Called by tests to drive the poll deterministically. */
-  sweep(taskId: string, inboxPath: string): void {
+  /**
+   * Called by tests to drive the poll deterministically.
+   *
+   * Async only for the worktree read, which happens for a command that could stage by
+   * sweep and for nothing else — so every other path still runs to completion
+   * synchronously before this returns.
+   */
+  async sweep(taskId: string, inboxPath: string): Promise<void> {
     for (const name of this.fs.listFiles(inboxPath)) {
       if (!name.endsWith(REQUEST_SUFFIX)) continue;
       const id = name.slice(0, -REQUEST_SUFFIX.length);
@@ -416,6 +505,32 @@ export class PermissionGateService {
           `Permission gate: refused a ${request.toolName} call carrying a secret (${exposure.kind}).`,
         );
         this.answer(taskId, id, "deny", credentialExposureReason(exposure));
+        continue;
+      }
+
+      // The same class of question one step further on: not whether the command leaks a
+      // secret, but whether it would commit a path the project declared is local
+      // environment rather than work. `worktreeDiscard` runs from `runVerification`,
+      // which is after the session — so it keeps a check from failing on such a file and
+      // has never been able to keep one out of a commit.
+      //
+      // Refused only for a *sweep*. Naming the path is how a real change to one is
+      // kept, so the deliberate form passes and is recorded verbatim; see
+      // `domain/stagedEnvironmentPaths.ts` for why a blanket refusal would leave a
+      // compliant stage with no admissible call at all.
+      // The pre-check is synchronous and the await is behind it, which is load-bearing
+      // beyond cost: an `await` on the common path would defer every other decision in
+      // this sweep by a microtask, and the callers that drive a sweep and read the
+      // decision immediately would all see nothing written yet.
+      const staging = this.mayStageEnvironment(request)
+        ? await this.environmentStagingFor(request)
+        : undefined;
+      if (staging) {
+        this.logger.warn(
+          `Permission gate: refused a ${request.toolName} call that would commit ` +
+            `declared local environment (${staging.paths.join(", ")}).`,
+        );
+        this.answer(taskId, id, "deny", environmentStagingReason(staging));
         continue;
       }
 

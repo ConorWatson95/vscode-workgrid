@@ -1274,6 +1274,61 @@ The honest fix for the build output is still to untrack it — `.gitignore` cove
 `QubeAutoApp.Mapping.Services/bin/` and not `QubeAutoApp.Mapping.Data/bin/`, which is the
 whole bug. This makes the routes work meanwhile.
 
+**The declaration only ever reached the check, and was read as covering the commit**
+(`domain/stagedEnvironmentPaths.ts`, 17 Aug 2026). `discard` is called from
+`runVerification` — *after* the session — so by the time it looks, a commit stage has
+already run its `git add` and its `git commit`. Two different failures, and only one had
+a mechanism: a gate failing on a dirty `Web.config` was prevented; that same
+`Web.config` reaching the branch was not prevented at all. A review caught a stage's diff
+carrying it repointed at another tenant's databases through an `sa` login with the
+password inline, next to the work the stage was actually asked to do. Nothing in the
+runtime looked, and the reasonable conclusion from reading the config was that something
+did.
+
+Admissible in the gate on `credentialExposure`'s test, not the safety-classification one
+`permissionGatePolicy` refuses: it asks nothing about whether a command is dangerous to
+run, only whether it would commit a path **the project itself declared is not work** — a
+fact about this harness's own configuration that no execution engine can know for it.
+
+The rule is **incidental versus deliberate**, which is what keeps it from closing the
+escape hatch. `selectDiscardable` withholds a *staged* change on purpose, so staging is
+the documented way to keep a real `appSettings` edit through a discard; a blanket refusal
+to commit a declared path would leave a compliant stage with no admissible form of the
+call at all — unlike a leaked credential, where there is always a rewording. So
+`git add -A` and `git commit -a` are refused while `git add QubeAutoApp/Web.config`
+passes, in a command `SubtaskActivity.commands` records verbatim. An invisible inclusion
+becomes a visible choice, auditable afterwards by the same mechanism that caught the
+original failure, and a compliant stage pays one round trip.
+
+Five rules, each load-bearing:
+
+- **Keyed on the worktree column alone.** Nothing dirty in the tree means whatever is
+  staged got there deliberately, so a later `git commit -am` is not refused on its
+  account — without that the hatch works for the `add` and fails at the commit, which is
+  no hatch. A path both staged *and* further modified (`MM`) is still refused: the staged
+  version passed this rule and the delta on top of it did not, which is what a build
+  rewriting a staged file looks like.
+- **The value-taking global flags are whitelisted**, because `-C /repo` and `--no-pager`
+  cannot be told apart generically — a pattern allowing an optional value after any flag
+  reads `add` as `--no-pager`'s argument and matches nothing. Guessing is wrong in the
+  direction of never firing, which is the failure the quoted hook command taught this
+  codebase to fear.
+- **The worktree read sits behind a synchronous filter.** The gate fires on *every* tool
+  call and a `git status` is ~250ms, so only a command that could sweep is worth one. It
+  is also what keeps `sweep` synchronous for everything else: an `await` on the common
+  path defers every other decision in that sweep by a microtask, and the callers that
+  drive a sweep and read the decision immediately would see nothing written. The poll
+  now skips a tick while a sweep is in flight, since a read costs about as long as the
+  interval.
+- **A read that fails passes the call**, the direction `WorktreeDiscardService` already
+  chose: refusing a stage because git was momentarily unreadable trades one spurious stop
+  for another. A conflicted path is likewise left alone — a bulk `add` is how a merge is
+  resolved, and a stage held mid-merge cannot proceed by any rewording.
+- **The paths are named in the refusal; which of them belongs is not.** They came from the
+  project's own `harness.json`, so repeating them back is not the runtime inventing
+  engineering advice — the line `credentialExposure` holds. Saying which one belongs in
+  the commit would be making the judgement instead of handing it over.
+
 ### Keeping a worktree the checkout it claims to be
 
 Two rules in `worktreeProvisioner.ts`, both learned from a task that was dirty before

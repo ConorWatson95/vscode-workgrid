@@ -4,6 +4,7 @@ import {
   PermissionGateService,
 } from "./permissionGateService";
 import { Logger } from "../logging/logger";
+import { parsePorcelainChanges } from "../domain/worktreeDiscard";
 
 const logger: Logger = {
   info: () => {},
@@ -57,8 +58,17 @@ function payload(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-function make(options: { holdEverything?: boolean; allow?: string[] } = {}) {
+function make(
+  options: {
+    holdEverything?: boolean;
+    allow?: string[];
+    discardPaths?: string[];
+    /** Porcelain output the worktree reader should return, or a thrown error. */
+    status?: string | Error;
+  } = {},
+) {
   const fs = memoryFs();
+  const reads: string[] = [];
   const service = new PermissionGateService(
     "/gates",
     fs,
@@ -69,8 +79,16 @@ function make(options: { holdEverything?: boolean; allow?: string[] } = {}) {
     () => options.holdEverything ?? false,
     () => options.allow ?? [],
     () => "2026-08-04T10:00:00.000Z",
+    () => options.discardPaths ?? [],
+    async (cwd) => {
+      reads.push(cwd);
+      if (options.status instanceof Error) throw options.status;
+      return options.status === undefined
+        ? undefined
+        : parsePorcelainChanges(options.status);
+    },
   );
-  return { fs, service };
+  return { fs, service, reads };
 }
 
 /** Reads the decision the service wrote for a request, if any. */
@@ -333,6 +351,102 @@ describe("deciding", () => {
     fs.writeFile("/gates/t2/inbox/r9.request.json", payload());
     service.sweep("t2", "/gates/t2/inbox");
     expect(service.waiting("t2")).toHaveLength(1);
+  });
+});
+
+describe("a commit that would carry local environment", () => {
+  const DIRTY = " M QubeAutoApp/Web.config\n M SqlProject/RU-550.sql\n";
+
+  it("refuses a sweep and names the path", async () => {
+    const { fs, service } = make({
+      discardPaths: ["QubeAutoApp/Web.config"],
+      status: DIRTY,
+    });
+    service.prepare("t1");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git add -A" } }),
+    );
+    await service.sweep("t1", INBOX);
+
+    const decision = decisionFor(fs, "r1");
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason).toContain("QubeAutoApp/Web.config");
+    // Refused, not held: an unattended stage must carry on, not stop.
+    expect(service.waiting("t1")).toHaveLength(0);
+  });
+
+  it("passes the same call when the path is named explicitly", async () => {
+    const { fs, service } = make({
+      discardPaths: ["QubeAutoApp/Web.config"],
+      status: DIRTY,
+    });
+    service.prepare("t1");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git add QubeAutoApp/Web.config" } }),
+    );
+    await service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1")).toEqual({ decision: "pass" });
+  });
+
+  // The whole reason this sits behind a synchronous filter: a `git status` in front of
+  // every tool call would put a quarter of a second on each command a stage runs.
+  it("never reads the worktree for a command that cannot sweep", async () => {
+    const { fs, service, reads } = make({
+      discardPaths: ["QubeAutoApp/Web.config"],
+      status: DIRTY,
+    });
+    service.prepare("t1");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git status" } }),
+    );
+    await service.sweep("t1", INBOX);
+    expect(reads).toEqual([]);
+    expect(decisionFor(fs, "r1")).toEqual({ decision: "pass" });
+  });
+
+  it("never reads the worktree when the project declares nothing", async () => {
+    const { fs, service, reads } = make({ status: DIRTY });
+    service.prepare("t1");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git add -A" } }),
+    );
+    await service.sweep("t1", INBOX);
+    expect(reads).toEqual([]);
+    expect(decisionFor(fs, "r1")).toEqual({ decision: "pass" });
+  });
+
+  // Failing the stage on its own account would trade one spurious stop for another.
+  it("passes the call when the worktree cannot be read", async () => {
+    const { fs, service } = make({
+      discardPaths: ["QubeAutoApp/Web.config"],
+      status: new Error("not a git repository"),
+    });
+    service.prepare("t1");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git add -A" } }),
+    );
+    await service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1")).toEqual({ decision: "pass" });
+  });
+
+  it("yields to an operator interjection, whose voice outranks it", async () => {
+    const { fs, service } = make({
+      discardPaths: ["QubeAutoApp/Web.config"],
+      status: DIRTY,
+    });
+    service.prepare("t1");
+    service.interject("t1", "stop and talk to me");
+    fs.writeFile(
+      `${INBOX}/r1.request.json`,
+      payload({ tool_input: { command: "git add -A" } }),
+    );
+    await service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1").reason).toContain("stop and talk to me");
   });
 });
 
