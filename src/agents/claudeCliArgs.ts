@@ -68,6 +68,24 @@ export interface CliArgsInput {
    * the model's cooperation.
    */
   disallowedTools?: string[];
+  /**
+   * The built-in tools this session may use at all (`--tools`), replacing the CLI's
+   * default set rather than subtracting from it.
+   *
+   * Measured on CLI 2.1.223: the default set costs **31,577 prefix tokens** before a
+   * session is told anything, and declaring only the tools stages actually call
+   * brings that to 16,695 — a 47% cut, most of it schemas for tools no stage has
+   * ever invoked. See `domain/stageTools.ts` for the measurement and for why the
+   * list is derived from recorded `toolCounts` rather than written by hand.
+   *
+   * Distinct from `disallowedTools`, which subtracts named tools from whatever the
+   * default happens to be. This states the whole set, so a tool added to a future
+   * CLI release does not silently enter every stage session.
+   *
+   * Empty means "say nothing" and leaves the CLI's default in place — the correct
+   * behaviour for a hand-driven chat, which is not a stage.
+   */
+  tools?: string[];
 
   /**
    * Load **only** `mcpConfigPath`, ignoring every other source of MCP servers.
@@ -175,6 +193,16 @@ export function buildCliArgs(input: CliArgsInput): string[] {
     .filter((tool) => tool.length > 0);
   if (disallowed.length > 0) {
     args.push("--disallowed-tools", quoteForShell(disallowed.join(","), input.useShell));
+  }
+
+  // Variadic, like --mcp-config, so it must not be the last flag emitted before a
+  // positional — it is placed here, ahead of the repeatable --plugin-dir, so a
+  // following flag terminates the list.
+  const declared = (input.tools ?? [])
+    .map((tool) => tool.trim())
+    .filter((tool) => tool.length > 0);
+  if (declared.length > 0) {
+    args.push("--tools", ...declared.map((tool) => quoteForShell(tool, input.useShell)));
   }
 
   // Repeatable rather than variadic — one flag per directory — so unlike

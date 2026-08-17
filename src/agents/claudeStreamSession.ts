@@ -71,6 +71,12 @@ export interface StreamSessionOptions {
   pluginDirs?: string[];
   /** Tools this session may not use at all. See `claudeCliArgs`. */
   disallowedTools?: string[];
+  /**
+   * The whole built-in tool set this session declares. See `domain/stageTools.ts` —
+   * stage sessions state theirs, a hand-driven chat says nothing and keeps the
+   * CLI's default.
+   */
+  tools?: string[];
   /** Further MCP configs, e.g. the extension's own ask_user server. */
   extraMcpConfigPaths?: string[];
   /**
@@ -240,6 +246,7 @@ export class ClaudeStreamSession {
       settingsPath: this.options.settingsPath,
       pluginDirs: this.options.pluginDirs,
       disallowedTools: this.options.disallowedTools,
+      tools: this.options.tools,
       extraMcpConfigPaths: this.options.extraMcpConfigPaths,
       useShell,
     });

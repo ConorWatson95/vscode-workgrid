@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.103.0",
+  "version": "0.104.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -876,6 +876,15 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "Tools the permission gate is installed for. Empty uses the default set: `Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`.\n\nOnly these tools reach the hook, so anything left out costs nothing. Adding `Read` or `Grep` is not recommended: they are the calls a stage makes most, and the CLI already permits them."
+        },
+        "taskWorkspaces.additionalStageTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "Built-in tools a **stage** may use beyond the default set, which is derived from what stages were measured actually calling: `Bash`, `Read`, `Skill`, `PowerShell`, `Edit`, `Grep`, `Write`, `ToolSearch`, `Glob`, `Agent`, `TaskOutput`.\n\nThe CLI's full tool set costs about 31,600 prefix tokens per stage session; the set above costs about 16,700, so roughly half of every stage's prefix was schemas for tools no stage ever called. Add a name here if one of your routes genuinely needs it (e.g. `WebFetch` to read a ticket over HTTP) — you do not need to restate the defaults.\n\nStage sessions only. A hand-driven chat always keeps the CLI's full set."
         },
         "taskWorkspaces.permissionWaitMinutes": {
           "type": "number",

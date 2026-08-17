@@ -44,6 +44,7 @@ import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { subagentLimitEnv } from "./domain/subagentLimits";
+import { stageTools } from "./domain/stageTools";
 import { askTimeoutEnv } from "./domain/askTimeout";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { taskStateDir } from "./persistence/taskStateFile";
@@ -727,6 +728,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return askUser.release(taskId);
       },
     },
+    // Read per run so widening it takes effect on the next stage, not the next
+    // window. Stage sessions only — the ad-hoc chat runners below pass nothing and
+    // keep the CLI's full set, because a person is not a stage.
+    () => stageTools(configuration.additionalStageTools(repositoryUri)),
   );
   /**
    * The project's routes and rules as they are on disk right now.

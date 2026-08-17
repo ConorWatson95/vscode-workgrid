@@ -8,6 +8,7 @@ import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 import { redactSecrets } from "../domain/secretRedaction";
 import { assessMcpReadiness } from "../domain/mcpReadiness";
+import { stageTools as defaultStageTools } from "../domain/stageTools";
 import { McpServerError, McpServerStatus } from "../domain/mcpServerStatus";
 
 /** How often a running stage's progress is reported to whoever is watching. */
@@ -125,6 +126,14 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
      * existed, which is also the fallback when the hook cannot be installed.
      */
     private readonly gate?: StageGate,
+    /**
+     * The built-in tool set a stage declares, read per run so a project can widen
+     * it without a restart — the same reason `discardPaths` and `gatedTools` are
+     * functions. Defaults to the measured set; returning an empty list restores the
+     * CLI's own default, which is the escape hatch if a route needs a tool nobody
+     * has needed yet.
+     */
+    private readonly stageTools: () => string[] = () => defaultStageTools(),
   ) {}
 
   run(
@@ -178,6 +187,11 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           ...(gateSession?.extraMcpConfigPaths ?? []),
         ],
         autoCompactThreshold: 0,
+        // Declared for stage sessions only, and this is the boundary that matters:
+        // a hand-driven chat is not a stage, and narrowing a person's tools to the
+        // set stages happen to use would be the runtime deciding what a human may
+        // do. Measured at 47% of the prefix — see `domain/stageTools.ts`.
+        tools: this.stageTools(),
         // A stage's own model wins; an absent or blank one leaves the
         // extension-wide setting in place rather than clearing it.
         model: override && override.length > 0 ? override : base.model,

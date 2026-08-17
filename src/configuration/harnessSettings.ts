@@ -217,6 +217,18 @@ export class HarnessSettings {
   }
 
   /**
+   * Built-in tools a stage may use, beyond the measured default set.
+   *
+   * Widens rather than replaces: the default is derived from what stages actually
+   * called across 160 sessions (`domain/stageTools.ts`), and a project needing one
+   * more — a route that fetches a ticket over HTTP, say — should not have to
+   * restate the ten that were already right. Empty is the normal case.
+   */
+  additionalStageTools(): string[] {
+    return this.list("additionalStageTools", []);
+  }
+
+  /**
    * How long a held call may wait, in minutes.
    *
    * Enforced by the CLI's own hook timeout. Verified honoured to well past four

@@ -303,6 +303,39 @@ describe("--plugin-dir", () => {
   });
 });
 
+describe("--tools", () => {
+  it("passes the set as separate variadic arguments, not comma-separated", () => {
+    // Unlike --disallowed-tools, which takes one comma-joined value.
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      tools: ["Bash", "Read", "Skill"],
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    const at = args.indexOf("--tools");
+    expect(at).toBeGreaterThan(-1);
+    expect(args.slice(at + 1, at + 4)).toEqual(["Bash", "Read", "Skill"]);
+  });
+
+  it("says nothing when none are declared, leaving the CLI's own set", () => {
+    // The hand-driven chat case: narrowing a person's tools to the set stages
+    // happen to use would be the runtime deciding what a human may do.
+    const args = buildCliArgs({ permissionMode: "acceptEdits" } as Parameters<
+      typeof buildCliArgs
+    >[0]);
+    expect(args).not.toContain("--tools");
+  });
+
+  it("is not the last flag, since a variadic list needs something to end it", () => {
+    const args = buildCliArgs({
+      permissionMode: "acceptEdits",
+      tools: ["Bash"],
+      pluginDirs: ["/abs/plugin"],
+    } as Parameters<typeof buildCliArgs>[0]);
+
+    expect(args.indexOf("--tools")).toBeLessThan(args.indexOf("--plugin-dir"));
+  });
+});
+
 describe("--disallowed-tools", () => {
   it("passes the tools as one comma-separated argument", () => {
     const args = buildCliArgs({

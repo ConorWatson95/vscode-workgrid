@@ -846,6 +846,58 @@ rebuild — reached production as a scorecard reading 0.0%.
   its own ticket degrades into an existence check, which passes in the one case that
   matters.
 
+### Half a stage's prefix was tools it never calls
+
+`domain/stageTools.ts` + `--tools` in `claudeCliArgs.ts`, 17 Aug 2026. Measured on CLI
+2.1.223: a stage session's cached prefix is **31,577 tokens before it is told anything
+about the task**, and about **15,000 of those are schemas for built-in tools no stage has
+ever invoked** — web search, web fetch, notebook editing, the rest of Claude Code's
+general-purpose surface. Declaring only the tools stages actually use halves it.
+
+| tools declared | prefix tokens |
+|---|---|
+| all (the CLI default) | 31,577 |
+| the measured stage set | **16,695** |
+| a six-tool guess | 7,764 |
+| none at all | 3,511 |
+
+**The list is measured, and guessing it broke things.** Every entry comes from
+`SubtaskActivity.toolCounts` across 160 real sessions — which is exactly why activity is
+recorded verbatim. The first list written from intuition (Bash, Read, Write, Edit, Glob,
+Grep) saved *more*, 75%, and would have silently removed three load-bearing tools:
+`Skill` (31% of sessions — how the protocol skill loads), `Agent` (7% — the delegation
+`subagentLimits` exists to *govern* rather than remove), and `ToolSearch` (14%). A
+cheaper prefix that costs a stage its protocol is not a saving.
+
+Four rules, and the first is the one that makes it admissible at all:
+
+- **Stage sessions only.** A hand-driven chat declares nothing and keeps the CLI's full
+  set. Narrowing a person's tools to the set stages happen to use would be the runtime
+  deciding what a human may do — the same line the permission gate and the protocol skill
+  already draw.
+- **A whole-set declaration, not a subtraction.** `--disallowed-tools` removes named
+  tools from whatever the default happens to be, so a tool added by a future CLI release
+  enters every stage session unannounced. `--tools` states the set.
+- **Removal, not refusal** — the argument `subagentLimits` and the scan runner already
+  make. An agent that never had a tool does the work with what it has; an agent whose
+  call is refused spends turns discovering the wall.
+- **Widened from configuration** (`additionalStageTools`), because a route that needs a
+  tool nobody has needed yet must not need a new build — and emptying the setting
+  restores the CLI's own default rather than breaking a stage.
+
+**Two flags that sounded relevant and are not**, both probed: `--strict-mcp-config`
+changes the prefix by **1 token**, and `--exclude-dynamic-system-prompt-sections` by
+**115** — it targets cross-*user* cache reuse, which a single-operator harness does not
+have. Only `--tools` matters.
+
+**What this is and is not worth.** In steady state roughly $0.03–0.06 per session — real
+but not transformative, since 25k of the old prefix was cache-*read* at $0.50/M rather
+than created. The stronger case is the one that has nothing to do with billing: 15k
+tokens per session describing capabilities that do not exist in the harness's model of a
+stage, and a stage's permitted surface being Claude Code's default rather than the
+harness's declaration. That is the cost half of the deferred stage-isolation work, which
+had been filed as "not a usage measure" on a narrower measurement.
+
 ### The stage environment, and what it cannot start without
 
 Two checks that both exist because the failure they prevent is a stage *succeeding*.

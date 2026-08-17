@@ -105,6 +105,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).gatedTools();
   }
 
+  additionalStageTools(scope?: vscode.Uri): string[] {
+    return this.settings(scope).additionalStageTools();
+  }
+
   permissionWaitMinutes(scope?: vscode.Uri): number {
     return this.settings(scope).permissionWaitMinutes();
   }
