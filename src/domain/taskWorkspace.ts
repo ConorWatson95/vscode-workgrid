@@ -1,5 +1,8 @@
 import { AgentSession } from "./agentSession";
 import { TaskPipeline } from "./taskPipeline";
+import { TaskReference } from "./taskReferences";
+
+export type { TaskReference };
 import { WorkspaceEnvironment } from "./workspaceEnvironment";
 import { WorktreeClaim } from "./worktreeLease";
 
@@ -77,6 +80,18 @@ export interface TaskWorkspace {
    * Optional, so every task that predates suggestions stays valid.
    */
   origin?: TaskOrigin;
+
+  /**
+   * Documents the operator says govern this task, handed to every stage.
+   *
+   * The largest measured cause of corrected work: a stage with an authoritative
+   * specification available that never opened it, and built from the nearest
+   * existing feature instead. See `domain/taskReferences.ts` for the measurement
+   * and for why these are never inferred from the repository.
+   *
+   * Optional, so every task that predates references stays valid.
+   */
+  references?: TaskReference[];
 }
 
 /** Where a task came from, when it came from a suggestion rather than a typed name. */

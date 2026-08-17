@@ -392,7 +392,7 @@ export async function unlinkTaskOriginCommand(
 }
 
 /** The task a tree item stands for, whichever kind of row the menu was opened on. */
-function resolveTaskArg(arg: unknown): TaskWorkspace | undefined {
+export function resolveTaskArg(arg: unknown): TaskWorkspace | undefined {
   const candidate = arg as { task?: TaskWorkspace } | undefined;
   return candidate?.task;
 }

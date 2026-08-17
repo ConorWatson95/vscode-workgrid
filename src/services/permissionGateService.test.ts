@@ -336,6 +336,90 @@ describe("deciding", () => {
   });
 });
 
+describe("operator interjection", () => {
+  let fs: ReturnType<typeof memoryFs>;
+  let service: PermissionGateService;
+
+  beforeEach(() => {
+    const made = make();
+    fs = made.fs;
+    service = made.service;
+    service.prepare("t1");
+  });
+
+  it("delivers the message as a denial, which is the only channel into a live session", () => {
+    // Probed on CLI 2.1.223: an `allow` decision's reason never reaches the model,
+    // a `deny` decision's reason reaches it verbatim and mid-turn.
+    expect(service.interject("t1", "Use tab 3 of the wireframe, not Phase 2.")).toBe(true);
+    fs.writeFile(`${INBOX}/r1.request.json`, payload());
+    service.sweep("t1", INBOX);
+
+    const decision = decisionFor(fs, "r1");
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason).toContain("Use tab 3 of the wireframe, not Phase 2.");
+    expect(decision.reason).toMatch(/was not run/i);
+  });
+
+  it("spends a call the policy would have passed, rather than waiting for a contentious one", () => {
+    // The call in `payload()` is one `gateVerdict` passes. Waiting for a held call
+    // would mean the message arrives only if the stage does something contentious.
+    service.interject("t1", "stop and check with me first");
+    fs.writeFile(`${INBOX}/r1.request.json`, payload());
+    service.sweep("t1", INBOX);
+
+    expect(decisionFor(fs, "r1").decision).toBe("deny");
+  });
+
+  it("delivers once, then gets out of the way", () => {
+    service.interject("t1", "hello");
+    fs.writeFile(`${INBOX}/r1.request.json`, payload());
+    service.sweep("t1", INBOX);
+    fs.writeFile(`${INBOX}/r2.request.json`, payload());
+    service.sweep("t1", INBOX);
+
+    expect(decisionFor(fs, "r1").decision).toBe("deny");
+    expect(decisionFor(fs, "r2")).toEqual({ decision: "pass" });
+    expect(service.pendingInterjection("t1")).toBeUndefined();
+  });
+
+  it("refuses an empty message rather than spending a call to say nothing", () => {
+    expect(service.interject("t1", "   ")).toBe(false);
+    expect(service.pendingInterjection("t1")).toBeUndefined();
+  });
+
+  it("refuses when no gate is armed, since nothing would ever hold a call", () => {
+    const { service: unarmed } = make();
+    expect(unarmed.interject("t2", "hello")).toBe(false);
+  });
+
+  it("replaces an undelivered message instead of queueing a second interruption", () => {
+    service.interject("t1", "first");
+    service.interject("t1", "second");
+    expect(service.pendingInterjection("t1")?.text).toBe("second");
+
+    fs.writeFile(`${INBOX}/r1.request.json`, payload());
+    service.sweep("t1", INBOX);
+    expect(decisionFor(fs, "r1").reason).toContain("second");
+    expect(decisionFor(fs, "r1").reason).not.toContain("first");
+  });
+
+  it("drops an undelivered message when the session it was addressed to ends", () => {
+    service.interject("t1", "never delivered");
+    service.release("t1");
+    expect(service.pendingInterjection("t1")).toBeUndefined();
+  });
+
+  it("reports a delivery, so it can be recorded as the intervention it is", () => {
+    const delivered: string[] = [];
+    service.onInterjectionDelivered = (entry) => delivered.push(entry.text);
+    service.interject("t1", "count directories");
+    fs.writeFile(`${INBOX}/r1.request.json`, payload());
+    service.sweep("t1", INBOX);
+
+    expect(delivered).toEqual(["count directories"]);
+  });
+});
+
 describe("release", () => {
   it("removes the inbox, which tells any live hook to stop waiting", () => {
     const { fs, service } = make();

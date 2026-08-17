@@ -124,6 +124,65 @@ describe("operator guidance from approvals", () => {
   });
 });
 
+describe("the interjection channel is declared before anything arrives", () => {
+  it("is stated in every stage prompt, not left to a skill", () => {
+    // A session told nothing about the channel refuses what arrives on it, and the
+    // refusal is indistinguishable from the operator never having spoken. Skill
+    // loading is the model's choice, so this cannot live there.
+    for (const prompt of [
+      splitPrompt(CONTEXT, stage()),
+      subtaskPrompt(CONTEXT, stage(), { id: "s1", title: "T", prompt: "P", status: "pending" }),
+      behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" })),
+    ]) {
+      expect(prompt).toContain("OPERATOR INTERJECTION");
+      // The block is hard-wrapped, so these span line breaks.
+      expect(prompt).toMatch(/outranks\s+these instructions/i);
+      expect(prompt).toMatch(/refused call did not run/i);
+    }
+  });
+});
+
+describe("governing documents", () => {
+  const withRefs = {
+    ...CONTEXT,
+    references: [{ path: "docs/Mock-up 20.03.26.xlsx", note: "tab 3" }],
+  };
+
+  it("says nothing when the operator has named none", () => {
+    // A heading with no documents under it invites the stage to go looking for some.
+    expect(splitPrompt(CONTEXT, stage())).not.toContain("govern this task");
+  });
+
+  it("reaches every kind of stage prompt", () => {
+    for (const prompt of [
+      splitPrompt(withRefs, stage()),
+      subtaskPrompt(withRefs, stage(), { id: "s1", title: "T", prompt: "P", status: "pending" }),
+      behaviourReviewPrompt(withRefs, stage({ kind: "behaviourReview" })),
+    ]) {
+      expect(prompt).toContain("docs/Mock-up 20.03.26.xlsx — tab 3");
+    }
+  });
+
+  it("sits above the per-stage lines, so it stays in the cached prefix", () => {
+    // The route outline and the brief are the same bytes for every stage of a task.
+    // A per-task block placed below the stage name would end that prefix here and
+    // cost every session the brief again.
+    const prompt = subtaskPrompt(withRefs, stage(), {
+      id: "s1",
+      title: "T",
+      prompt: "P",
+      status: "pending",
+    });
+    expect(prompt.indexOf("govern this task")).toBeLessThan(prompt.indexOf("Stage: "));
+  });
+
+  it("ranks the document above a neighbouring implementation, which is the failure", () => {
+    const prompt = splitPrompt(withRefs, stage());
+    expect(prompt).toContain("before you use any existing feature in the code as a template");
+    expect(prompt).toMatch(/document decides/i);
+  });
+});
+
 describe("project documentation guidance", () => {
   const withDocs = { ...CONTEXT, docsPath: "docs/" };
 

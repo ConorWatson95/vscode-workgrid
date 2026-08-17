@@ -497,6 +497,23 @@ export function recordStageVerdict(
  * The exit code is kept even when it is zero: absence has to mean "no check ran",
  * or the record cannot distinguish a passing build from one nobody attempted.
  */
+/**
+ * Counts an operator interjection against the stage it interrupted.
+ *
+ * Recorded when the message is *delivered*, never when it is typed: an
+ * interjection that never reached a session — the stage finished first, the run
+ * was stopped — cost the operator a sentence and cost the route nothing, and
+ * counting it would inflate the one number the harness is judged on with events
+ * that did not happen.
+ */
+export function recordInterjection(
+  pipeline: TaskPipeline,
+  stageId: string | undefined,
+  at: string,
+): TaskPipeline {
+  return { ...pipeline, ...counted(pipeline, { kind: "interjection", stageId }, at) };
+}
+
 export function recordVerification(
   pipeline: TaskPipeline,
   stageId: string,

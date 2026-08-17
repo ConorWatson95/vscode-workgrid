@@ -156,6 +156,28 @@ describe("buildGateSettings", () => {
     expect(command).toContain('"C:/Users/Conor Watson/inbox"');
   });
 
+  it("quotes every token even when nothing contains a space", () => {
+    // The silent failure this pins, probed on CLI 2.1.223: the hook command is
+    // shelled, and an unquoted backslash path has its separators eaten, so `node`
+    // is handed a path that does not exist. The hook then fails and emits nothing —
+    // which the protocol defines as `pass`. A gate that never fires looks exactly
+    // like a gate that waved everything through.
+    //
+    // This went unnoticed because the development machine's profile name contains a
+    // space, so every real path happened to trip the old whitespace test.
+    const command = (
+      buildGateSettings({
+        scriptPath: "C:\\gates\\t1\\gate.js",
+        interpreter: "node",
+        inboxPath: "C:\\gates\\t1\\inbox",
+        timeoutSeconds: 900,
+        tools: ["Bash"],
+      }) as any
+    ).hooks.PreToolUse[0].hooks[0].command;
+
+    expect(command).toBe('"node" "C:\\gates\\t1\\gate.js" "C:\\gates\\t1\\inbox"');
+  });
+
   it("matches the requested tools as an alternation", () => {
     expect(settings().hooks.PreToolUse[0].matcher).toBe("Bash|PowerShell|Write");
   });

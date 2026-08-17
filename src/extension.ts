@@ -59,7 +59,7 @@ import { nextAnnouncements } from "./domain/permissionGatePolicy";
 import { nodeGateFileSystem } from "./services/gateFileSystem";
 import { AskUserService, PendingAsk } from "./services/askUserService";
 import { ASK_TOOL_ALLOW_RULE } from "./agents/askUserProtocol";
-import { recordQuestion } from "./domain/pipelineEngine";
+import { recordInterjection, recordQuestion } from "./domain/pipelineEngine";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -279,6 +279,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       configuration.interactiveQuestions(repositoryUri) ? [ASK_TOOL_ALLOW_RULE] : [],
   );
   context.subscriptions.push({ dispose: () => permissionGate.dispose() });
+
+  // Counted when the message actually reaches a stage, not when it is typed: an
+  // interjection the session finished before receiving cost the route nothing, and
+  // this is the number the harness is judged on. Attributed to the running stage,
+  // which is the one it interrupted.
+  permissionGate.onInterjectionDelivered = async (interjection) => {
+    const task = await repository.get(interjection.taskId);
+    if (!task?.pipeline) return;
+    const running = task.pipeline.stages.find((stage) => stage.status === "active");
+    await repository.save({
+      ...task,
+      pipeline: recordInterjection(task.pipeline, running?.id, interjection.at),
+    });
+    tree.refresh();
+  };
 
   // Lets a stage ask the user a question without ending its session, so the answer
   // arrives mid-turn and the subtask does not start again from the beginning.

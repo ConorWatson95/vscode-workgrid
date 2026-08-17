@@ -45,6 +45,7 @@ import {
   startTaskFromSuggestionCommand,
   unlinkTaskOriginCommand,
 } from "./suggestionCommands";
+import { interjectCommand, setReferencesCommand } from "./taskContextCommands";
 import { mergeIntoTaskCommand } from "./mergeIntoTaskCommand";
 import {
   TaskWorkspaceTreeItem,
@@ -124,6 +125,8 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.setTicketReference", (arg) =>
       setTicketReferenceCommand(ctx, arg),
     ),
+    register("taskWorkspaces.setReferences", (arg) => setReferencesCommand(ctx, arg)),
+    register("taskWorkspaces.interject", (arg) => interjectCommand(ctx, arg)),
     register("taskWorkspaces.toggleHiddenSuggestions", () => {
       const showing = ctx.tree.toggleHiddenSuggestions();
       void vscode.commands.executeCommand(

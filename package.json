@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.100.5",
+  "version": "0.101.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -220,6 +220,18 @@
         "title": "Set Ticket Reference…",
         "category": "Task Workspaces",
         "icon": "$(tag)"
+      },
+      {
+        "command": "taskWorkspaces.setReferences",
+        "title": "Governing Documents…",
+        "category": "Task Workspaces",
+        "icon": "$(book)"
+      },
+      {
+        "command": "taskWorkspaces.interject",
+        "title": "Say Something to This Stage…",
+        "category": "Task Workspaces",
+        "icon": "$(comment)"
       },
       {
         "command": "taskWorkspaces.unlinkTaskOrigin",
@@ -442,6 +454,16 @@
           "command": "taskWorkspaces.setTicketReference",
           "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/ && !(viewItem =~ /linkedToSuggestion/)",
           "group": "9_link@0"
+        },
+        {
+          "command": "taskWorkspaces.setReferences",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/",
+          "group": "9_link@2"
+        },
+        {
+          "command": "taskWorkspaces.interject",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /agentStoppable/",
+          "group": "1_actions@3"
         },
         {
           "command": "taskWorkspaces.unlinkTaskOrigin",

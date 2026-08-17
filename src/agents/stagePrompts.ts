@@ -11,6 +11,7 @@ import {
 import { invariantProtocolBlock } from "./claudeAdapter";
 import { isNothingReported } from "../domain/nothingReported";
 import { splitScopeTag } from "../domain/checklistScope";
+import { referenceGuidance } from "../domain/taskReferences";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -81,6 +82,21 @@ export interface StageContext {
    * `id` is what locates the reader, since two stages may share a name.
    */
   routeStages?: { id: string; name: string; summary: string }[];
+  /**
+   * The documents that govern this task, as the operator named them.
+   *
+   * Distinct from `docsPath`, and the distinction is the point. `docsPath` is the
+   * project's standing documentation — true of every task, discovered by reading.
+   * These are specific to *this* task and known only to the operator: a wireframe
+   * tab, a signed-off spec, a mail thread setting an acceptance rule. A stage
+   * given neither does the reasonable thing and copies the closest existing
+   * feature, which was the single largest cause of corrected work measured across
+   * eight live routes.
+   *
+   * Per-task rather than per-stage, so it sits in the cached prefix beside the
+   * brief and the route outline: twenty-two sessions pay for it once.
+   */
+  references?: { path: string; note?: string }[];
 }
 
 /**
@@ -171,6 +187,14 @@ function preamble(context: StageContext, stage: TaskStage): string {
     `Task: ${context.taskName}`,
     context.taskDescription ? `Brief: ${context.taskDescription}` : "",
     `Branch: ${context.branchName} (based on ${context.baseBranch})`,
+
+    // Above the route outline and everything per-stage, so it stays inside the
+    // prefix every stage of this task shares. Placed immediately after the brief
+    // because that is what it qualifies: where the brief and a governing document
+    // disagree, `referenceGuidance` says the document wins.
+    ...referenceGuidance(
+      context.references?.map((reference) => ({ ...reference, at: "" })),
+    ),
 
     // The route sits above the per-stage lines, not below them, and that ordering is
     // the whole saving: it and the brief are the same bytes for every stage of a

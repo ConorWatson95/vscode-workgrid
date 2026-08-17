@@ -523,6 +523,13 @@ export class PipelineRunner {
       branchName: task.branchName,
       baseBranch: task.baseBranch,
       docsPath: this.docsPath() || undefined,
+      // Named by the operator, never inferred: a guessed reference would be stated
+      // to every stage with the authority of one they chose, and being told the
+      // wrong document governs the work is the error this exists to prevent.
+      references: task.references?.map((reference) => ({
+        path: reference.path,
+        note: reference.note,
+      })),
       // Every later stage sees an approval note: guidance given at a gate is about the
       // work that follows, so expiring it at the next stage boundary would waste it.
       // A send-back's findings and a re-run's reason are not that — they are about one

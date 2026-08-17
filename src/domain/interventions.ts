@@ -19,7 +19,18 @@ export type InterventionKind =
   | "deferral"
   | "revert"
   | "skip"
-  | "retry";
+  | "retry"
+  /**
+   * The operator spoke to a stage while it was running.
+   *
+   * Its own kind rather than folded into "answer", because the two say opposite
+   * things about the route. An answer is the stage asking and the operator
+   * supplying — the mechanism working. An interjection is the operator having to
+   * intervene *unprompted*, because the stage was confidently going the wrong way
+   * and had not thought to ask. A route accumulating these is one whose stages are
+   * under-briefed, which is a different fix from one that asks too much.
+   */
+  | "interjection";
 
 export interface InterventionRecord {
   kind: InterventionKind;

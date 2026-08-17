@@ -1,5 +1,6 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { normalizePipeline } from "../domain/taskPipeline";
+import { normaliseReferences } from "../domain/taskReferences";
 
 /**
  * Migration for the persisted task blob.
@@ -145,6 +146,17 @@ function migrateTask(entry: unknown): TaskWorkspace | undefined {
   task.createdAt = typeof raw.createdAt === "string" ? raw.createdAt : "";
   task.updatedAt =
     typeof raw.updatedAt === "string" ? raw.updatedAt : task.createdAt;
+
+  // The task record is spread wholesale above, so references survive a round trip
+  // without any work here. What this adds is dropping an entry that names no
+  // document: spread untouched, it would reach every stage as a line asserting that
+  // something unnameable governs the work.
+  const references = normaliseReferences(raw.references);
+  if (references) {
+    task.references = references;
+  } else {
+    delete task.references;
+  }
 
   // Pipelines predating routes carry only { name, status } stages.
   const pipeline = normalizePipeline(raw.pipeline);

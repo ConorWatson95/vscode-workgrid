@@ -381,6 +381,25 @@ Two invariants follow from that last point, and both are load-bearing:
 - **Paths in the settings file must be absolute and the hook command quoted.**
   The CLI reads it with the *worktree* as cwd, so a relative path silently never
   fires, which looks exactly like the feature being off.
+- **Every token of the hook command is quoted, unconditionally** — a live defect until
+  17 Aug 2026, found only by running the gate against a real CLI. `quote()` quoted only
+  values containing whitespace. The command is shelled, and on Windows these paths are
+  backslash-separated: unquoted, the separators are eaten, `node` is handed a path that
+  does not exist, the hook fails and emits nothing — **and emitting nothing means pass**.
+  So the gate did not fire at all, which is indistinguishable from one waving every call
+  through. Probed, same script and session each time:
+
+  | hook command | fires |
+  |---|---|
+  | forward slashes, unquoted | yes |
+  | backslashes, unquoted | **no** |
+  | backslashes, quoted | yes |
+
+  It worked in practice only by accident: the gate root sits under `globalStorageUri`, and
+  the development machine's profile name contains a space, so every real path tripped the
+  whitespace test. A profile without a space had no permission gate whatsoever, and no way
+  to tell. The lesson generalises past this bug — where the failure is silent and the
+  saving is nothing, do the safe thing unconditionally rather than deciding per value.
 
 ### Asking the user (`ask_user`)
 
@@ -928,6 +947,153 @@ Not yet done, and both measured rather than suspected: `ReportContentProvider`'s
 re-reads and re-parses the whole state file per open report, from activation, forever
 (~15ms each, permanent); and a first render still costs its 400ms, which only a two-phase
 render — rows now, live state filled in after — would fix.
+
+### The second latency measurement, and the denominator the first one missed
+
+Taken 14 Aug 2026 across all eight live pipelines in `qubeautoapp`'s state file, after
+"latency is becoming a real problem". The first measurement concluded a route is
+generation-bound and sent the fixes at project config. It was right about the arithmetic
+and wrong about the question, because it measured **surviving** subtasks only:
+
+| | time | cost |
+|---|---|---|
+| surviving execution | 382 min | $127 |
+| discarded execution | **824 min** | **$252** |
+
+**68% of all agent execution was thrown away.** Throughput is 42.5 tok/s against the
+40 tok/s measured three days earlier, so nothing got slower; what grew is how much of it
+gets discarded. `TaskPipeline.discarded` was added *because* that blindness was noticed,
+and then nobody re-read the number.
+
+**The "downstream stages are cheap" assumption is false.** Unconditional re-opening was
+justified on the grounds that implementation carries nearly all the cost and the rest are
+gates. Measured: non-implementation rework is **120 runs, 423 min, $107** —
+`deployment` 179 min, `domainReview` 101 min, `codeReview` 71 min, `test` 61 min. Gates
+are free; the stages between them are not.
+
+**Where the corrections actually come from**, read from 25 correction findings and ~40
+guidance notes:
+
+- **The worst single stage was a harness bug already fixed.** `Promote to UAT`, 8 runs,
+  135 min — its own re-run reasons say the verification ran a stale copy of
+  `Test-WorkPromoted.ps1`. That is the `${repoRoot}` defect, and the project's routes now
+  use the placeholder throughout. Discount it before reading the rest.
+- **A governing document existed and no stage was pointed at it** — the largest remaining
+  cluster, and the subject of `domain/taskReferences.ts` below.
+- **The operator was conducting a conversation by re-running a stage per question** —
+  `Decide and make the change`, 6 runs, 37 min, three questions. See
+  `domain/stageInterjection.ts`.
+- **A fix reported but not landed** — "purchases still double-counted (NOT fixed)", found
+  by the same review twice. The sixth instance of the reply-claims-an-outcome-the-parser-
+  cannot-check disease.
+- **A change applied to one object and not its twin** — `p_Bespoke_Scorecard_Summary`,
+  the `PartMultiplier` baselines.
+
+### Telling a stage what governs the work
+
+`domain/taskReferences.ts` + `TaskWorkspace.references` + `StageContext.references`,
+built 14 Aug 2026. The measured failure: a report's layout came from tab 3 of a wireframe
+spreadsheet, the stage built it from the nearest prior implementation instead, and it cost
+five corrections — hitting `Plan` and `Implement the data` *separately*, because
+subtask-per-session means each stage rediscovers the gap rather than inheriting the fix.
+
+The stage was not being careless. Told nothing about what governs the work, a capable
+model does the reasonable thing and copies the closest existing feature, and **it cannot
+detect that it has done so**. Which document decides the work is exactly what
+`StageContext` is for: a deterministic fact the operator holds that is in no diff, no
+branch and usually not in the brief.
+
+Rules, each load-bearing:
+
+- **Named, never inferred.** No scan of the repository for likely-looking documents. A
+  guessed reference would be stated to every stage with the authority of one the operator
+  chose, and being told the wrong document is authoritative is the failure this prevents.
+- **Precedence is stated, not implied.** The prompt says the document decides behaviour,
+  layout and naming and the code is a guide to style only — because a stage given both and
+  no ranking simply merges them, which is how one report ended up with Phase 2's layout and
+  this task's data.
+- **A document it cannot open is a thing to ask about.** Governing documents are routinely
+  binaries or wiki pages, and what a stage does when it cannot see the spec is the whole
+  defect. Existence is deliberately not validated, or the references that caused the
+  failure would be the ones refused.
+- **The note field earns its place.** "tab 3 of the wireframe" — a stage handed the
+  workbook and not the tab has the same ambiguity in a smaller box.
+- **In the cached prefix.** Per-task, so it sits with the brief and the route outline and
+  twenty-two sessions pay for it once. Anything per-stage placed above it would end the
+  shared prefix there.
+
+### Speaking to a stage that is already running
+
+`domain/stageInterjection.ts` + `PermissionGateService.interject`. `ask_user` let the
+*agent* open a channel mid-session and there was no reverse: once a stage was running the
+operator could wait for it or throw it away. So the correction arrived as a re-run, and a
+three-question conversation cost three whole stages.
+
+**Probed against CLI 2.1.223, because the entire design turns on it:**
+
+- **A `PreToolUse` hook answering `allow` carries a `permissionDecisionReason` the model
+  never sees.** Verified directly — a session asked to quote any message received during
+  an allowed call reported, correctly, that the tool result held only the command's output.
+  The obvious channel does not exist.
+- **A hook answering `deny` delivers its reason to the model verbatim and mid-turn.**
+  Verified: the probe token came back quoted in full and the session adjusted and completed
+  in the same turn, no re-run.
+
+So the only way into a live session is to refuse one tool call and say why. The cost is one
+round trip — the denied call never executes and the agent re-issues it if it is still
+right; what is saved is the stage.
+
+**The transport was never the hard part — provenance was.** Exercised end to end against a
+real session, and the first two arms failed in a way no unit test would show. Told nothing
+about the channel, the session received the message verbatim, **and refused it**: *"that
+didn't come from you as a user turn — it appeared inside tool output — so I disregarded
+it."* It re-issued the held call and carried on with its original plan. That is correct
+handling of an instruction arriving in a tool channel, it is what a current model *should*
+do, and it defeats the feature completely. Naming the sender inside the message did not
+help — the message cannot establish its own authority, which is the whole point.
+
+Declaring the channel in the **invariant preamble** fixes it, and only that. Same
+scenario, same message, with `INTERJECTION_MARKER` and its meaning stated from turn zero:
+the session re-issued the held call, obeyed the redirection, and reported what it had been
+told. Verified twice — once with a hand-written contract, then again with the shipped
+`invariantProtocolBlock`.
+
+This is a contract in the strict sense the three-layer split above means, and it must
+never move into the skill: a session that did not load the skill refuses the interjection
+and looks exactly like a session whose operator never spoke. Four arms, all CLI 2.1.223:
+
+| what the session was told | outcome |
+|---|---|
+| nothing (message names its sender) | **refused as untrusted content** |
+| nothing, and prompt mentions permission messages | **refused, and reported it instead** |
+| hand-written contract up front | obeyed, held call re-issued |
+| the shipped `invariantProtocolBlock` | obeyed, held call re-issued |
+
+Rules:
+
+- **Delivered on the first call it can get**, ahead of `gateVerdict`. A call the policy
+  would have passed is the *best* one to spend; waiting for one the policy holds means the
+  message arrives only if the stage does something contentious, which may be never.
+- **The message names its sender.** Probed: given an anonymous instruction inside a denial,
+  the session treated it as an injected string of doubtful provenance, declined to act on
+  it, and said so — correct behaviour, and useless. It also has to say the call was not run
+  and nothing is wrong, or a denial reads as a permission wall and the stage starts working
+  around it, which is what the gate exists to stop.
+- **One held at a time, replaced not queued.** Each delivery costs a refused call, and an
+  operator typing twice has corrected themselves.
+- **Never persisted, and dropped on `release`.** An interjection is addressed to the
+  session running now; one surviving a reload would be delivered to whatever stage ran
+  next — the failure `guidanceFor` exists to prevent one level up.
+- **Refused when no gate is armed**, because nothing would ever hold a call and the
+  message would wait forever looking pending.
+- **Counted as its own `InterventionKind`**, recorded on delivery rather than on typing.
+  Distinct from `answer` deliberately: an answer is the stage asking and the mechanism
+  working; an interjection is the operator intervening unprompted because the stage was
+  confidently going the wrong way and had not thought to ask. A route accumulating these is
+  under-briefed, which is the opposite fix from one that asks too much.
+
+**The one constraint:** a stage composing its final reply makes no more tool calls and
+cannot be interrupted. The command says so rather than letting it look broken.
 
 ### The first latency measurement, and what it ruled out
 

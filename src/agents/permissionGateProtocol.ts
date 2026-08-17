@@ -233,7 +233,34 @@ export function buildGateSettings(options: {
   };
 }
 
-/** Paths routinely contain spaces on Windows, and the hook command is shelled. */
+/**
+ * Quotes **every** token of the hook command, always.
+ *
+ * This used to quote only values containing whitespace, which was wrong in a way
+ * that could not be seen from here. The hook command is shelled, and on Windows
+ * these paths are backslash-separated: unquoted, the shell eats the separators and
+ * `node` is handed a path that does not exist, so the hook fails, emits nothing —
+ * and **emitting nothing means pass**. A gate that never fires is indistinguishable
+ * from a gate that waved the call through.
+ *
+ * Probed on CLI 2.1.223, same script and session for each:
+ *
+ * | hook command | fires |
+ * |---|---|
+ * | forward slashes, unquoted | yes |
+ * | backslashes, unquoted | **no** |
+ * | backslashes, quoted | yes |
+ *
+ * It worked in practice only by accident: the extension's gate root sits under
+ * `globalStorageUri`, and on the machine this was developed on the user profile
+ * name contains a space — so every path happened to trip the whitespace test and
+ * get quoted. A profile without a space silently had no permission gate at all.
+ *
+ * This is the same failure the absolute-path rule exists for, by a different
+ * route, and it argues for the same treatment: do the safe thing unconditionally
+ * rather than deciding per value, because the failure is silent and the saving of
+ * not quoting is nothing.
+ */
 function quote(value: string): string {
-  return /[\s"]/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+  return `"${value.replace(/"/g, '\\"')}"`;
 }

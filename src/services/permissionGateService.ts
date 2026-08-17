@@ -13,6 +13,11 @@ import {
   gateVerdict,
   StandingApproval,
 } from "../domain/permissionGatePolicy";
+import {
+  interjectionDenialReason,
+  isDeliverableInterjection,
+  StageInterjection,
+} from "../domain/stageInterjection";
 import { Logger } from "../logging/logger";
 
 /**
@@ -105,6 +110,55 @@ export class PermissionGateService {
   private readonly inboxes = new Map<string, string>();
   private readonly watchers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly listeners = new Set<() => void>();
+
+  /**
+   * A message the operator wants the running stage to read, per task.
+   *
+   * At most one is held. A second replaces the first rather than queueing: each
+   * delivery costs a refused tool call, and an operator who types twice before the
+   * stage next reaches the gate has corrected themselves, not asked for two
+   * interruptions. The UI shows what is waiting, so the replacement is visible.
+   *
+   * Not persisted. An interjection is addressed to a session that is running now;
+   * one that survived a window reload would be delivered to whatever stage happened
+   * to be running next, which could be a different stage of a different task's
+   * route reading an instruction written about work it has never seen.
+   */
+  private readonly interjections = new Map<string, StageInterjection>();
+
+  /** Notified once a message has actually reached a stage, for the record. */
+  onInterjectionDelivered?: (interjection: StageInterjection) => void;
+
+  /**
+   * Queues a message for the running stage, replacing anything undelivered.
+   *
+   * Returns false when there is no armed gate for the task: without the hook
+   * nothing will ever hold a call, so the message would wait forever while the UI
+   * showed it as pending. A stage running without the gate cannot be spoken to,
+   * and the caller has to say so rather than silently accept the message.
+   */
+  interject(taskId: string, text: string): boolean {
+    if (!isDeliverableInterjection(text) || !this.isArmed(taskId)) return false;
+    this.interjections.set(taskId, { taskId, text: text.trim(), at: this.now() });
+    this.announce();
+    return true;
+  }
+
+  /** What is waiting to be said to this task's stage, if anything. */
+  pendingInterjection(taskId: string): StageInterjection | undefined {
+    return this.interjections.get(taskId);
+  }
+
+  /**
+   * Drops an undelivered message.
+   *
+   * Called when a stage ends, because the session it was addressed to is gone —
+   * delivering it to the next stage would hand one stage's correction to another,
+   * which is the mistake `guidanceFor` exists to prevent one level up.
+   */
+  clearInterjection(taskId: string): void {
+    if (this.interjections.delete(taskId)) this.announce();
+  }
 
   /** Fires whenever the set of waiting calls changes. */
   onChanged(listener: () => void): () => void {
@@ -206,6 +260,10 @@ export class PermissionGateService {
     for (const [id, entry] of [...this.pending]) {
       if (entry.taskId === taskId) this.pending.delete(id);
     }
+    // An undelivered message dies with the session it was addressed to. Carrying it
+    // forward would hand one stage's correction to the next stage to run, which is
+    // the failure `guidanceFor` exists to prevent one level up.
+    this.interjections.delete(taskId);
     const inboxPath = this.inboxes.get(taskId);
     this.inboxes.delete(taskId);
     try {
@@ -313,6 +371,27 @@ export class PermissionGateService {
         // Unreadable: pass rather than leave a stage hanging on a shape we do
         // not understand.
         this.answer(taskId, id, "allow", "Task Workspaces could not read this request.");
+        continue;
+      }
+
+      // Before any policy question: is the operator trying to say something to
+      // this stage? An interjection takes the first call it can get, because the
+      // gate is the only channel into a running session — see
+      // `domain/stageInterjection.ts` for the two probes that establish that, and
+      // for why it must be a denial rather than a waved-through call with a note.
+      //
+      // Ahead of `gateVerdict` deliberately. A call the policy would pass is the
+      // *best* one to spend, since it was going to run unremarked; waiting for one
+      // the policy holds would mean the message arrives only when the stage happens
+      // to do something contentious, which may be never.
+      const interjection = this.interjections.get(taskId);
+      if (interjection) {
+        this.interjections.delete(taskId);
+        this.logger.info(
+          `Permission gate: delivering an operator interjection to ${taskId} by holding ${request.toolName}.`,
+        );
+        this.answer(taskId, id, "deny", interjectionDenialReason(interjection.text));
+        this.onInterjectionDelivered?.(interjection);
         continue;
       }
 

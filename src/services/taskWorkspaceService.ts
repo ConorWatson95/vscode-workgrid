@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   TaskOrigin,
+  TaskReference,
   TaskWorkspace,
   TaskWorkspaceLiveState,
 } from "../domain/taskWorkspace";
@@ -333,6 +334,42 @@ export class TaskWorkspaceService {
       origin
         ? `Linked task "${task.name}" to ${origin.sourceId}/${origin.ref}`
         : `Unlinked task "${task.name}" from its suggestion`,
+    );
+    return ok(updated);
+  }
+
+  /**
+   * Records the documents that govern a task, or drops one.
+   *
+   * Unlike `setTaskOrigin` this deliberately allows re-pointing: an origin is an
+   * identity claim that other things match on, where a reference list is working
+   * material the operator curates as they learn what actually governs the work.
+   * The equivalent safeguard is that changing it only affects stages that have not
+   * run — a stage that already ran is not retrospectively told it had a document
+   * it never saw.
+   */
+  async setTaskReferences(
+    id: string,
+    references: TaskReference[],
+  ): Promise<Result<TaskWorkspace, ServiceError>> {
+    const task = await this.repository.get(id);
+    if (!task) return err({ kind: "notFound", message: "Task not found." });
+
+    const updated: TaskWorkspace = {
+      ...task,
+      ...(references.length > 0 ? { references } : {}),
+      updatedAt: this.clock.now(),
+    };
+    if (references.length === 0) {
+      delete (updated as { references?: TaskReference[] }).references;
+    }
+
+    await this.repository.save(updated);
+    this.logger.info(
+      references.length > 0
+        ? `Task "${task.name}" is governed by ${references.length} document(s): ` +
+            references.map((reference) => reference.path).join(", ")
+        : `Cleared the governing documents for task "${task.name}"`,
     );
     return ok(updated);
   }
