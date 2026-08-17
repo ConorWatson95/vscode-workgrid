@@ -61,7 +61,23 @@ export interface Subtask {
    * it is handed the stage's own previous report and told what is wrong with it,
    * which is the entire reason a correction costs a fraction of a re-run.
    */
-  correction?: { finding: string; at: string; undo?: CorrectionUndo };
+  correction?: {
+    finding: string;
+    at: string;
+    undo?: CorrectionUndo;
+    /**
+     * Set when this is an *amendment* — a stage bringing its own output into line
+     * because the stage it was built on was corrected — rather than a correction to
+     * this stage's own work.
+     *
+     * Kept apart because the two repeats mean opposite things. Three corrections is a
+     * stage that got its own work wrong three times; three amendments is a stage that
+     * was right each time and had the ground moved under it. A ledger that conflated
+     * them would send the next investigation at exactly the wrong stage. It is also
+     * what lets `undoCorrection` find the amendments one correction caused.
+     */
+    upstream?: { stageId: string; stageName: string };
+  };
 }
 
 /**

@@ -22,6 +22,11 @@ import {
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
 import { hasUsage, stageUsage, subtasksUsage } from "./stageUsage";
+import {
+  amendmentTitle,
+  UpstreamCorrection,
+  upstreamAmendmentNote,
+} from "./upstreamAmendment";
 import { ownedByPendingStage, ownedByStageResolution } from "./deferralOwnership";
 import { itemsForGate } from "./checklistScope";
 import {
@@ -617,13 +622,31 @@ function reopenAfter(
   index: number,
   at: string,
   reason: string,
+  /**
+   * The correction that caused this. When given, a later stage that has produced
+   * something is **amended** rather than wiped: its replies and activity stay, and it
+   * gets a subtask telling it what changed upstream. See `domain/upstreamAmendment.ts`
+   * for the measurement — 61% of a 2.5-hour window was downstream stages re-running
+   * cold — and for why nothing is skipped by doing this.
+   *
+   * Optional so a caller that really does want demolition still gets it. That is
+   * `revertToStage`'s business, and it stays a deliberate, human-chosen act.
+   */
+  upstream?: UpstreamCorrection,
 ): { later: TaskStage[]; discarded: DiscardedRun[] } {
   // Captured before the map below clears it. Both callers keep their own stage, so
   // every entry here is collateral by construction — and it was going unrecorded,
   // which is precisely why "a correction is cheap because the stages after it are
   // the cheap ones" was an assertion nobody could check.
+  // An amended stage keeps everything it produced, so nothing about it was discarded
+  // and the ledger must not say otherwise. This is the whole claim being made —
+  // `discarded` is the number that says how much a correction cost, and booking
+  // retained work into it would report the saving as if it had never happened.
+  const amendable = (stage: TaskStage) => !!upstream && isCorrectable(stage);
+
   const discarded: DiscardedRun[] = pipeline.stages
     .slice(index + 1)
+    .filter((s) => !amendable(s))
     .map((s) => ({ stage: s, totals: stageUsage(s) }))
     // Keyed on there being a number to record rather than on `startedAt`: a stage
     // whose cost was captured without a start time is exactly the entry this ledger
@@ -645,14 +668,65 @@ function reopenAfter(
   const later: TaskStage[] = [];
   pipeline.stages.forEach((s, i) => {
     if (i <= index) return;
-    later[i] = {
+
+    // Cleared either way, because all of it certified the version that just moved:
+    // a verdict, an exit code, a checklist of behaviours somebody observed, and a
+    // per-step account of a plan that has changed. Keeping any of it would leave the
+    // route holding evidence about work that no longer exists — which is the failure
+    // re-opening exists to prevent, and the half that amendment must not soften.
+    const cleared = {
       ...s,
       status: "pending" as const,
-      startedAt: undefined,
       finishedAt: undefined,
       checklist: undefined,
       planSteps: undefined,
       verification: undefined,
+      verdict: undefined,
+      blocked: undefined,
+    };
+
+    if (amendable(s)) {
+      const ordinal = s.subtasks.filter((sub) => sub.correction?.upstream).length + 1;
+      later[i] = {
+        ...cleared,
+        // `startedAt` is kept: the stage did start, and the amendment is a
+        // continuation of it rather than a fresh run. Wiping it would misreport the
+        // elapsed time of work that genuinely happened.
+        subtasks: [
+          ...s.subtasks,
+          {
+            id: `${s.id}-amend-${ordinal}`,
+            title: amendmentTitle(upstream!.stageName, ordinal),
+            // The note is the *finding*, because that is what `correctionPrompt`
+            // reads for a correction subtask; `prompt` goes unused on this path and
+            // is kept in step only so a reader of the state file is not misled.
+            prompt: upstreamAmendmentNote(upstream!),
+            status: "pending" as const,
+            correction: {
+              finding: upstreamAmendmentNote(upstream!),
+              at,
+              upstream: { stageId: upstream!.stageId, stageName: upstream!.stageName },
+              // Snapshotted so withdrawing the upstream correction can put this stage
+              // back too. Before amendment there was nothing to put back — the replies
+              // were gone — which is why `CorrectionUndo` said it covered only the
+              // corrected stage's own settlement.
+              undo: {
+                status: s.status,
+                finishedAt: s.finishedAt,
+                verdict: s.verdict,
+                verification: s.verification,
+                blocked: s.blocked,
+              },
+            },
+          },
+        ],
+      };
+      return;
+    }
+
+    later[i] = {
+      ...cleared,
+      startedAt: undefined,
       subtasks: s.subtasks.map((subtask) => ({
         ...subtask,
         status: "pending" as const,
@@ -665,6 +739,87 @@ function reopenAfter(
       })),
     };
   });
+  return { later, discarded };
+}
+
+/**
+ * Undoes what one correction did to the stages after it.
+ *
+ * The mirror of amendment, and strictly better than re-opening them: the amendment
+ * a correction added is removed and each stage is handed back the settlement it had
+ * *before* the correction, so a withdrawn finding costs those stages nothing at all.
+ * Previously this could only re-open them, because their replies had already been
+ * destroyed and there was nothing to restore — which is why `CorrectionUndo` said it
+ * covered the corrected stage alone.
+ *
+ * A stage whose amendment already **ran** has done real work that is now being
+ * thrown away, so that work is booked in the ledger. Only that work: everything the
+ * stage did before the amendment is exactly what it is being restored to.
+ *
+ * Falls back to a plain re-open for a stage carrying no amendment from this
+ * correction — one added by a route change, or predating amendments — because there
+ * is no snapshot to restore and the old rule still holds: it ran against output that
+ * has just changed.
+ */
+function withdrawAmendments(
+  pipeline: TaskPipeline,
+  index: number,
+  from: { stageId: string; correctionAt?: string },
+  at: string,
+  reason: string,
+): { later: TaskStage[]; discarded: DiscardedRun[] } {
+  const causedByThis = (subtask: Subtask) =>
+    subtask.correction?.upstream?.stageId === from.stageId &&
+    (from.correctionAt === undefined || subtask.correction?.at === from.correctionAt);
+
+  const later: TaskStage[] = [];
+  const discarded: DiscardedRun[] = [];
+
+  pipeline.stages.forEach((s, i) => {
+    if (i <= index) return;
+    const amendments = s.subtasks.filter(causedByThis);
+    if (amendments.length === 0) {
+      const { later: fallback, discarded: booked } = reopenAfter(pipeline, i - 1, at, reason);
+      later[i] = fallback[i];
+      discarded.push(...booked.filter((entry) => entry.stageId === s.id));
+      return;
+    }
+
+    // The settlement to restore is the one captured by the *earliest* amendment from
+    // this correction — the state before it touched the stage at all.
+    const undo = amendments[0].correction?.undo;
+    const spent = subtasksUsage(amendments);
+    if (hasUsage(spent)) {
+      discarded.push({
+        stageId: s.id,
+        stageName: s.name,
+        at,
+        reason,
+        collateral: true,
+        costUsd: spent.costUsd,
+        tokens: spent.tokens,
+        elapsedMs: spent.elapsedMs,
+        sessions: spent.measured + spent.unmeasured,
+      });
+    }
+
+    later[i] = {
+      ...s,
+      subtasks: s.subtasks.filter((sub) => !causedByThis(sub)),
+      ...(undo
+        ? {
+            status: undo.status,
+            finishedAt: undo.finishedAt,
+            verdict: undo.verdict,
+            verification: undo.verification,
+            blocked: undo.blocked,
+          }
+        : // No snapshot: hand it back rather than invent a settlement, the same rule
+          // `undoCorrection` follows for its own stage.
+          { status: "awaiting-approval" as const, finishedAt: undefined, blocked: undefined }),
+    };
+  });
+
   return { later, discarded };
 }
 
@@ -724,6 +879,9 @@ export function correctStage(
     index,
     correction.at,
     `re-opened by a correction to ${stage.name}`,
+    // Amended rather than rebuilt. They still run — they were built on output that
+    // just changed — but they start from what they already worked out.
+    { stageId: stage.id, stageName: stage.name, finding },
   );
 
   const stages = pipeline.stages.map((s, at) => {
@@ -860,9 +1018,10 @@ export function undoCorrection(
   // built from a plan that no longer exists — so they are re-opened here exactly as
   // `correctStage` re-opens them. Note this may re-open stages that had *already* been
   // re-opened and re-run since the correction was filed, which is the whole point.
-  const { later, discarded } = reopenAfter(
+  const { later, discarded } = withdrawAmendments(
     pipeline,
     index,
+    { stageId: stage.id, correctionAt: fix.correction?.at },
     at,
     `re-opened by withdrawing a correction to ${stage.name}`,
   );

@@ -120,3 +120,45 @@ describe("an implementation stage that changed nothing", () => {
     ).toBe(true);
   });
 });
+
+describe("a stage amended because its input changed upstream", () => {
+  it("is not held when the amendment writes nothing but the stage already had", () => {
+    // An amendment that correctly concludes "the upstream change does not affect me"
+    // writes no files. Held on that alone, a single Plan correction rippling through
+    // seventeen stages would raise a wall of holds for stages that did exactly the
+    // right thing — and a check that fires constantly is one people approve through
+    // without reading, which is the failure this check exists to avoid.
+    //
+    // Safe because an amended stage *keeps* what it produced before: the earlier
+    // subtask's activity is still there, so the stage as a whole did change files.
+    // That follows from retention rather than from a rule here, which is precisely
+    // why it is pinned — a future change that cleared prior activity on amendment
+    // would reintroduce the wall of holds and nothing else would catch it.
+    const amended = stage({
+      subtasks: [
+        subtask({ id: "s1", activity: { pathsWritten: ["src/Report.cs"] } }),
+        subtask({
+          id: "s1-amend-1",
+          title: 'Amend for "Plan"',
+          correction: {
+            finding: "Plan changed",
+            at: "t3",
+            upstream: { stageId: "plan", stageName: "Plan" },
+          },
+          activity: { pathsWritten: [] },
+        }),
+      ],
+    });
+    expect(changedNothing(amended)).toBe(false);
+  });
+
+  it("is still held when the stage has written nothing at all", () => {
+    const neverWrote = stage({
+      subtasks: [
+        subtask({ id: "s1", activity: { pathsWritten: [] } }),
+        subtask({ id: "s1-amend-1", activity: { pathsWritten: [] } }),
+      ],
+    });
+    expect(changedNothing(neverWrote)).toBe(true);
+  });
+});

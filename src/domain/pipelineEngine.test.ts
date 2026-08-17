@@ -2125,20 +2125,13 @@ describe("correctStage", () => {
     });
   });
 
-  it("records what re-opening the later stages threw away, as collateral", () => {
-    // Without this the cost of a correction was only ever the fix session: the stages
-    // it re-opened had their activity cleared and nothing wrote down what they had
-    // cost, so "the stages after an implementation one are the cheap ones" was an
-    // assertion with no number behind it.
+  it("books nothing as discarded for a stage it amended, because nothing was thrown away", () => {
+    // `discarded` is the number that says what a correction cost. An amended stage
+    // keeps every reply and every activity record it had, so booking it here would
+    // report the saving as though it had never happened — which is the one thing this
+    // ledger exists to make impossible.
     const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
-    expect(p.discarded).toEqual([
-      expect.objectContaining({
-        stageId: "review",
-        collateral: true,
-        costUsd: 2.49,
-        at: "t1",
-      }),
-    ]);
+    expect(p.discarded ?? []).toEqual([]);
   });
 
   it("records nothing for a stage after the target that never ran", () => {
@@ -2159,13 +2152,60 @@ describe("correctStage", () => {
         { finding: "wrong cast", at: "t1" },
       ),
     );
-    expect(p.discarded?.map((run) => run.stageId)).toEqual(["review"]);
+    // "review" is amended, so nothing of it is discarded; "deploy" never ran, so there
+    // is nothing to book for it either. A ledger entry for a stage that did no work
+    // would fill the record with runs that never happened.
+    expect(p.discarded ?? []).toEqual([]);
   });
 
   it("re-opens later stages, which ran against output that is about to change", () => {
     const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
     expect(p.stages[1].status).toBe("pending");
-    expect(p.stages[1].subtasks[0].reply).toBeUndefined();
+  });
+
+  it("amends a later stage rather than erasing what it already worked out", () => {
+    // The saving. Measured over 2.5 hours on 17 Aug 2026: $59.10 of $97.34 went on
+    // stages behind a correction re-running *cold* — re-reading the ticket and
+    // re-deriving the codebase to absorb a change of one detail. They still run; they
+    // now start from what they knew. See `domain/upstreamAmendment.ts`.
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const later = p.stages[1];
+    expect(later.subtasks[0].reply).toBeDefined();
+    expect(later.subtasks[0].activity).toBeDefined();
+
+    const amendment = later.subtasks[later.subtasks.length - 1];
+    expect(amendment.status).toBe("pending");
+    expect(amendment.correction?.upstream).toEqual({
+      stageId: "implement",
+      stageName: "Implement",
+    });
+    expect(amendment.correction?.finding).toContain("wrong cast");
+  });
+
+  it("still clears a later stage's evidence, which certified the old output", () => {
+    // The half amendment must not soften: a verdict, an exit code and a checklist all
+    // certified a version that has just moved, and keeping them would leave the route
+    // holding evidence about work that no longer exists.
+    const base = ran();
+    base.stages[1].verdict = "pass";
+    base.stages[1].verification = { command: "build", exitCode: 0, at: "t0" };
+    base.stages[1].checklist = [{ id: "c1", text: "open the report", checked: true }];
+    const p = must(correctStage(base, "implement", { finding: "wrong cast", at: "t1" }));
+
+    expect(p.stages[1].verdict).toBeUndefined();
+    expect(p.stages[1].verification).toBeUndefined();
+    expect(p.stages[1].checklist).toBeUndefined();
+  });
+
+  it("distinguishes an amendment from the stage's own corrections", () => {
+    // Three corrections is a stage that got its own work wrong three times; three
+    // amendments is one that was right each time and had the ground moved under it.
+    // Pointing the next investigation at the wrong stage is what conflating them does.
+    const p = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const amendment = p.stages[1].subtasks.at(-1)!;
+    expect(amendment.title).toBe('Amend for "Implement"');
+    expect(p.stages[0].subtasks.at(-1)!.title).toBe("Correction 1");
+    expect(p.stages[0].subtasks.at(-1)!.correction?.upstream).toBeUndefined();
   });
 
   it("numbers corrections, because a second go at one finding is a signal", () => {
@@ -2326,10 +2366,16 @@ describe("undoCorrection", () => {
     expect(p.stages[0].verdict).toBeUndefined();
   });
 
-  it("does not pretend the later stages it re-opened come back", () => {
+  it("puts a later stage back rather than re-opening it, now there is something to restore", () => {
+    // This test used to assert the opposite, and was right to: the stages after a
+    // correction had their replies destroyed, so withdrawing it could only re-open
+    // them and saying otherwise would have been a lie. Amendment changes the fact —
+    // each amended stage carries the settlement it had *before* the correction — so a
+    // withdrawn finding now costs those stages nothing at all.
     const p = must(undoCorrection(corrected(), "implement", "t2"));
-    expect(p.stages[1].status).toBe("pending");
-    expect(p.stages[1].subtasks[0].reply).toBeUndefined();
+    expect(p.stages[1].status).toBe("passed");
+    expect(p.stages[1].subtasks[0].reply).toBeDefined();
+    expect(p.stages[1].subtasks.some((s) => s.correction?.upstream)).toBe(false);
   });
 
   // The case that made this a defect rather than a nicety, and the reason the

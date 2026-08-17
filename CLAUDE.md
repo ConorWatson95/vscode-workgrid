@@ -537,10 +537,59 @@ improve the surrounding code, and a correction that rewrites half the stage cost
 the re-run cost *and* invalidates the reviews that had passed the rest. A fix that needs
 a change of approach is told to stop and say so: that is a re-run, and a human's call.
 
-Later stages are still re-opened, exactly as a revert re-opens them — they ran against
-output that just changed. That is affordable because those are the cheap ones: on
-`report-change`, 4 of 20 stages are implementation and carry nearly all the cost; the
-other 16 are gates, promotions and reviews, and the gates are free.
+**Later stages are amended, not rebuilt** (`domain/upstreamAmendment.ts`, 17 Aug 2026).
+They are still re-opened — they ran against output that just changed, and nothing here
+skips work or lets a stage stand as passed on evidence that moved. What changed is where
+they start from.
+
+The claim this replaces was that re-opening them is affordable "because those are the
+cheap ones: 4 of 20 stages are implementation and the other 16 are gates, promotions and
+reviews, and the gates are free". Measured, that is false twice over. Non-implementation
+rework across eight pipelines was **120 runs, 423 min, $107**. And in one 2.5-hour window
+on 17 Aug, **$59.10 of $97.34 — 61% — was downstream stages re-running**, from exactly
+three corrections: a `Plan` correction taking 17 stages with it at $30.35, a `Plan the
+load` correction taking 4 at $15.95, an `Implement the data` correction taking 14 at
+$12.79.
+
+The work was not wasted; those stages genuinely had to respond. What was wasted is that
+each started **cold** — `reopenAfter` cleared `reply` and `activity`, so a stage
+absorbing "the comparison dropdown is now two dropdowns" re-read the ticket, re-derived
+the codebase and re-decided its approach. The repeats show no learning curve at all: one
+task's `Implement the data` was discarded six times at $1.50, $4.33, $9.41, $3.13, $2.51
+and $10.94.
+
+The harness already had the answer and was applying it one stage too narrowly.
+`correctStage` exists because a cold re-run cost $12.48 and 44 minutes to change a type,
+and it fixes that by handing the session its own previous report — a saving that reached
+only the stage the operator corrected. It now reaches the stages behind it. Rules:
+
+- **Evidence is still cleared** — verdict, verification, checklist, plan steps. All of it
+  certified a version that has moved, and keeping any of it is the failure re-opening
+  exists to prevent. Only the *replies and activity* survive, because those are context,
+  not certification.
+- **An amendment is not a correction**, and `Subtask.correction.upstream` keeps them
+  apart. Three corrections is a stage that got its own work wrong three times; three
+  amendments is a stage that was right each time and had the ground moved under it — and
+  a ledger conflating them points the next investigation at the wrong stage.
+- **Nothing amended is booked as discarded.** `discarded` is the number that says what a
+  correction cost, and booking retained work into it would report the saving as though it
+  had never happened.
+- **Withdrawing a correction now restores rather than re-opens** (`withdrawAmendments`).
+  Each amendment carries the settlement its stage had beforehand, so a withdrawn finding
+  costs those stages nothing. The old note on `CorrectionUndo` — that no snapshot could
+  bring the later stages back — was true only because their replies had already been
+  destroyed.
+- **A change too large to amend is still a rebuild**, declined through the existing
+  `CORRECTION-DECLINED` path, which is honoured on exactly these subtasks. The note names
+  no marker itself: `correctionPrompt` already states it, and the domain has no business
+  naming an engine's protocol.
+
+Not addressed, and worth separating: on `Purchases vs Sales Phase 3` the corrections were
+**requirement changes** — seven to `Plan` alone, the last splitting a dropdown in two.
+The cascade there was correct invalidation, and the rising price per episode ($22.97 →
+$23.59 → $30.35, as the route gets further each time) is a requirements-stability
+question, not a runtime one. Amendment makes each episode cheaper; it does not make late
+requirements free.
 
 **A correction may refuse, and refusing had to become a fact the parser reads.**
 `correctionPrompt` has always told the session to stop and say so when a finding needs a
