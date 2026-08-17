@@ -107,6 +107,21 @@ describe("the protocol skill's content", () => {
     }
   });
 
+  // Both measured, both pure generation cost, and both invariant across every project
+  // — which is what makes them the skill's business rather than StageContext's.
+  it("tells a stage not to cd into the directory it is already in", () => {
+    expect(PROTOCOL_SKILL).toMatch(/do not prefix commands with `cd`/i);
+    expect(PROTOCOL_SKILL).toMatch(/shell cwd was reset/i);
+  });
+
+  it("tells a stage not to re-author setup the repository already holds", () => {
+    // The largest single pattern in 50,000 tokens of authored shell: every cold
+    // session rebuilding the same profile-to-connection block.
+    expect(PROTOCOL_SKILL).toMatch(/checked-in script/i);
+    // Hard-wrapped prose, so this spans a line break.
+    expect(PROTOCOL_SKILL).toMatch(/paid for\s+by every stage after you/i);
+  });
+
   it("declares front matter the model can match on", () => {
     expect(PROTOCOL_SKILL.startsWith("---\n")).toBe(true);
     expect(PROTOCOL_SKILL).toContain(`name: ${PROTOCOL_SKILL_NAME}`);

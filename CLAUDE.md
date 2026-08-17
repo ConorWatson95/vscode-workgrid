@@ -1095,6 +1095,41 @@ Rules:
 **The one constraint:** a stage composing its final reply makes no more tool calls and
 cannot be interrupted. The command says so rather than letting it look broken.
 
+### What the stages spend their tokens on
+
+The other half of the 14 Aug measurement, from `SubtaskActivity.commands` — recorded
+verbatim, which is what makes this answerable after the fact. 1,115 commands across 134
+measured subtasks. Output tokens are wall-clock time, so this is minutes:
+
+| | commands | ~output tokens |
+|---|---|---|
+| commands over 400 chars, i.e. authored inline | 231 | **49,600** (~20 min) |
+| redundant `cd <worktree> &&` prefixes | 682 (**61%**) | 12,100 (~5 min) |
+
+- **The `cd` is defending against nothing.** `claudeStreamSession` sets `cwd` to the
+  worktree, and the Bash tool restores it to the worktree between calls — the "shell cwd
+  was reset" notice. Agents read that as a hazard and prefix `cd` into the directory they
+  are already in, on three commands in five.
+- **The authored shell is one idiom, over and over**: turning an environment profile into
+  a database connection. 37 commands, 7 tasks, 5 stages, ~8,200 tokens of the same
+  `Get-Content $envFile | ForEach-Object` block. Every session starts cold, so each
+  rebuilds what the last one wrote and discarded.
+- **The checked-in helpers are used and bypassed**: `Invoke-SqlQuery.ps1`/`Invoke-SqlScript.ps1`
+  50 times, raw `sqlcmd` 80 times. The helper covers *running a query* and not *resolving
+  a profile*, and the gap is exactly what gets rebuilt. The "replace the loop, not the
+  landmarks" lesson recurring: the loop here is **connect to this environment's database**.
+
+Both fixes went to the **skill**, not the preamble — this is execution-efficiency
+guidance, the same class as the shell-versus-file-tool cost that was moved there, and
+unlike a parsed marker a sometimes-load is tolerable because the failure is cost rather
+than a misread reply.
+
+**Found on the way, and not a latency problem:** 150 commands across 7 tasks carry an
+inline credential (`sqlcmd -S … -P <password>`), recorded verbatim in `state.json` and
+rendered into stage reports. Same root cause — with no helper that takes a profile name,
+a stage pastes the password — so the tooling fix closes both. Worth deciding on
+separately and sooner than the latency it sits next to.
+
 ### The first latency measurement, and what it ruled out
 
 Taken 11 Aug 2026 against a live 23-stage `report-change` route. Recorded here because

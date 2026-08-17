@@ -212,6 +212,23 @@ of the order of a second each, and a measured route saw shell calls averaging ov
 seconds while file tools averaged zero. Same information, two orders of magnitude
 apart. When you do need the shell, combine steps into one command.
 
+Your working directory is already this task's worktree, and it is restored to the
+worktree before every command — the "shell cwd was reset" notice you may see is that
+happening, not a problem to defend against. So do not prefix commands with \`cd\` into
+the worktree. Measured across eight routes: 61% of all shell commands carried a
+redundant \`cd\` into the directory they were already in, about 12,000 output tokens
+spent restating a fact that was already true. Output tokens are wall-clock time.
+
+Do not re-author setup code that the repository already holds. The same measurement
+found 231 commands over 400 characters — roughly 50,000 output tokens, some twenty
+minutes of pure generation — and the largest single pattern was stage after stage
+writing the same block to turn an environment profile into a database connection.
+Every session starts cold, so each one rebuilds what the last one wrote and threw
+away. Before writing more than a few lines of shell, look for a checked-in script
+that does it; if none exists and you needed it, say so in your report, because a
+tool the repository holds is paid for once and a tool you write inline is paid for
+by every stage after you.
+
 This stage may have run before, and its output may already be in the worktree. Look
 before creating. Change only what is wrong or missing, and say what you found already
 in place — a re-run that rewrites correct work costs minutes and churns the parts that
