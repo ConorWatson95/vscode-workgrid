@@ -554,3 +554,63 @@ describe("a report too large for the preview to open", () => {
     expect(report).not.toContain("truncated here");
   });
 });
+
+describe("a stage that was corrected", () => {
+  const repaired = (status: TaskStage["status"] = "passed") =>
+    stage({
+      status,
+      subtasks: [
+        { id: "p-1", title: "Implement", prompt: "do it", status: "done", reply: "Built the grid." },
+        {
+          id: "c-1",
+          title: "Correction 1",
+          prompt: "fix it",
+          status: "done",
+          reply: "Changed the cast.",
+          correction: { finding: "the total column is a string", at: "2026-08-18T09:00:00Z" },
+        },
+        {
+          id: "c-2",
+          title: "Correction 2",
+          prompt: "fix it",
+          status: "done",
+          reply: "Split the dropdown.",
+          correction: { finding: "the comparison dropdown is now two", at: "2026-08-18T11:00:00Z" },
+        },
+      ],
+    } as Partial<TaskStage>);
+
+  it("says how it got to its current state, and which round stands", () => {
+    const report = formatStageReport("Scorecard", repaired(), undefined);
+    expect(report).toContain("**How it got here:**");
+    expect(report).toContain("2 corrections");
+    expect(report).toContain("Correction 2 — asked to fix: the comparison dropdown is now two · the version that stands");
+  });
+
+  it("names what each correction was asked to fix, which was recorded nowhere before", () => {
+    const report = formatStageReport("Scorecard", repaired(), undefined);
+    expect(report).toContain("Correction 1 — asked to fix: the total column is a string");
+  });
+
+  it("folds a superseded correction away once the stage has settled, but never the round that stands", () => {
+    const settled = formatStageReport("Scorecard", repaired("passed"), undefined);
+    expect(settled).toContain("<details><summary>Correction 1");
+    expect(settled).not.toContain("<details><summary>Correction 2");
+
+    // While it is still being worked on, everything is open: the reader is watching a
+    // repair rather than reading a conclusion.
+    const live = formatStageReport("Scorecard", repaired("running"), undefined);
+    expect(live).not.toContain("<details><summary>Correction 1");
+  });
+
+  it("does not repeat 'What the agent reported' once per round", () => {
+    const report = formatStageReport("Scorecard", repaired(), undefined);
+    expect(report.match(/What the agent reported/g)).toBeNull();
+  });
+
+  it("leaves a stage nothing has corrected exactly as it was", () => {
+    const report = formatStageReport("Scorecard", stage(), undefined);
+    expect(report).not.toContain("How it got here");
+    expect(report).toContain("## What the agent reported");
+  });
+});

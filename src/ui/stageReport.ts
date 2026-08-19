@@ -19,6 +19,7 @@ import {
   workingMs,
 } from "../domain/stageUsage";
 import { correctionCost } from "../domain/correctionCost";
+import { roundHeading, stageRounds, summariseStageHistory } from "../domain/stageHistory";
 import { hasGateWait, summariseGateWait } from "../domain/gateWait";
 
 /**
@@ -311,6 +312,12 @@ export function formatStageReport(
   ];
   if (stage.model) lines.push(`**Model:** ${stage.model}  `);
   if (stage.addedByRule) lines.push(`**Added by rule:** ${stage.addedByRule}  `);
+  // Above everything the stage said, because it decides how the rest of the document
+  // is read: a corrected stage carries several accounts of itself and only the last
+  // one stands. Absent on a stage nothing has corrected, so the common case is
+  // unchanged.
+  const history = summariseStageHistory(stage);
+  if (history) lines.push(`**How it got here:** ${history}  `);
   // The verdict is stripped out of the reply before it is stored, so this is the
   // only place it appears. A held stage whose verdict said nothing on screen was
   // indistinguishable from a clean one.
@@ -389,8 +396,28 @@ export function formatStageReport(
     );
   }
 
-  for (const subtask of stage.subtasks) {
-    lines.push("", "---", "", ...formatSubtaskReply(subtask, stage.subtasks.length > 1));
+  // Rounds rather than subtasks: a repair is labelled with what it was asked to fix
+  // and whether the stage got its own work wrong or had the ground moved under it,
+  // and the round that stands is named as such. Superseded repairs are folded away on
+  // a settled stage — the finding is in the summary line, so the reader can tell what
+  // is inside without opening it, which is what makes folding it honest.
+  const rounds = stageRounds(stage);
+  const foldRepairs =
+    (stage.status === "passed" || stage.status === "skipped") &&
+    rounds.filter((round) => round.kind !== "run").length > 1;
+  for (const round of rounds) {
+    const heading = roundHeading(round, rounds.length > 1);
+    const body = formatSubtaskReply(round.subtask, heading !== undefined);
+    const fold = foldRepairs && round.kind !== "run" && !round.latest;
+    lines.push("", "---", "");
+    if (heading && fold) {
+      lines.push(`<details><summary>${heading}</summary>`, "", ...body, "", "</details>");
+    } else {
+      if (heading) {
+        lines.push(`## ${heading}${round.latest ? " · the version that stands" : ""}`, "");
+      }
+      lines.push(...body);
+    }
   }
 
   // Ahead of the checklist and the declined work, because for a stage that executes a
@@ -505,16 +532,21 @@ export function withLiveActivity(
 /**
  * The half of a subtask a reader opens the report for: what the agent said.
  *
+ * `headed` says a round heading has already been printed above it, which is the case
+ * for every subtask of a split or corrected stage.
+ *
  * Split from the mechanics because the reply used to come *after* the tool counts,
  * the file lists, the commands and their output — so reading a finished stage's
  * conclusion meant scrolling past everything that produced it.
  */
-function formatSubtaskReply(subtask: Subtask, name: boolean): string[] {
+function formatSubtaskReply(subtask: Subtask, headed: boolean): string[] {
   const lines: string[] = [];
-  if (name) lines.push(`## ${subtask.title}`, "");
-
   if (subtask.reply?.trim()) {
-    lines.push("## What the agent reported", "", subtask.reply.trim());
+    // The round's own heading already says whose account this is, and what it was
+    // asked to fix. A second heading under it repeated on every round is the noise a
+    // corrected stage had four of.
+    if (!headed) lines.push("## What the agent reported", "");
+    lines.push(subtask.reply.trim());
   } else if (subtask.status === "failed" && !subtask.activity) {
     // Distinguished from "nothing was recorded", because they read identically and
     // mean opposite things: one invites the reader to go looking for what it did,

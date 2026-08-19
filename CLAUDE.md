@@ -698,6 +698,49 @@ It is also what gives `DEFERRED` its meaning. The engine defines a deferral as w
 belonging to **no stage**, and until this existed no stage could tell that from work
 belonging to the next one — so the careful ones over-reported and the rest said nothing.
 
+### Four accounts of one stage, in the same typeface
+
+`domain/stageHistory.ts`, 19 Aug 2026. `correctStage` keeps everything the stage
+already produced — that retention is the whole saving — and the report rendered the
+result as one `## What the agent reported` after another, chronological, visually
+identical. A stage corrected twice and then amended after an upstream correction
+presented **four indistinguishable accounts of itself**, and the finding each round was
+acting on appeared nowhere at all: `Subtask.correction.finding` was persisted, handed to
+the session, and never rendered. So the reader could see that something had been fixed
+three times and not what any of it was for, and had to infer which reply still stood
+from position on the page.
+
+Three facts no reply contains, and the module derives all three from what is already
+persisted, so it reads correctly for stages recorded by earlier builds:
+
+- **Which round stands** — named in the heading, and stated once at the top
+  (`summariseStageHistory`, rendered as `How it got here`).
+- **What each repair was asked to fix** — `roundHeading` puts the finding in the heading,
+  headlined through `deferralHeadline` for the same reason the settlement box does.
+- **Correction versus amendment** — the distinction `Subtask.correction.upstream` exists
+  to keep. Three corrections is a stage that got its own work wrong three times; three
+  amendments is one that was right each time and had the ground moved under it, and a
+  report conflating them points the next investigation at the wrong stage. An amendment
+  is labelled with the stage whose correction caused it, and its `finding` is
+  deliberately *not* headlined — it is the boilerplate `upstreamAmendmentNote` composed,
+  not a finding, so a headline of it would say nothing.
+
+Four rules:
+
+- **A split stage has no round that stands.** Parallel units are one round of work done
+  in several sessions, and marking the last-listed of them as the current version would
+  be a statement about nothing. `latest` is set only where a repair exists.
+- **A stage nothing corrected renders exactly as before**, summary line absent — the rule
+  the scope declarations follow. The line appears only where it tells the reader
+  something.
+- **Superseded repairs fold away only on a settled stage.** Someone reading a `running`
+  or held stage is watching a repair rather than reading a conclusion, so everything
+  stays open. Folding is honest only because the `<summary>` carries the finding: the
+  reader can tell what is inside without opening it.
+- **The per-round `What the agent reported` heading is gone**, since the round heading
+  already says whose account it is and what it answers. It was the noise a corrected
+  stage had four of.
+
 ### The stage that did nothing, and said so only in prose
 
 Every defence above depends on the model emitting a marker: `BLOCKED`, `DEFERRED`,
