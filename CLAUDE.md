@@ -830,6 +830,17 @@ noticed it was missing.
   Two vocabularies with different guards: *absent* words fail as subjects ("none of the
   migrations carry a USE statement"), *settled* words fail as adjectives ("fixed width
   column overflows"). Narrow in both directions — dropping a real finding is worse.
+- **A severity label can be a count of none** (`NEGATED_COUNT`, 19 Aug 2026). Eighth false
+  stop of this family and the first to arrive through the *label* rather than the finding
+  text, so `isNothingReported` never saw it: by the time it runs the label has been
+  stripped and what remains is a real sentence about real work. A planning stage closed
+  with "No blocking or deferred items — all findings from the prior review rounds were
+  already addressed…", which `inlineSeverity` read as a 29-character all-letters label
+  containing "blocking", and the sentence after the dash as the critical it introduced.
+  One critical on screen, saying in as many words that nothing was outstanding. Keyed on
+  the **head noun**, never on the negator: refusing every negated label would drop "No
+  error handling — the loop swallows exceptions", and dropping a real finding is the
+  worse error in every other rule in that file.
 - **A finding whose author says they are not blocking on it is a suggestion**, whatever
   heading it was filed under. Same principle as a stated `VERDICT` outranking inferred
   severities: the heading is chosen once at the top, the sentence is the reviewer ruling

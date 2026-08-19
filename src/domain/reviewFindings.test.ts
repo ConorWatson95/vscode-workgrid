@@ -432,3 +432,44 @@ describe("a section that uses no bullets", () => {
     expect(findings[0].text).toContain("line 171");
   });
 });
+
+/**
+ * The eighth false stop of this family, and the first through the severity *label*
+ * rather than the finding text.
+ */
+describe("a label that counts no findings", () => {
+  it("does not turn a closing 'nothing outstanding' line into a critical", () => {
+    // Verbatim from a planning stage that had done its work and said so. Read as the
+    // label "No blocking or deferred items" — 29 characters, all letters, containing
+    // "blocking" — with the sentence after the dash as the critical it introduced.
+    const findings = parseReviewFindings(
+      "No blocking or deferred items — all findings from the prior review rounds were " +
+        "already addressed by earlier stages, and I resolved the two remaining " +
+        "ambiguities directly with the operator instead of leaving them open.",
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps a real finding whose subject merely starts with a negative", () => {
+    // The reason this is keyed on the head noun rather than on the negator. Dropping
+    // a real finding is the worse error, in this rule as in every other one here.
+    const findings = parseReviewFindings(
+      "- No error handling — the retry loop swallows every exception",
+    );
+    expect(findings).toEqual([
+      { severity: "critical", text: "the retry loop swallows every exception" },
+    ]);
+  });
+
+  it("answers a heading spelt as a count of none", () => {
+    expect(parseReviewFindings("## No blocking issues: the migration pairs up")).toEqual(
+      [],
+    );
+  });
+
+  it("still reads an ordinary marker", () => {
+    expect(parseReviewFindings("- Blocking: the proc drops a column")).toEqual([
+      { severity: "critical", text: "the proc drops a column" },
+    ]);
+  });
+});

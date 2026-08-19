@@ -368,6 +368,9 @@ function severityHeading(
 function severityOf(label: string): FindingSeverity | undefined {
   const text = label.trim().toLowerCase();
   if (!text || text.length > 40) return undefined;
+  // Same guard as the inline path, and here for the same reason: a heading spelt
+  // "No blocking issues: …" is a section being answered, not one being opened.
+  if (negatedCount(text)) return undefined;
   for (const severity of SEVERITY_ORDER) {
     if (SEVERITY_WORDS[severity].includes(text)) return severity;
   }
@@ -388,6 +391,41 @@ function listItem(line: string): string | undefined {
   return inlineSeverity(line) ? line : undefined;
 }
 
+/**
+ * A label that reports a count of *no* findings.
+ *
+ * The head noun is what makes a negation safe to act on. "No blocking or deferred
+ * items" is a count of nothing; "No error handling on the retry" is a finding whose
+ * subject happens to start with a negative. Both carry a severity word behind a "no",
+ * and only the first is the review saying the section is empty.
+ */
+const NEGATED_COUNT =
+  /^(?:none|nothing|not any|without|zero|no)\b[a-z ,-]*?\b(?:items?|findings?|issues?|blockers?|concerns?|problems?|defects?|comments?|errors?)$/i;
+
+/**
+ * Whether a label is the review reporting *no* findings rather than marking one.
+ *
+ * The eighth false stop of this family, and the first to arrive through the severity
+ * label rather than the finding text. A planning stage closed with
+ *
+ *     No blocking or deferred items — all findings from the prior review rounds were
+ *     already addressed by earlier stages…
+ *
+ * which `inlineSeverity` read as the label "No blocking or deferred items" — 29
+ * characters, all letters, containing "blocking" — and the sentence after the dash as
+ * the critical finding it introduced. One critical on screen, saying in as many words
+ * that there was nothing outstanding. `isNothingReported` never saw it: by then the
+ * label had been stripped and what remained was a real sentence about real work.
+ *
+ * Deliberately keyed on the **head noun**, not on the negator. Refusing every negated
+ * label would drop "No error handling — the loop swallows exceptions", which is a
+ * genuine critical, and dropping a real finding is the worse error in every other rule
+ * in this file.
+ */
+function negatedCount(label: string): boolean {
+  return NEGATED_COUNT.test(label.trim());
+}
+
 /** A leading "CRITICAL:", "[minor]", "(nit)" and what follows it. */
 function inlineSeverity(
   text: string,
@@ -399,6 +437,8 @@ function inlineSeverity(
     /^[*_`\s]*([a-z][a-z -]*?)[*_`\s]*[:–—-]\s+(.*)$/i.exec(text);
   if (!match) return undefined;
   const label = match[1].trim().toLowerCase();
+  // "No blocking or deferred items — …" marks nothing; it reports an empty section.
+  if (negatedCount(label)) return undefined;
 
   // Whole label first, since that is what a bare "CRITICAL:" is.
   for (const severity of SEVERITY_ORDER) {
