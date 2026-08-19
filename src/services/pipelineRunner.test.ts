@@ -72,7 +72,15 @@ function task(): TaskWorkspace {
 function fakeSessions(
   replies: Record<
     string,
-    { ok?: boolean; text: string; activity?: { commands?: string[] } }
+    {
+      ok?: boolean;
+      text: string;
+      activity?: {
+        commands?: string[];
+        pathsWritten?: string[];
+        toolCounts?: Record<string, number>;
+      };
+    }
   > = {},
 ): StageSessionRunner & { calls: { label: string; prompt: string }[] } {
   const calls: { label: string; prompt: string }[] = [];
@@ -2284,6 +2292,112 @@ describe("a correction the stage declines", () => {
     const { runner } = makeRunner(fakeSessions({ "build:": { text: DECLINE } }), { repo });
     await repo.save({ ...task(), pipeline: createPipeline(oneStageRoute()) });
     await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});
+
+/**
+ * A correction that neither fixed anything nor declined.
+ *
+ * `CORRECTION-DECLINED` is wired end to end and still depends on the model emitting it.
+ * A plan correction handed a genuine scope change — a new column, a new source, a
+ * rewritten bucket rule — argued the case correctly and at length in prose, wrote no
+ * file, used no marker, and passed. The plan document still described the old
+ * requirement, and the eight stages behind it then ran against it, cold or amended,
+ * each saying so in prose too. Nothing failed until the DEV promotion, eight stages
+ * later, had nothing to ship.
+ */
+describe("a correction that changed nothing and did not decline", () => {
+  const oneStageRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "plan",
+        label: "Plan",
+        kind: "planning",
+        intent: "Plan it.",
+        splittable: false,
+        gate: "auto",
+      },
+    ],
+  });
+
+  const ARGUED_IN_PROSE =
+    "This is a scope change from what the plan documented — a schema addition, a new " +
+    "sourcing rule and a bucketing rule change — not a small correction to prose.";
+
+  async function corrected(fixReply: {
+    text: string;
+    activity?: { pathsWritten?: string[]; toolCounts?: Record<string, number> };
+  }) {
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(fakeSessions({ "plan:": { text: "Planned it." } }), {
+      repo,
+    });
+    await repo.save({ ...task(), pipeline: createPipeline(oneStageRoute()) });
+    await runner.advance((await repo.get("t1"))!);
+
+    const before = (await repo.get("t1"))!;
+    const fixed = correctStage(before.pipeline!, "plan", {
+      finding: "Bucket on the activation date, not the registered-but-not-activated flag.",
+      at: "2026-08-19T09:09:58.036Z",
+    });
+    if (!fixed.ok) throw new Error(fixed.error.message);
+    await repo.save({ ...before, pipeline: fixed.value });
+
+    const { runner: second } = makeRunner(
+      fakeSessions({ "plan:plan-fix": fixReply, "plan:": { text: "Planned it." } }),
+      { repo },
+    );
+    const report = await second.advance((await repo.get("t1"))!);
+    return { repo, report };
+  }
+
+  it("holds the stage rather than recording the finding as dealt with", async () => {
+    const { repo, report } = await corrected({
+      text: ARGUED_IN_PROSE,
+      activity: { toolCounts: { Read: 14, Grep: 6 } },
+    });
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    // "passed" is what it was, and it is the whole defect: every stage behind this one
+    // then runs against the version the finding called wrong.
+    expect(stage.status).toBe("awaiting-approval");
+    expect(stage.blocked).toContain("changed no files");
+    expect(report.steps.join(" ")).toContain("corrected nothing");
+  });
+
+  it("passes a correction that rewrote its stage's own output", async () => {
+    const { repo } = await corrected({
+      text: "Rewrote the bucketing section against the activation date.",
+      activity: { pathsWritten: ["docs/plans/rc-plan.md"] },
+    });
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+
+  it("leaves a properly declined correction to the marker, which says more", async () => {
+    // Both would hold, and the marker's reason names the remedy — a re-run — where this
+    // one can only say nothing was written. The better message must win.
+    const { repo } = await corrected({
+      text: `CORRECTION-DECLINED: the proc's whole eligibility filter is replaced
+
+${ARGUED_IN_PROSE}`,
+      activity: { toolCounts: { Read: 3 } },
+    });
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages[0];
+    expect(stage.status).toBe("awaiting-approval");
+    expect(stage.blocked).toContain("re-run");
+    expect(stage.blocked).not.toContain("changed no files");
+  });
+
+  it("does not hold when the correction reported no activity at all", async () => {
+    // Absence of a measurement is not a measurement of zero — the rule `stageUsage` and
+    // `changedNothing` both follow. Holding on a watcher that produced nothing is the
+    // same error as reporting a cost of zero for a session that reported none.
+    const { repo } = await corrected({ text: "Adjusted the wording." });
 
     expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
   });

@@ -30,7 +30,12 @@ import {
 import { guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
 import { declaredScopes } from "../domain/checklistScope";
-import { CHANGED_NOTHING_REASON, changedNothing } from "../domain/stageProductivity";
+import {
+  CHANGED_NOTHING_REASON,
+  CORRECTION_CHANGED_NOTHING_REASON,
+  changedNothing,
+  correctionChangedNothing,
+} from "../domain/stageProductivity";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
@@ -1531,6 +1536,31 @@ export class PipelineRunner {
           `Harness [${task.name}] ${stage.name} declined a correction: ${correctionDeclined} ` +
             "Nothing was changed; holding the route rather than passing the stage.",
         );
+      }
+    }
+
+    // The same fact as the marker above, observed rather than declared. A correction
+    // that neither changed a file nor declined has done nothing, and passing it leaves
+    // every stage behind it built on the version the finding called wrong -- which is
+    // what happened when a plan correction argued a scope change in prose, wrote
+    // nothing, and let eight stages run against the unchanged plan. Read from the
+    // pipeline rather than the local `subtask`, so it sees the activity just recorded.
+    if (reply.ok && !correctionDeclined) {
+      const ran = pipeline.stages
+        .find((s) => s.id === stage.id)
+        ?.subtasks.find((s) => s.id === subtask.id);
+      if (ran && correctionChangedNothing(ran)) {
+        pipeline = recordStageBlocked(pipeline, stage.id, CORRECTION_CHANGED_NOTHING_REASON);
+        const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+        if (held.ok) {
+          pipeline = held.value;
+          steps.push(`"${stage.name}" corrected nothing — held for you.`);
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} ran a correction that wrote no files ` +
+              "and did not decline. Holding rather than passing: read what it said, then " +
+              "either approve it or re-run the stage.",
+          );
+        }
       }
     }
 

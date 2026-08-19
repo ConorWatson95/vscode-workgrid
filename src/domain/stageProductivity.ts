@@ -29,7 +29,7 @@
  * Pure and vscode-free.
  */
 
-import { TaskStage } from "./taskPipeline";
+import { Subtask, TaskStage } from "./taskPipeline";
 
 /**
  * Whether this settled stage was meant to change files and did not.
@@ -62,3 +62,50 @@ export function changedNothing(stage: TaskStage): boolean {
 /** How the hold explains itself, in the stage's `blocked` line. */
 export const CHANGED_NOTHING_REASON =
   "this stage changed no files — if it was right that there was nothing to change, approve it";
+
+/**
+ * Whether a correction subtask settled without changing anything and without saying so.
+ *
+ * `CORRECTION-DECLINED` is wired end to end — prompted for, parsed, and held on the
+ * same machinery as `BLOCKED` — and it still depends on the model emitting it. On
+ * `RenaultGB - MyRewards Summary` a plan correction carrying a genuine scope change
+ * (a new column, a new source, a rewritten bucket rule) reasoned the case correctly
+ * and at length — *"this is a scope change from what the plan documented, not a small
+ * correction"* — wrote no files, and emitted no marker. The stage settled as passed
+ * with the plan document unchanged, and the eight stages behind it then ran, cold or
+ * amended, against a plan that still described the old requirement. Each of them said
+ * so in prose too. The route advanced to the DEV promotion before anything failed.
+ *
+ * This is `changedNothing`'s argument applied one level in, and it needs no
+ * cooperation for the same reason: a correction exists to change the stage's output,
+ * so one that changed nothing did not correct anything, whatever its reply says.
+ *
+ * Narrow in four ways, each load-bearing:
+ *
+ * - **A correction, never an amendment.** *"Nothing in this stage's output changes"*
+ *   is a correct and common amendment outcome — the nav/permissions stage in that same
+ *   run reached it properly, and holding on it would fire on most of a cascade.
+ * - **Any stage kind.** Unlike `changedNothing`, which is confined to implementation
+ *   because a review legitimately writes nothing: a *correction* to a review rewrites
+ *   its findings, and one to a plan rewrites the plan. Every medium
+ *   `correctionMedium` names is a file.
+ * - **Held, never failed.** The prompt explicitly permits "the finding was wrong — the
+ *   code already does what it says is missing", which writes nothing and is correct.
+ *   That is still a claim about a finding somebody raised, so it is worth one click.
+ * - **Absence of activity means unmeasured, not zero**, the rule `stageUsage` and
+ *   `changedNothing` both follow.
+ *
+ * Checked only when the reply carried no decline marker; a stage that declined
+ * properly is already held, with a better reason than this one.
+ */
+export function correctionChangedNothing(subtask: Subtask): boolean {
+  if (!subtask.correction || subtask.correction.upstream) return false;
+  if (!subtask.activity) return false;
+  return (subtask.activity.pathsWritten?.length ?? 0) === 0;
+}
+
+/** How that hold explains itself, in the stage's `blocked` line. */
+export const CORRECTION_CHANGED_NOTHING_REASON =
+  "the correction changed no files and did not decline — read what it said before " +
+  "approving: a correction that neither fixes nor declines leaves every stage after " +
+  "it built on the version the finding called wrong";

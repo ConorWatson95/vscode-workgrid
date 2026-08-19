@@ -612,6 +612,26 @@ which only a human may choose. Honoured **only on a correction subtask** — an 
 run has no correction to decline, so the line there is a model quoting the protocol
 rather than using it, and the marker's first visible effect must not be a false stop.
 
+**And the marker was still not emitted** (`correctionChangedNothing`, 19 Aug 2026). A
+`Plan` correction carrying a real scope change — a `TLC Activated` column, an activation
+date sourced from `p_Load_TLCActivations`, a bucket rule replacing the
+registered-but-not-activated filter — reasoned it correctly and at length in prose: *"this
+is a scope change from what the plan documented, not a small correction."* It wrote no
+file and used no line. The stage settled `passed` with the plan document unchanged, and
+the eight stages behind it ran against it — two cold, six amended — each declining in
+prose in turn, until `rc-dev-promote` failed eight stages later with nothing to ship.
+Seventh instance of the same disease, and the second to be closed the only way that
+needs no cooperation: `changedNothing`'s argument, applied to the correction subtask. A
+correction exists to change the stage's output, so one that changed nothing corrected
+nothing, whatever its reply says. Narrow in four ways — **a correction, never an
+amendment**, since *"nothing in this stage's output changes"* is a correct amendment
+outcome and holding on it would fire across most of a cascade; **any stage kind**, unlike
+`changedNothing`, because every medium `correctionMedium` names is a file; **held, never
+failed**, since "the finding was wrong" is a legitimate no-write answer and still a claim
+about a finding somebody raised; and **absence of activity means unmeasured**. Checked
+only when no marker was parsed, so a properly declined correction keeps the better
+message — that one names the remedy.
+
 **Sending findings back defaults to fixing them.** Most review findings are a thing to
 correct, not a reason to rebuild, so the send-back flow offers the correction first and
 the re-run as the deliberate choice — the reverse of how it started, which is what made

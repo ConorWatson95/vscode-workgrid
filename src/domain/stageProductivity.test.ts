@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedNothing } from "./stageProductivity";
+import { changedNothing, correctionChangedNothing } from "./stageProductivity";
 import { Subtask, TaskStage } from "./taskPipeline";
 
 const subtask = (overrides: Partial<Subtask> = {}): Subtask => ({
@@ -160,5 +160,76 @@ describe("a stage amended because its input changed upstream", () => {
       ],
     });
     expect(changedNothing(neverWrote)).toBe(true);
+  });
+});
+
+/**
+ * The same argument one level in.
+ *
+ * `CORRECTION-DECLINED` was wired end to end and still depended on the model emitting
+ * it. A plan correction handed a genuine scope change argued the case correctly and at
+ * length, wrote no files, used no marker, and passed — leaving eight stages to run
+ * against a plan that still described the old requirement.
+ */
+describe("a correction that changed nothing", () => {
+  const correction = (overrides: Partial<Subtask> = {}): Subtask =>
+    subtask({
+      id: "plan-correct-1",
+      title: "Correction 1",
+      correction: { finding: "The bucket rule is wrong", at: "t3" },
+      ...overrides,
+    });
+
+  it("is caught when the correction wrote no file", () => {
+    expect(correctionChangedNothing(correction({ activity: { toolCounts: { Read: 12 } } }))).toBe(
+      true,
+    );
+  });
+
+  it("passes a correction that changed its stage's output", () => {
+    expect(
+      correctionChangedNothing(correction({ activity: { pathsWritten: ["docs/plans/rc-plan.md"] } })),
+    ).toBe(false);
+  });
+
+  it("ignores an amendment, which correctly writes nothing when unaffected", () => {
+    // The common case in a cascade: one correction re-opens seventeen stages and most
+    // of them are right to change nothing. Held on that, the check would fire
+    // constantly, which is how a check stops being read.
+    expect(
+      correctionChangedNothing(
+        correction({
+          id: "nav-amend-1",
+          correction: {
+            finding: "Plan changed",
+            at: "t3",
+            upstream: { stageId: "plan", stageName: "Plan" },
+          },
+          activity: { pathsWritten: [] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores an ordinary subtask, which `changedNothing` already covers", () => {
+    expect(correctionChangedNothing(subtask({ activity: { pathsWritten: [] } }))).toBe(false);
+  });
+
+  it("treats a missing activity record as unmeasured, not as zero", () => {
+    // The rule `stageUsage` and `changedNothing` both follow: holding a stage on the
+    // strength of a measurement that was never taken is the same error as reporting a
+    // cost of zero for a session that reported none.
+    expect(correctionChangedNothing(correction())).toBe(false);
+  });
+
+  it("holds a correction to a stage of any kind, unlike `changedNothing`", () => {
+    // `changedNothing` is confined to implementation because a review legitimately
+    // writes nothing. A *correction* to a review rewrites its findings, and one to a
+    // plan rewrites the plan — every medium `correctionMedium` names is a file.
+    expect(
+      correctionChangedNothing(
+        correction({ id: "review-correct-1", activity: { toolCounts: { Grep: 4 } } }),
+      ),
+    ).toBe(true);
   });
 });
