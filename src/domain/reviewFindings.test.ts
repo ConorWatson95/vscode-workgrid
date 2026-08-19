@@ -473,3 +473,40 @@ describe("a label that counts no findings", () => {
     ]);
   });
 });
+
+/**
+ * The ninth false stop, and the second in a day through the severity label rather
+ * than the finding text.
+ */
+describe("a label that is the opening of a sentence", () => {
+  it("does not turn a paragraph about findings into a finding", () => {
+    // Verbatim from a deployment preview reporting that both items were already
+    // fixed. The 39 characters before the first dash are letters and spaces, inside
+    // the length cap, and contain "critical".
+    const findings = parseReviewFindings(
+      "The two critical items the finding names — By Part Number's stale `deploy/003` " +
+        "and By Description Code's missing `deploy/` folder — were both already resolved " +
+        "by the time this stage ran.",
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it("still reads a multi-word marker that names a severity", () => {
+    // Why this is a leading-word test and not a tighter length cap: the label
+    // above was already inside the cap, so tightening it far enough to exclude a
+    // seven-word sentence would take real markers like this one with it.
+    expect(parseReviewFindings("- Blocking issue — the proc drops a column")).toEqual(
+      [{ severity: "critical", text: "the proc drops a column" }],
+    );
+  });
+
+  it("leaves a bare heading alone, so its section keeps its severity", () => {
+    // The guard is not applied to a heading with no summary of its own. Refusing
+    // one would clear the severity for every item under it — a real blocking
+    // finding parsing to nothing, which is the direction this file refuses to
+    // fail in.
+    expect(
+      parseReviewFindings("## Critical issues\n\n- the migration drops a column"),
+    ).toEqual([{ severity: "critical", text: "the migration drops a column" }]);
+  });
+});

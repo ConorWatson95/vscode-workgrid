@@ -331,7 +331,7 @@ function severityHeading(
   // Split on the label's own punctuation first, so the cap applies to the label
   // and not to the summary after it.
   const labelled = /^([a-z][a-z -]{0,38}?)\s*[:–—-]\s+(.+)$/i.exec(bare);
-  if (labelled) {
+  if (labelled && !startsLikeSentence(labelled[1])) {
     const severity = severityOf(labelled[1]);
     if (severity) return { severity, rest: labelled[2] };
   }
@@ -392,6 +392,38 @@ function listItem(line: string): string | undefined {
 }
 
 /**
+ * Whether a label is the opening of a sentence rather than a marker.
+ *
+ * The ninth false stop, and the second in a day through the severity label. A
+ * deployment preview began its report
+ *
+ *     The two critical items the finding names — By Part Number's stale deploy/003
+ *     and By Description Code's missing deploy/ folder — were both already resolved…
+ *
+ * and `inlineSeverity` read the 39 characters before the first dash as a label:
+ * letters and spaces only, inside the length cap, containing "critical". Everything
+ * after the dash became the critical it introduced — a paragraph whose actual subject
+ * is that both items were already fixed.
+ *
+ * A marker is a name for a severity: "Blocking", "Minor ordering nit", "Must fix". It
+ * never opens with an article, a demonstrative or a possessive, because those begin a
+ * sentence *about* findings instead of labelling one. That is the whole rule, and it
+ * is why this is a leading-word test rather than a tighter length cap: the label here
+ * was already inside the cap, and tightening it far enough to exclude a seven-word
+ * sentence would also exclude "Must fix before UAT promotion".
+ *
+ * Applied to the inline path and to a heading that carries its own summary, never to
+ * a bare heading: "## The critical issues" is a real section, and refusing it would
+ * clear the severity for every item under it — the direction this file consistently
+ * refuses to fail in.
+ */
+function startsLikeSentence(label: string): boolean {
+  return /^(?:the|this|these|those|that|both|all|any|each|every|my|our|its|their|his|her|there|it|they|we|i)\b/i.test(
+    label.trim(),
+  );
+}
+
+/**
  * A label that reports a count of *no* findings.
  *
  * The head noun is what makes a negation safe to act on. "No blocking or deferred
@@ -437,8 +469,10 @@ function inlineSeverity(
     /^[*_`\s]*([a-z][a-z -]*?)[*_`\s]*[:–—-]\s+(.*)$/i.exec(text);
   if (!match) return undefined;
   const label = match[1].trim().toLowerCase();
-  // "No blocking or deferred items — …" marks nothing; it reports an empty section.
-  if (negatedCount(label)) return undefined;
+  // "No blocking or deferred items — …" marks nothing; it reports an empty
+  // section, and "The two critical items the finding names — …" is a sentence
+  // about them rather than a label on one.
+  if (negatedCount(label) || startsLikeSentence(label)) return undefined;
 
   // Whole label first, since that is what a bare "CRITICAL:" is.
   for (const severity of SEVERITY_ORDER) {

@@ -841,6 +841,18 @@ noticed it was missing.
   the **head noun**, never on the negator: refusing every negated label would drop "No
   error handling — the loop swallows exceptions", and dropping a real finding is the
   worse error in every other rule in that file.
+- **A severity label is not a sentence about findings** (`startsLikeSentence`, 19 Aug 2026).
+  Ninth false stop, and the second in a day through the label. A DEV deployment preview
+  opened "The two critical items the finding names — …were both already resolved by the
+  time this stage ran"; `inlineSeverity` read the 39 characters before the first dash as
+  a label — letters and spaces only, inside the length cap, containing "critical" — and
+  the paragraph after it as the critical that label introduced. A marker names a
+  severity and never opens with an article, a demonstrative or a possessive. A
+  **leading-word test rather than a tighter cap**, because the label here was already
+  inside the cap and a cap short enough to exclude a seven-word sentence excludes real
+  markers too. Applied to the inline path and to a heading carrying its own summary,
+  never to a bare heading: refusing "## Critical issues" would clear the severity for
+  every item under it.
 - **A finding whose author says they are not blocking on it is a suggestion**, whatever
   heading it was filed under. Same principle as a stated `VERDICT` outranking inferred
   severities: the heading is chosen once at the top, the sentence is the reviewer ruling
