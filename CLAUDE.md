@@ -761,6 +761,72 @@ Four rules:
   already says whose account it is and what it answers. It was the noise a corrected
   stage had four of.
 
+### A post-condition no stage can satisfy, and a link nothing looked for
+
+`domain/pullRequestEvidence.ts` + `RouteStageDefinition.requiresPullRequest`, 20 Aug 2026.
+Two defects found in one failure on `RU-550`, and they are the same failure seen from
+each end: the route asked a human for something and told nobody, then checked for it in
+a place it could never be.
+
+**A verify runs before its own stage's gate, so it cannot check a human act.**
+`rc-uat-promote` says in capitals *"PROMOTION IS BY PULL REQUEST, NEVER A DIRECT PUSH"*
+and carried
+`Test-WorkPromoted.ps1 -TargetBranch UAT`, which asks whether the commits are **on**
+`origin/UAT` — true only once somebody merges the pull request. `pipelineRunner` runs a
+stage's verification when its last subtask finishes, *before* the gate, so a perfectly
+executed promotion failed every time: `6 of 6 commit(s) for RU-550 are not on
+origin/UAT`, reported against work that was pushed, complete and waiting. The exit code
+was a confident statement of the wrong fact — the same shape as the `${ticket}` scoping
+failure, which reported "not promoted" when the truth was "not scopable". A check whose
+subject is a human act belongs on the first stage **after** the gate that asks for it,
+which is why the project's routes now carry a `*-uat-merge` and a `*-live-merge`
+verification gate and hang the check on the stage past it. Note the gate itself has no
+verify and can have none, for exactly the reason above.
+
+**And nothing said the merge was owed.** The instruction to open a pull request was in
+the *stage intent* — addressed to the agent, never rendered for the operator — so the
+only party told was the one that cannot merge. That is what makes the gate a stage
+rather than a line in a report: a route's steps are the only thing the operator reads.
+
+**The URL is checkable, and it was the thing that went missing.** The stage
+cherry-picked, pushed, wrote a full account headed `## Promote to UAT: done`, and never
+opened the pull request. Tenth instance of the reply-claims-an-outcome-the-parser-cannot-
+check disease, after `DEFERRED`, `BLOCKED`, `ACTION`, the plan step,
+`CORRECTION-DECLINED`, `changedNothing` and `correctionChangedNothing` — and the
+cheapest of them to close, because a pull request URL is the one artefact of such a
+stage that leaves **no trace in git**. Everything else it did can be reconstructed
+afterwards; the link cannot, which is both why its absence is invisible and why looking
+for it is an exact statement of what the stage owed.
+
+Five rules, each load-bearing:
+
+- **Declared, never inferred from the kind.** A `deployment` stage is not necessarily a
+  pull-request stage — `live-incident`'s `li-reconcile` cherry-picks onto the target
+  directly and by design, and holding it for a link it was never asked for is how a
+  check gets switched off. Rejected rather than coerced at parse time, unlike `handoff`
+  beside it: a boolean misread as absent turns *this* check off silently, which is the
+  failure it exists to catch.
+- **Held, never failed.** A live publish may legitimately open fewer pull requests than
+  there are targets, since a change that does not apply to RenaultGB opens none for
+  `LIVE_MultiMarket`. Holding costs one click; failing costs a re-run of a stage that
+  did its job.
+- **At least one, never a count.** "Three live branches, three URLs" is the obvious
+  refinement and wrong for the reason above — the correct number is a property of the
+  change, not the route. One URL separates *opened some* from *opened none*, which is
+  the distinction that actually failed.
+- **Keyed on the URL's path segment, not its host.** Bitbucket, GitHub, GitLab and Azure
+  DevOps all work with no host list to maintain, and a repository URL, a branch URL or a
+  Jira link does not qualify. The RU-550 report contained all three and no pull request.
+- **Read from the replies, not from activity.** A pull request can be opened through the
+  web UI, an MCP tool, `gh`, or the create link a push prints, so no command or written
+  path marks it reliably. What the stage owes is identical in every case: the URL, in
+  its report, where a human can click it.
+
+Not fixed, and deliberately: no verify was added to the per-tenant live verification
+stages. Each may legitimately be skipped for a manufacturer the change does not affect,
+and `Test-WorkPromoted` **fails** on a ticket it matches no commits for — a gate that
+fails on a correct skip is one people learn to click past.
+
 ### The stage that did nothing, and said so only in prose
 
 Every defence above depends on the model emitting a marker: `BLOCKED`, `DEFERRED`,

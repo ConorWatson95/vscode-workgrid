@@ -49,7 +49,13 @@ export interface StageDefinitionSource {
  *
  * `workflow` is absent because it is a *subtask* field, not a stage one.
  */
-const REFRESHABLE = ["intent", "model", "verify", "planFile"] as const;
+const REFRESHABLE = [
+  "intent",
+  "model",
+  "verify",
+  "planFile",
+  "requiresPullRequest",
+] as const;
 
 /**
  * Adds stages a route gained after this pipeline was created.
@@ -758,6 +764,7 @@ function findDefinition(
       handoff?: boolean;
       verify?: string;
       planFile?: string;
+      requiresPullRequest?: boolean;
       requiredMcpServers?: readonly string[];
       // Only a route stage declares these; a rule stage has neither, and `undefined`
       // from a rule is the right answer rather than a missing property.

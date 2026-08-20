@@ -413,6 +413,14 @@ export interface TaskStage {
    * from waiting on them — see `RouteStageDefinition.checklistAudience`.
    */
   checklistAudience?: ChecklistAudience;
+  /**
+   * This stage promotes by pull request and owes its URL in its report, copied from
+   * the route so a persisted pipeline stays self-describing.
+   *
+   * See `RouteStageDefinition.requiresPullRequest` and
+   * `domain/pullRequestEvidence.ts`.
+   */
+  requiresPullRequest?: boolean;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**

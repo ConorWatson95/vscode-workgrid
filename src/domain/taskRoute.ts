@@ -176,6 +176,21 @@ export interface RouteStageDefinition {
    */
   checklistAudience?: ChecklistAudience;
   /**
+   * This stage promotes by opening a pull request, and owes its URL in its report.
+   *
+   * A declaration rather than something inferred from `kind`, because "deployment"
+   * covers both a stage that opens a pull request and one that cherry-picks onto the
+   * target directly — `live-incident`'s reconcile stage does the latter deliberately,
+   * and holding it for a link it was never asked for is how a check gets switched off.
+   *
+   * Declaring it makes the runtime hold the stage when its report contains no pull
+   * request URL. That matters because the URL is the one artefact of such a stage that
+   * cannot be reconstructed from git afterwards, and because the stage that follows is
+   * usually a human being asked to merge it. See `domain/pullRequestEvidence.ts` for
+   * the failure this was built from.
+   */
+  requiresPullRequest?: boolean;
+  /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *
    * Stages differ enormously in what they need. Deciding which of three

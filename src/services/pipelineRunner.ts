@@ -36,6 +36,10 @@ import {
   changedNothing,
   correctionChangedNothing,
 } from "../domain/stageProductivity";
+import {
+  MISSING_PULL_REQUEST_REASON,
+  missingPullRequestUrl,
+} from "../domain/pullRequestEvidence";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
@@ -1583,6 +1587,33 @@ export class PipelineRunner {
           this.logger.warn(
             `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
               "no files. Holding rather than passing: read what it did before approving.",
+          );
+        }
+      }
+    }
+
+    // The same shape again, for the one artefact of a promotion stage that leaves no
+    // trace in git. A stage told to open a pull request and report its URL can push
+    // the branch, write a full account of what it did, and never open the pull
+    // request — which is what happened on RU-550, and was discovered a stage later as
+    // an exit code about commits not being on UAT. Read from the pipeline as it now
+    // stands, so it sees every subtask's reply including this one's.
+    if (reply.ok) {
+      const settled = pipeline.stages.find((s) => s.id === stage.id);
+      if (
+        settled &&
+        !settled.subtasks.some((s) => s.status === "pending" || s.status === "active") &&
+        missingPullRequestUrl(settled)
+      ) {
+        pipeline = recordStageBlocked(pipeline, stage.id, MISSING_PULL_REQUEST_REASON);
+        const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+        if (held.ok) {
+          pipeline = held.value;
+          steps.push(`"${stage.name}" reported no pull request URL — held for you.`);
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} promotes by pull request and reported ` +
+              "no pull request URL. Holding rather than passing: check one was opened, " +
+              "because the stage after it is a human merging it.",
           );
         }
       }

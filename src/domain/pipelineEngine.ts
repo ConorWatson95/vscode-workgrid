@@ -162,6 +162,7 @@ function createStage(
     ...(definition.checklistAudience
       ? { checklistAudience: definition.checklistAudience }
       : {}),
+    ...(definition.requiresPullRequest ? { requiresPullRequest: true } : {}),
     ...(definition.requiredMcpServers && definition.requiredMcpServers.length > 0
       ? { requiredMcpServers: [...definition.requiredMcpServers] }
       : {}),

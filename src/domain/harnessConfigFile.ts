@@ -310,6 +310,19 @@ function parseStage(
     return undefined;
   }
 
+  // Rejected rather than coerced, unlike `handoff` and `mayChangeBranch` above, and the
+  // asymmetry is deliberate: those read a non-boolean as absent, which merely turns an
+  // enhancement off. A `requiresPullRequest` misread as absent turns off the check that
+  // a promotion stage actually opened the pull request it was told to — and the whole
+  // reason that check exists is that its absence is invisible until a human is asked to
+  // merge something nobody created.
+  if (raw.requiresPullRequest !== undefined && typeof raw.requiresPullRequest !== "boolean") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "requiresPullRequest" must be true or false.`,
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -321,6 +334,7 @@ function parseStage(
     gate: gate as StageGate,
     ...(checklistScope ? { checklistScope } : {}),
     ...(checklistAudience ? { checklistAudience: checklistAudience as ChecklistAudience } : {}),
+    ...(raw.requiresPullRequest === true ? { requiresPullRequest: true } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),

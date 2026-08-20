@@ -2473,6 +2473,77 @@ describe("an implementation stage that wrote no files", () => {
 });
 
 /**
+ * A promotion stage that pushed a branch and never opened the pull request.
+ *
+ * RU-550. The stage's intent demanded the pull request URL in capitals, the stage
+ * cherry-picked correctly, pushed, wrote a full account headed `## Promote to UAT:
+ * done`, and opened nothing. The operator's first news of it was an exit code about
+ * commits not being on UAT, a stage and a working day later.
+ */
+describe("a stage that promotes by pull request", () => {
+  const promoteRoute = (): RouteDefinition => ({
+    ...ROUTE,
+    stages: [
+      {
+        id: "promote",
+        label: "Promote to UAT",
+        kind: "deployment",
+        intent: "Promote by pull request.",
+        splittable: false,
+        requiresPullRequest: true,
+        gate: "auto",
+      },
+    ],
+  });
+
+  const reporting = (text: string): StageSessionRunner => ({
+    async run() {
+      return { ok: true, text, activity: { toolCounts: { Bash: 9 } } };
+    },
+  });
+
+  async function run(text: string) {
+    const repo = new InMemoryTaskRepository();
+    const { runner } = makeRunner(reporting(text), { repo });
+    await repo.save({ ...task(), pipeline: createPipeline(promoteRoute()) });
+    const report = await runner.advance((await repo.get("t1"))!);
+    return { stage: (await repo.get("t1"))!.pipeline!.stages[0], report };
+  }
+
+  it("holds when the report carries no pull request URL", async () => {
+    const { stage, report } = await run(
+      "## Promote to UAT: done\n\n" +
+        "`promote/RU-550-uat` is pushed and 3 commits ahead of origin/UAT.",
+    );
+
+    // "passed" is what it was, and the stage after this one is a human being asked to
+    // merge a pull request that does not exist.
+    expect(stage.status).toBe("awaiting-approval");
+    expect(stage.blocked).toContain("no pull request URL");
+    expect(report.steps.join(" ")).toContain("no pull request URL");
+  });
+
+  it("passes when it reported one", async () => {
+    const { stage } = await run(
+      "Opened https://bitbucket.org/QubeDataDevelopment/qubeautoapp/pull-requests/91 into UAT.",
+    );
+
+    expect(stage.status).toBe("passed");
+  });
+
+  it("leaves a stage that never declared it alone", async () => {
+    const repo = new InMemoryTaskRepository();
+    const route = promoteRoute();
+    delete route.stages[0].requiresPullRequest;
+    const { runner } = makeRunner(reporting("Cherry-picked onto UAT directly."), { repo });
+    await repo.save({ ...task(), pipeline: createPipeline(route) });
+    await runner.advance((await repo.get("t1"))!);
+
+    expect((await repo.get("t1"))!.pipeline!.stages[0].status).toBe("passed");
+  });
+});
+
+/**
  * A host that dies mid-subtask takes the session listener, the per-subtask timeout
  * and the driver awaiting the run with it, leaving the record `active` with no
  * reply, no activity and no cost. Nothing detected that: the route was not running,
