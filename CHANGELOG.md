@@ -2,6 +2,42 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.107.0
+
+- **A stage completed, was held for approval, and left no trace on disk.** `save` re-read
+  the state file immediately before mutating, on the stated grounds that two callers
+  touching different tasks could not then clobber each other. The read is what made that
+  false: it is a multi-megabyte `await`, so two concurrent saves both take a snapshot,
+  both mutate their own copy, and the later rename silently discards the earlier one.
+
+  Measured on a live promotion. The stage pushed its branch, deployed to UAT, wrote a
+  full report and was held on its pull request — and none of it persisted, because a
+  busier task saved in the same window. The failure then inverts: the file kept saying
+  the stage was `active`, so every advance for the next 25 minutes refused with "already
+  running", and a window reload rebuilt the same state from the same file. A stage that
+  had finished successfully was unreachable by every route the UI offers.
+
+  Mutations now queue behind one another, per repository.
+
+- **Stop killed the session and left the record saying it was running.** The reclaim went
+  through the stale sweep, whose two guards describe exactly the subtask a stop is aimed
+  at: ownership skips one *this* host started, and the age threshold waits an hour. So a
+  stop of this host's own session did nothing that outlived the process — and stop is
+  what people reach for when a task looks wedged, which makes it the one command that
+  must leave the record consistent.
+
+- **A lock the state file never had.** The mutation queue serialises one extension host.
+  The file is shared by every worktree of a repository and by a headless run, so a second
+  process interleaves its read-modify-write the same way. An exclusive-create lock now
+  guards each mutation — fail open throughout, because a lock that cannot be taken must
+  never stop a write.
+
+- **Nothing appeared until every git call returned.** A cold render awaited live git state
+  for every task before drawing a row: two processes each, ~400ms on nine tasks, on every
+  activation and reload. The first render of a window now draws from the state file alone
+  and fills git in after. Later renders are unchanged, because a refresh must never show
+  a row computed before the change that triggered it.
+
 ## 0.90.0
 
 - **The withdrawal fallback left the route with no legal move.** A correction filed before
