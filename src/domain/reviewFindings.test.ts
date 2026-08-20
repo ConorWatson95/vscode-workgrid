@@ -510,3 +510,51 @@ describe("a label that is the opening of a sentence", () => {
     ).toEqual([{ severity: "critical", text: "the migration drops a column" }]);
   });
 });
+
+describe("a label carrying the delimiter it was split on", () => {
+  it("reports no findings when the count of none was delimited with --", () => {
+    // The eighth false stop, spelt the way an agent writes an em-dash when its
+    // output is ASCII. `negatedCount` is anchored on the label's last word, and the
+    // label pattern allows a hyphen inside a label — so the label kept the first of
+    // the two, ended in a hyphen rather than "items", and the guard added for this
+    // exact sentence never fired. No rule was broken and nothing was on screen to
+    // say so.
+    expect(
+      parseReviewFindings(
+        "No blocking or deferred items -- all findings from the prior review " +
+          "rounds were already addressed by earlier stages.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("reads the same label the same way whichever dash delimits it", () => {
+    // The point of normalising once rather than per guard: every spelling of the
+    // same sentence has to reach the same answer, or the fix is a fix for one
+    // rendering of one reply.
+    for (const dash of ["—", "–", "-", "--", ":"]) {
+      expect(
+        parseReviewFindings(`No blocking or deferred items ${dash} all already addressed.`),
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("a marker whose severity word is two words", () => {
+  it("reads a multi-word severity inside a longer label", () => {
+    // A label is searched a word at a time, so "must fix" — two words — was never
+    // found in one: "Must-fix:" was critical while this was *nothing at all*. The
+    // dropped-finding direction, on the exact label `startsLikeSentence`'s own
+    // reasoning names as one worth keeping.
+    expect(
+      parseReviewFindings("Must fix before UAT promotion — the proc reads the wrong table"),
+    ).toEqual([{ severity: "critical", text: "the proc reads the wrong table" }]);
+  });
+
+  it("matches a phrase on word boundaries, not by substring", () => {
+    // "fix" inside "fixture" is not a severity, or the loosening trades a dropped
+    // finding for the over-count that teaches people to click past the stop.
+    expect(parseReviewFindings("Fixture setup notes — the harness seeds two rows")).toEqual(
+      [],
+    );
+  });
+});

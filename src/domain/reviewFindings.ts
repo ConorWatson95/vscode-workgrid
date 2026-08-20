@@ -360,13 +360,58 @@ function severityHeading(
 }
 
 /**
+ * A label with the delimiter it was split on trimmed back off.
+ *
+ * The label pattern allows a hyphen inside the label, because real markers carry one
+ * ("must-fix", "Minor ordering nit - "). So a label delimited by `--` — which is how
+ * an agent writes an em-dash when its output is ASCII — keeps the first hyphen, and
+ * every guard anchored on the label's last word then reads a different last word.
+ * `negatedCount` is anchored on exactly that: "No blocking or deferred items --" ends
+ * in a hyphen rather than "items", so the eighth false stop came straight back with no
+ * rule broken and nothing to see. Normalising once, here, is what keeps the guards
+ * from each having to know how the label was delimited.
+ */
+function normaliseLabel(label: string): string {
+  return label.trim().replace(/[\s:–—-]+$/, "").trim();
+}
+
+/**
+ * Whether a label contains a severity word, including the multi-word ones.
+ *
+ * Splitting a label into words cannot find `must fix` or `should fix`, because those
+ * are two words and the split compares one at a time. So a bare "Must-fix:" was
+ * critical while "Must fix before UAT promotion — …" was **nothing at all** — the
+ * dropped-finding direction this file refuses everywhere else, on the exact wording
+ * `startsLikeSentence` names as a label worth keeping.
+ *
+ * Phrases are matched on word boundaries rather than by substring, so "must fix" is
+ * found inside a longer label and "fixture" is not mistaken for "fix".
+ */
+function severityInLabel(text: string): FindingSeverity | undefined {
+  const words = text.split(/[\s-]+/).filter(Boolean);
+  for (const severity of SEVERITY_ORDER) {
+    for (const word of SEVERITY_WORDS[severity]) {
+      const parts = word.split(/[\s-]+/);
+      if (parts.length === 1) {
+        if (words.includes(word)) return severity;
+        continue;
+      }
+      for (let i = 0; i + parts.length <= words.length; i += 1) {
+        if (parts.every((part, j) => words[i + j] === part)) return severity;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The severity a short label names, whole or by any of its words.
  *
  * Shared with the inline path, because "Blocking issue" and "Minor ordering nit"
  * have to read the same whether they arrive as a heading or in a bullet.
  */
 function severityOf(label: string): FindingSeverity | undefined {
-  const text = label.trim().toLowerCase();
+  const text = normaliseLabel(label).toLowerCase();
   if (!text || text.length > 40) return undefined;
   // Same guard as the inline path, and here for the same reason: a heading spelt
   // "No blocking issues: …" is a section being answered, not one being opened.
@@ -374,12 +419,7 @@ function severityOf(label: string): FindingSeverity | undefined {
   for (const severity of SEVERITY_ORDER) {
     if (SEVERITY_WORDS[severity].includes(text)) return severity;
   }
-  for (const word of text.split(/[\s-]+/)) {
-    for (const severity of SEVERITY_ORDER) {
-      if (SEVERITY_WORDS[severity].includes(word)) return severity;
-    }
-  }
-  return undefined;
+  return severityInLabel(text);
 }
 
 /** The content of a list item, or undefined when the line is not one. */
@@ -468,7 +508,7 @@ function inlineSeverity(
     /^[[(]\s*([a-z][a-z -]*?)\s*[\])]\s*(.*)$/i.exec(text) ??
     /^[*_`\s]*([a-z][a-z -]*?)[*_`\s]*[:–—-]\s+(.*)$/i.exec(text);
   if (!match) return undefined;
-  const label = match[1].trim().toLowerCase();
+  const label = normaliseLabel(match[1]).toLowerCase();
   // "No blocking or deferred items — …" marks nothing; it reports an empty
   // section, and "The two critical items the finding names — …" is a sentence
   // about them rather than a label on one.
@@ -485,12 +525,6 @@ function inlineSeverity(
   // issue:", not the single word the format asked for. Bounded to a short label so
   // this reads a marker, not a sentence that happens to end in a colon.
   if (label.length > 40) return undefined;
-  for (const word of label.split(/[\s-]+/)) {
-    for (const severity of SEVERITY_ORDER) {
-      if (SEVERITY_WORDS[severity].includes(word)) {
-        return { severity, rest: match[2] };
-      }
-    }
-  }
-  return undefined;
+  const found = severityInLabel(label);
+  return found ? { severity: found, rest: match[2] } : undefined;
 }
