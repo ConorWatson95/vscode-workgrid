@@ -39,6 +39,22 @@ describe("reportedPullRequestUrls", () => {
     ]);
   });
 
+  // The canonical output of a promote stage here: a headless session has no forge
+  // credentials, so what it owes is the link that *creates* the pull request, query
+  // string and all. A matcher that only accepted an existing pull request's URL would
+  // reject the one thing these stages can actually produce.
+  it("accepts a create-pull-request link with its query string", () => {
+    expect(
+      reportedPullRequestUrls(
+        "Click to open it: https://bitbucket.org/QubeDataDevelopment/qubeautoapp/" +
+          "pull-requests/new?source=promote/RU-550-uat&dest=UAT",
+      ),
+    ).toEqual([
+      "https://bitbucket.org/QubeDataDevelopment/qubeautoapp/pull-requests/new" +
+        "?source=promote/RU-550-uat&dest=UAT",
+    ]);
+  });
+
   it("finds GitHub, GitLab and Azure DevOps spellings", () => {
     const text = [
       "https://github.com/acme/app/pull/12",
