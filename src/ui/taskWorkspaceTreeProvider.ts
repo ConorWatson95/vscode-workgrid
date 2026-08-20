@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { TaskWorkspaceService } from "../services/taskWorkspaceService";
+import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import {
   TaskWorkspaceTreeItem,
   MessageTreeItem,
@@ -77,6 +78,29 @@ export class TaskWorkspaceTreeProvider
    * Cleared by `refresh()`, so it can never serve a row from before a change.
    */
   private rootRender?: Promise<TreeNode[]>;
+
+  /**
+   * Live git state per task id, kept only so the *first* render of a window need
+   * not wait for git.
+   *
+   * `getLiveState` is two git processes per task — 18 concurrent spawns and
+   * ~400ms on nine tasks — and nothing appears until every one of them returns.
+   * That cost lands on activation and on every window reload, which is exactly
+   * when someone is waiting to see whether anything moved. Twice in one morning
+   * it was the slowest part of recovering a stuck task (20 Aug 2026).
+   *
+   * Deliberately **not** a cache that outlives a render. Populated at the end of
+   * a full render and read only when it is empty, so it changes the cold start
+   * and nothing else: a refresh still reads git afresh, which is the invariant
+   * `refresh` depends on — a command that has just changed something must never
+   * be shown a row computed before its change. There is no such prior row on a
+   * cold start, which is what makes filling in afterwards honest there and
+   * nowhere else.
+   */
+  private lastLiveStates = new Map<string, TaskWorkspaceLiveState>();
+
+  /** Set while the cold render's git calls are in flight, so only one is started. */
+  private fillingIn = false;
   private showArchived = false;
   /**
    * Whether filtered-out suggestions are shown.
@@ -217,6 +241,42 @@ export class TaskWorkspaceTreeProvider
     return this.rootRender;
   }
 
+  /**
+   * Reads the live git state the cold render skipped, then asks for a redraw.
+   *
+   * Errors are swallowed on purpose: this is a second pass over rows that are
+   * already on screen and usable, so a git failure here should leave them as they
+   * are rather than replace a working tree with an error row. The next deliberate
+   * refresh reports it.
+   *
+   * Guarded by `fillingIn` because VS Code asks for the root more than once per
+   * redraw, and each ask would otherwise start its own storm — the same reason
+   * `rootRender` is single-flighted.
+   */
+  private fillIn(tasks: readonly TaskWorkspace[]): void {
+    if (this.fillingIn) return;
+    this.fillingIn = true;
+    void (async () => {
+      try {
+        await Promise.all(
+          tasks.map(async (task) => {
+            this.lastLiveStates.set(task.id, await this.service.getLiveState(task));
+          }),
+        );
+      } catch {
+        // Left to the next refresh; see above.
+      } finally {
+        this.fillingIn = false;
+      }
+      // Only if something was actually read, or a repository whose every call
+      // failed would redraw on a loop.
+      if (this.lastLiveStates.size > 0) {
+        this.rootRender = undefined;
+        this.throttle.request();
+      }
+    })();
+  }
+
   /** Everything under the root: reconciliation, one row per task, orphans, suggestions. */
   private async computeRoot(): Promise<TreeNode[]> {
     const repositoryRoot = this.resolveRepositoryRoot();
@@ -251,22 +311,44 @@ export class TaskWorkspaceTreeProvider
       return [new MessageTreeItem(msg, "add"), ...suggestions];
     }
 
-    // Concurrent, because `getLiveState` is two git processes per task and this loop
-    // used to await both before starting the next one. On a repository with a dozen
-    // tasks that is two dozen serial spawns before a single row appears, which is most
-    // of what "the tree takes an age" was. Order is preserved by `Promise.all`, so the
-    // grouping below is unaffected.
-    const taskItems = await Promise.all(
-      reconciled.map(async ({ task }) => {
-        const live = await this.service.getLiveState(task);
-        return new TaskWorkspaceTreeItem(
-          task,
-          live,
-          this.getAgentActivity(task),
-          this.getHeldCalls(task.id).length,
+    // The first render of a window draws rows with no live state and fills it in
+    // after, because the alternative is an empty panel for the length of a git
+    // storm. Everything a row needs to be *found* — its name, status, group, and
+    // whether a gate wants you — comes from the state file, which parses in
+    // single-digit milliseconds; what git adds is the changed-file counts.
+    //
+    // Every later render awaits git as before. See `lastLiveStates` for why the
+    // distinction is not an optimisation that could be applied to both.
+    const cold = this.lastLiveStates.size === 0;
+    const taskItems = cold
+      ? reconciled.map(
+          ({ task }) =>
+            new TaskWorkspaceTreeItem(
+              task,
+              undefined,
+              this.getAgentActivity(task),
+              this.getHeldCalls(task.id).length,
+            ),
+        )
+      : // Concurrent, because `getLiveState` is two git processes per task and this loop
+        // used to await both before starting the next one. On a repository with a dozen
+        // tasks that is two dozen serial spawns before a single row appears, which is most
+        // of what "the tree takes an age" was. Order is preserved by `Promise.all`, so the
+        // grouping below is unaffected.
+        await Promise.all(
+          reconciled.map(async ({ task }) => {
+            const live = await this.service.getLiveState(task);
+            this.lastLiveStates.set(task.id, live);
+            return new TaskWorkspaceTreeItem(
+              task,
+              live,
+              this.getAgentActivity(task),
+              this.getHeldCalls(task.id).length,
+            );
+          }),
         );
-      }),
-    );
+
+    if (cold) this.fillIn(reconciled.map((entry) => entry.task));
 
     // Grouped by what each task needs, because a task can sit at a verification
     // gate for days: a flat list makes finding the one that moved a matter of
