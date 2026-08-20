@@ -779,14 +779,26 @@ origin/UAT`, reported against work that was pushed, complete and waiting. The ex
 was a confident statement of the wrong fact — the same shape as the `${ticket}` scoping
 failure, which reported "not promoted" when the truth was "not scopable". A check whose
 subject is a human act belongs on the first stage **after** the gate that asks for it,
-which is why the project's routes now carry a `*-uat-merge` and a `*-live-merge`
-verification gate and hang the check on the stage past it. Note the gate itself has no
-verify and can have none, for exactly the reason above.
+so the check moves onto the **next gate the route already had** — `*-uat-acceptance`,
+which is also the honest place for it, since UAT acceptance cannot mean anything about
+code UAT does not hold.
 
-**And nothing said the merge was owed.** The instruction to open a pull request was in
-the *stage intent* — addressed to the agent, never rendered for the operator — so the
-only party told was the one that cannot merge. That is what makes the gate a stage
-rather than a line in a report: a route's steps are the only thing the operator reads.
+**A merge is not a stage, and making it one produced a test.** The first fix inserted a
+`*-uat-merge` / `*-live-merge` stage to give the merge somewhere to live. It had to be
+`kind: "humanVerification"` to be a gate at all — and `producesChecklist` counts that
+kind, so the harness dutifully asked each new stage for behaviour checklist items. A
+merge gate arrived asking the operator to test things. The kind system has no entry for
+"a human performs one deterministic act", and inventing one for a single act that
+already sits next to a gate is the wrong trade: the instruction now prefixes the
+acceptance and live-verification intents that were always going to be read anyway. The
+general lesson is the one `StageContext` is built on — *eliminate high-confidence
+uncertainty, do not add structure* — and a stage is structure.
+
+**And nothing said the merge was owed.** The instruction to open a pull request lived in
+the *promote stage's intent* — addressed to the agent, never rendered for the operator —
+so the only party told was the one that cannot merge. The gates that follow now say it
+first, and say what the failing check will look like while the pull request is open:
+unmerged, not unpromoted.
 
 **The URL is checkable, and it was the thing that went missing.** The stage
 cherry-picked, pushed, wrote a full account headed `## Promote to UAT: done`, and never
@@ -825,7 +837,13 @@ Five rules, each load-bearing:
 Not fixed, and deliberately: no verify was added to the per-tenant live verification
 stages. Each may legitimately be skipped for a manufacturer the change does not affect,
 and `Test-WorkPromoted` **fails** on a ticket it matches no commits for — a gate that
-fails on a correct skip is one people learn to click past.
+fails on a correct skip is one people learn to click past. They are told about the merge
+in prose instead, which is all a gate with no admissible check can honestly do.
+
+The declaration is doing the work the extra stage was added for. On the run after
+`requiresPullRequest` shipped, the same promote stage opened the pull request and
+reported it — which is the outcome the merge gate was standing in for, arrived at by
+holding the stage that owed it rather than by adding a stage to notice afterwards.
 
 ### The stage that did nothing, and said so only in prose
 
