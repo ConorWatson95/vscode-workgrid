@@ -2639,6 +2639,85 @@ describe("reclaimStale", () => {
     expect(outcome.reclaimed).toEqual([]);
   });
 
+  // The two guards that make the sweep safe are exactly wrong for an explicit
+  // stop, and both applied to the subtask a stop is aimed at — so Stop Agent
+  // killed the session and left the record `active`, which every later advance
+  // read as "already running" (20 Aug 2026).
+  it("stops a young subtask the sweep would leave alone", async () => {
+    const { repo, runner } = makeRunner(fakeSessions());
+    await repo.save(wedged("2026-08-12T10:59:59.000Z"));
+
+    const before = (await repo.get("t1"))!;
+    console.log(JSON.stringify(before.pipeline!.stages.map(st=>({id:st.id,status:st.status,subs:st.subtasks.map(x=>x.id+":"+x.status)}))));
+    const outcome = await runner.reclaimStopped(
+      before,
+      "2026-08-12T11:00:00.000Z",
+    );
+
+    expect(outcome.reclaimed.map((r) => r.subtaskId)).toEqual(["build-1"]);
+    const saved = (await repo.get("t1"))!.pipeline!.stages[0];
+    expect(saved.subtasks[0].status).toBe("pending");
+    expect(saved.status).toBe("pending");
+  });
+
+  it("stops a subtask this host started, which the sweep protects", async () => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sessions: StageSessionRunner = {
+      // Only the subtask run is held. Holding every call blocks the *split*,
+      // which runs first, so no subtask is ever started and the pipeline has
+      // nothing active to reclaim.
+      run: async (_task, _prompt, label) => {
+        if (!label.startsWith("plan:")) await held;
+        return { ok: true, text: "done" };
+      },
+    };
+    const { repo, runner } = makeRunner(sessions, { staleAfterMs: 0 });
+    await repo.save(task());
+
+    const advancing = runner.advance((await repo.get("t1"))!);
+    // Polled rather than slept, because the split has to finish first.
+    let inFlight: string | undefined;
+    for (let attempt = 0; attempt < 100 && !inFlight; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const current = (await repo.get("t1"))!;
+      inFlight = current
+        .pipeline!.stages.flatMap((stage) => stage.subtasks)
+        .find((subtask) => subtask.status === "active")?.id;
+    }
+    expect(inFlight).toBeDefined();
+    expect(runner.ownsSubtask(inFlight!)).toBe(true);
+
+    // Deliberately not cancelled first: `cancel` reverts the subtask as the
+    // advance unwinds, which would leave nothing to assert about ownership. The
+    // command only reaches here when no advance is running, and this is what it
+    // finds — a subtask still marked as started by this host.
+    // The real clock, because the driver stamped `startedAt` from it: a fixed
+    // date in the past makes the subtask's age negative, which reads as younger
+    // than any threshold.
+    const outcome = await runner.reclaimStopped(
+      (await repo.get("t1"))!,
+      new Date().toISOString(),
+    );
+
+    expect(outcome.reclaimed.map((r) => r.subtaskId)).toEqual([inFlight]);
+    release();
+    await advancing;
+  });
+
+  // Ownership is dropped with the revert, or the next sweep reads a killed
+  // session as this host's live work and skips it forever.
+  it("releases ownership of what it stopped", async () => {
+    const { repo, runner } = makeRunner(fakeSessions());
+    await repo.save(wedged("2026-08-12T10:59:59.000Z"));
+
+    await runner.reclaimStopped((await repo.get("t1"))!, "2026-08-12T11:00:00.000Z");
+
+    expect(runner.ownsSubtask("build-1")).toBe(false);
+  });
+
   it("makes the reclaimed subtask runnable again", async () => {
     const sessions = fakeSessions({ "plan:": { text: PLAN_REPLY } });
     const { repo, runner } = makeRunner(sessions);

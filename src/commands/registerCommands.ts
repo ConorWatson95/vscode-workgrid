@@ -3402,6 +3402,13 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
   // refreshed an unchanged tree — which is exactly what it looked like, and left
   // the subtask `active` forever with no other way back from that state.
   //
+  // `reclaimStopped`, not `reclaimStale`: the sweep skips a subtask this host owns
+  // and one younger than the threshold, and both of those describe the subtask a
+  // stop is aimed at. So a stop of a session this host had started killed the
+  // process and reverted nothing — the record stayed `active`, later advances
+  // refused with "already running", and a reload rebuilt it from the same file
+  // (20 Aug 2026).
+  //
   // Only when no advance is running: a live one reverts the subtask itself as it
   // unwinds, and racing it here would write over the driver's own account.
   let reclaimed: readonly { subtaskTitle: string }[] = [];
@@ -3409,7 +3416,7 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
     // Re-read, because a stop can be ordered long after the tree row was built and
     // the pipeline is the thing being edited.
     const current = (await ctx.repository.get(task.id)) ?? task;
-    const outcome = await ctx.runner.reclaimStale(current, new Date().toISOString());
+    const outcome = await ctx.runner.reclaimStopped(current, new Date().toISOString());
     reclaimed = outcome.reclaimed;
   }
 
@@ -3422,8 +3429,7 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
     void vscode.window.showInformationMessage(
       `Stopped "${task.name}". ${reclaimed
         .map((item) => `"${item.subtaskTitle}"`)
-        .join(", ")} had been left running by a session that is gone; ` +
-        "back to pending, so Advance Route re-runs it.",
+        .join(", ")} back to pending, so Advance Route re-runs it.`,
     );
   } else if (driving) {
     void vscode.window.showInformationMessage(`Stopping the route for "${task.name}".`);

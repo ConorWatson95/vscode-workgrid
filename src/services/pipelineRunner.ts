@@ -613,11 +613,67 @@ export class PipelineRunner {
       thresholdMs: this.staleAfterMs(),
       owned: (subtaskId) => this.startedSubtasks.has(subtaskId),
     });
-    if (stale.length === 0) return { task, reclaimed: [] };
+    return this.revertAll(task, stale, (item, name) =>
+      `Harness [${name}] reclaimed ${describeStaleSubtask(item)}. Its session ` +
+      "ended without reporting back — most likely the extension host that owned it " +
+      "was closed — so the subtask is pending again. Advance Route re-runs it.",
+    );
+  }
+
+  /**
+   * Puts back every `active` subtask of one named task, because the user stopped it.
+   *
+   * Both of `reclaimStale`'s guards are wrong here, and each was load-bearing for a
+   * sweep. Ownership protects a subtask *this* host is genuinely running — but the
+   * caller has just killed that session, so the record it left is the thing being
+   * cleaned up, not evidence of work in flight. The age threshold protects another
+   * host's work from being reclaimed out from under it — but a stop names one task,
+   * and waiting an hour to act on an explicit instruction is not caution.
+   *
+   * Left as they were, a stop killed the process and persisted nothing: the subtask
+   * stayed `active`, every later advance refused with "already running", and a
+   * window reload rebuilt the same state from the same file, because the file is the
+   * state. A stage that had finished was then unreachable from the UI entirely
+   * (20 Aug 2026). Stop is the affordance people reach for when a task looks wedged,
+   * so it is the one that must leave the record consistent.
+   *
+   * Only for an explicit stop. The sweep keeps both guards.
+   */
+  async reclaimStopped(
+    task: TaskWorkspace,
+    at: string,
+  ): Promise<{ task: TaskWorkspace; reclaimed: StaleSubtask[] }> {
+    const active = staleActiveSubtasks(task.pipeline, {
+      now: at,
+      // Nothing is too young to stop, and nothing is owned once it has been killed.
+      thresholdMs: 0,
+      owned: () => false,
+    });
+    // So a later sweep does not read a killed session as this host's live work.
+    for (const item of active) this.startedSubtasks.delete(item.subtaskId);
+    return this.revertAll(task, active, (item, name) =>
+      `Harness [${name}] stopped ${describeStaleSubtask(item)}. Its session was ` +
+      "killed, so the subtask is pending again. Advance Route re-runs it.",
+    );
+  }
+
+  /**
+   * Reverts each subtask in turn, saving as it goes.
+   *
+   * Saved per item rather than once at the end: a failure part-way through must
+   * leave the subtasks already put back actually put back, since the whole purpose
+   * is recovering a record nothing else can now correct.
+   */
+  private async revertAll(
+    task: TaskWorkspace,
+    items: readonly StaleSubtask[],
+    describe: (item: StaleSubtask, taskName: string) => string,
+  ): Promise<{ task: TaskWorkspace; reclaimed: StaleSubtask[] }> {
+    if (items.length === 0) return { task, reclaimed: [] };
 
     let current = task;
     const reclaimed: StaleSubtask[] = [];
-    for (const item of stale) {
+    for (const item of items) {
       const reverted = revertSubtask(current.pipeline!, item.subtaskId);
       if (!reverted.ok) {
         // Never fatal: the sweep runs over every task, and one unreadable record
@@ -630,11 +686,7 @@ export class PipelineRunner {
       }
       current = await this.save(current, reverted.value);
       reclaimed.push(item);
-      this.logger.warn(
-        `Harness [${current.name}] reclaimed ${describeStaleSubtask(item)}. Its session ` +
-          "ended without reporting back — most likely the extension host that owned it " +
-          "was closed — so the subtask is pending again. Advance Route re-runs it.",
-      );
+      this.logger.warn(describe(item, current.name));
     }
     return { task: current, reclaimed };
   }
