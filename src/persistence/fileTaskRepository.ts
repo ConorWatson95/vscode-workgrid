@@ -39,14 +39,27 @@ export type NowFn = () => string;
  * process — the extension and a headless CLI — can act on the same repo, so a
  * cached view would go stale the moment the other one wrote.
  *
- * Writes re-read immediately before mutating, so two callers touching
- * *different* tasks cannot clobber each other. Two callers writing the *same*
- * task within the same read-write window still resolves last-writer-wins; a
- * lock belongs here if that ever proves to matter.
+ * Writes re-read immediately before mutating, and every mutation is queued
+ * behind the last one (`mutate`), because re-reading alone is not enough: the
+ * read is a multi-megabyte `await`, so two concurrent saves both take a
+ * snapshot, both mutate their own copy, and the later rename silently discards
+ * the earlier one's transition. That is a lost update *across different tasks*,
+ * which is precisely what re-reading was supposed to prevent — measured on 20
+ * Aug 2026, when a promotion stage completed, was held for approval, and left
+ * no trace on disk because a busier task's save landed in the same window. The
+ * route then refused to advance, reporting the finished stage as "already
+ * running". Three tasks were live and the file was 8.2MB, which is what made
+ * the window wide enough to hit; both of those grow with use.
+ *
+ * The queue is per instance, so it serialises this extension host only. A
+ * headless run writing the same file concurrently is still last-writer-wins,
+ * and closing that needs a lock file rather than a promise chain.
  */
 export class FileTaskRepository implements TaskRepository {
   private readonly filePath: string;
   private readonly quarantinePath: string;
+  /** Tail of the mutation queue; see `mutate`. */
+  private pending: Promise<unknown> = Promise.resolve();
 
   constructor(
     gitCommonDir: string,
@@ -89,6 +102,21 @@ export class FileTaskRepository implements TaskRepository {
     await this.io.write(this.filePath, encodeTaskStateFile(tasks));
   }
 
+  /**
+   * Runs a read-modify-write with no other mutation interleaved.
+   *
+   * The chain is advanced before awaiting, so callers queue in the order they
+   * arrive. A rejected operation must not break the chain for everything behind
+   * it — the caller still sees its own error, but the next mutation runs — so
+   * the link stored in `pending` swallows the rejection while the returned
+   * promise does not.
+   */
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.pending.then(operation, operation);
+    this.pending = result.catch(() => undefined);
+    return result;
+  }
+
   /** True when the state file is present, i.e. this repo has been adopted. */
   async exists(): Promise<boolean> {
     return (await this.io.read(this.filePath)) !== undefined;
@@ -104,9 +132,11 @@ export class FileTaskRepository implements TaskRepository {
    * use what is already there.
    */
   async seed(tasks: TaskWorkspace[]): Promise<boolean> {
-    if (await this.exists()) return false;
-    await this.write(tasks);
-    return true;
+    return this.mutate(async () => {
+      if (await this.exists()) return false;
+      await this.write(tasks);
+      return true;
+    });
   }
 
   async getAll(): Promise<TaskWorkspace[]> {
@@ -126,22 +156,26 @@ export class FileTaskRepository implements TaskRepository {
   }
 
   async save(task: TaskWorkspace): Promise<void> {
-    const tasks = await this.read();
-    const index = tasks.findIndex((t) => t.id === task.id);
-    if (index === -1) {
-      tasks.push(task);
-    } else {
-      tasks[index] = task;
-    }
-    await this.write(tasks);
+    await this.mutate(async () => {
+      const tasks = await this.read();
+      const index = tasks.findIndex((t) => t.id === task.id);
+      if (index === -1) {
+        tasks.push(task);
+      } else {
+        tasks[index] = task;
+      }
+      await this.write(tasks);
+    });
   }
 
   async delete(id: string): Promise<void> {
-    const tasks = await this.read();
-    const remaining = tasks.filter((t) => t.id !== id);
-    // Nothing matched: skip the write rather than rewrite the file untouched,
-    // so a delete of an unknown id cannot disturb a concurrent writer.
-    if (remaining.length === tasks.length) return;
-    await this.write(remaining);
+    await this.mutate(async () => {
+      const tasks = await this.read();
+      const remaining = tasks.filter((t) => t.id !== id);
+      // Nothing matched: skip the write rather than rewrite the file untouched,
+      // so a delete of an unknown id cannot disturb a concurrent writer.
+      if (remaining.length === tasks.length) return;
+      await this.write(remaining);
+    });
   }
 }

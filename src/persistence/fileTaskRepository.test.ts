@@ -166,3 +166,65 @@ describe("FileTaskRepository", () => {
     await expect(repo(io).getAll()).resolves.toEqual([]);
   });
 });
+
+/**
+ * Reads resolve on a later turn, which is what makes the lost update
+ * reproducible: without the queue both saves take their snapshot before either
+ * writes. The real read is a multi-megabyte parse, so the window is far wider
+ * than this.
+ */
+class SlowReadIo extends FakeIo {
+  async read(filePath: string): Promise<string | undefined> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return super.read(filePath);
+  }
+}
+
+describe("FileTaskRepository concurrent mutation", () => {
+  it("does not lose a save that overlaps another task's save", async () => {
+    const io = new SlowReadIo();
+    const subject = repo(io);
+    await subject.save(task({ id: "a" }));
+    await subject.save(task({ id: "b" }));
+
+    // Both start before either finishes reading, which is the live case: two
+    // stage runners settling different tasks in the same extension host.
+    await Promise.all([
+      subject.save(task({ id: "a", status: "failed" })),
+      subject.save(task({ id: "b", status: "completed" })),
+    ]);
+
+    const all = await subject.getAll();
+    expect(all.find((t) => t.id === "a")?.status).toBe("failed");
+    expect(all.find((t) => t.id === "b")?.status).toBe("completed");
+  });
+
+  it("does not lose a save that overlaps a delete of another task", async () => {
+    const io = new SlowReadIo();
+    const subject = repo(io);
+    await subject.save(task({ id: "a" }));
+    await subject.save(task({ id: "b" }));
+
+    await Promise.all([
+      subject.delete("a"),
+      subject.save(task({ id: "b", status: "completed" })),
+    ]);
+
+    const all = await subject.getAll();
+    expect(all.map((t) => t.id)).toEqual(["b"]);
+    expect(all[0].status).toBe("completed");
+  });
+
+  it("keeps running mutations after one fails", async () => {
+    const io = new SlowReadIo();
+    const subject = repo(io);
+    io.failWritesTo = STATE;
+
+    await expect(subject.save(task({ id: "a" }))).rejects.toThrow("disk full");
+
+    io.failWritesTo = undefined;
+    await subject.save(task({ id: "b" }));
+
+    expect((await subject.getAll()).map((t) => t.id)).toEqual(["b"]);
+  });
+});
