@@ -116,10 +116,14 @@ export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | un
   // under "Waiting on others" with no age against it, because a pending stage has no
   // `startedAt` — which is the tell, since a delegated task with no visible age is the
   // thing `formatWaitingSince` exists to prevent.
+  // `active` is excluded for the same reason `pending` is, one step later: a gate whose
+  // session is still running has asked nobody anything yet. A verification stage runs to
+  // produce its checklist items, and only `awaiting-approval` means it has finished and
+  // stopped — `finishStage` settles a stage requiring approval to exactly that. Counting
+  // `active` also made `externalWaitSince` report the session's own start as the moment
+  // somebody was handed the work, so a gate that had waited on nobody showed an age.
   const gate = pipeline.stages.find(
-    (stage) =>
-      stage.kind === "humanVerification" &&
-      (stage.status === "awaiting-approval" || stage.status === "active"),
+    (stage) => stage.kind === "humanVerification" && stage.status === "awaiting-approval",
   );
   if (!gate || gate.checklistAudience !== "others") return undefined;
 
@@ -232,7 +236,15 @@ export function groupForTask(input: GroupInput): TaskGroupId {
   // human-verification stage is the one in play. Raised earlier they are real but
   // not yet blocking, and treating them as urgent would put nearly every
   // harnessed task in this group — which is the sifting problem again.
-  if (current?.kind === "humanVerification") {
+  //
+  // A gate that is `active` is not in play in that sense: a session is running on it,
+  // producing the items a person will later be asked about. `finishStage` settles a
+  // stage requiring approval to `awaiting-approval`, which the branch above already
+  // catches, so `active` here means work in flight and nothing else. Filed as needing
+  // you it asked for a decision that did not exist yet, and — worse for a list read to
+  // decide what to pick up — it hid a running task from `Working`, where every
+  // non-gate stage with the same status appears.
+  if (current?.kind === "humanVerification" && current.status !== "active") {
     const outstanding = stages
       .filter((stage) => stage.status !== "skipped")
       .flatMap((stage) => stage.checklist ?? [])

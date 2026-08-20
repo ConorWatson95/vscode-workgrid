@@ -279,7 +279,18 @@ gates, evidence and durable state outrank per-task speed.
   approval only the operator can give, so it goes back in `needs-you`, and an item scoped
   to a gate nothing has reached yet must not file the task as delegated. A failed stage
   and a held tool call both outrank it: a broken route is the operator's whatever the
-  task is nominally waiting on. Absent means `"self"`, so nothing that has not opted in
+  task is nominally waiting on. **A gate that is still running is neither yours nor
+  theirs** (20 Aug 2026): `active` was accepted alongside `awaiting-approval` in both
+  `externalGate` and `groupForTask`'s verification branch, and it is the one status that
+  means a session is in flight — `finishStage` settles a stage requiring approval to
+  `awaiting-approval`, so a gate has stopped exactly when it reports that. RU-550's UAT
+  acceptance sat in `needs-you` while its own session was running, asking for a decision
+  about a checklist it had not written yet, and — the half that actually misleads — kept a
+  running task out of `Working`, where every other kind with that status appears. The same
+  status also gave `externalWaitSince` the session's own `startedAt`, so a gate that had
+  waited on nobody displayed an age. The exclusion is the one `pending` already had, one
+  transition later; a gate reaching `awaiting-approval` is unchanged, which is what keeps
+  this a deferral rather than a gate switched off. Absent means `"self"`, so nothing that has not opted in
   changes; an unrecognised value is **rejected rather than defaulted**, because
   defaulting means `"self"` and that is exactly the failure the field prevents. The row
   carries the age of the wait in days or hours (`formatWaitingSince`) — moving these out

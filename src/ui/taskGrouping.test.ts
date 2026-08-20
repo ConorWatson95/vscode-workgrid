@@ -110,6 +110,41 @@ describe("groupForTask", () => {
     expect(of(pipeline([stage({ status: "active" })]))).toBe("working");
   });
 
+  it("is working when the running stage is a verification gate", () => {
+    // RU-550's UAT acceptance, filed under "Needs you" while its session was running.
+    // A gate settles to `awaiting-approval` when it finishes, so `active` means work in
+    // flight — the same thing it means for every other kind, which does land in Working.
+    // Asking for a decision that does not exist yet is the milder half; hiding a running
+    // task from the group that shows running tasks is the half that misleads.
+    const p = pipeline([
+      stage({ id: "a", status: "passed" }),
+      stage({ id: "uat", kind: "humanVerification", status: "active" }),
+    ]);
+    expect(of(p)).toBe("working");
+  });
+
+  it("still needs you at a running gate's items once it has stopped", () => {
+    // The same stage one transition later: nothing has changed about the checklist, only
+    // that a person is now being asked. This is what keeps the fix from switching the
+    // gate off rather than deferring it.
+    const p = pipeline([
+      stage({
+        id: "a",
+        status: "passed",
+        checklist: [{ id: "c1", text: "check", checked: false }],
+      }),
+      stage({ id: "uat", kind: "humanVerification", status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("keeps a held call ahead of a running gate", () => {
+    // A gate running a session can still be blocked mid-turn, and an answer is the only
+    // thing that releases it — so Working must not absorb it.
+    const p = pipeline([stage({ id: "uat", kind: "humanVerification", status: "active" })]);
+    expect(groupForTask({ status: "ready", pipeline: p, heldCalls: 1 })).toBe("needs-you");
+  });
+
   it("is parked when nothing runs and nothing waits on you", () => {
     expect(of(pipeline([stage({ id: "a", status: "passed" }), stage({ id: "b", status: "pending" })]))).toBe(
       "parked",
@@ -322,6 +357,24 @@ describe("a gate the route has not reached", () => {
     ]);
     expect(of(reached)).toBe("waiting-others");
     expect(externalWaitSince(reached)).toBe("2026-08-14T06:00:00.000Z");
+  });
+
+  it("does not file a task as delegated while the external gate is still running", () => {
+    // Same reason a pending one is not: a gate producing its own checklist items has
+    // handed nothing to anybody. It also has a startedAt, so counting it would have
+    // reported the session's own start as the age of somebody else's wait.
+    const running = pipeline([
+      stage({ id: "a", status: "passed" }),
+      stage({
+        id: "sc-signoff",
+        kind: "humanVerification",
+        status: "active",
+        checklistAudience: "others",
+        startedAt: "2026-08-20T08:58:37.521Z",
+      } as Partial<TaskStage>),
+    ]);
+    expect(of(running)).toBe("working");
+    expect(externalWaitSince(running)).toBeUndefined();
   });
 
   it("keeps a failed stage ahead of a reached external gate", () => {
