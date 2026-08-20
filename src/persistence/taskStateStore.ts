@@ -2,7 +2,9 @@ import { TaskWorkspace } from "../domain/taskWorkspace";
 import { Result } from "../utilities/result";
 import { FileTaskRepository, StateFileIo, StateLogSink } from "./fileTaskRepository";
 import { planLegacyAdoption } from "./legacyStateAdoption";
+import { StateFileLock } from "./nodeStateFileLock";
 import { TaskRepository, normalizeRoot } from "./taskRepository";
+import { taskStateFilePath } from "./taskStateFile";
 
 /**
  * Resolves the right task store for a repository, and routes calls to it.
@@ -38,6 +40,15 @@ export interface TaskStateStoreOptions {
    */
   legacy?: TaskRepository;
   logger?: StateLogSink;
+  /**
+   * Builds the cross-process lock for a repository's state file.
+   *
+   * A factory rather than an instance, because the lock is per file and the
+   * store holds many repositories. Optional: without one the repositories rely
+   * on their in-process queue alone, which is what every test wants and what a
+   * single-process caller already had.
+   */
+  createLock?: (stateFilePath: string) => StateFileLock;
 }
 
 export class TaskStateStore {
@@ -76,6 +87,8 @@ export class TaskStateStore {
       gitDir.value,
       this.options.io,
       this.options.logger,
+      undefined,
+      this.options.createLock?.(taskStateFilePath(gitDir.value)),
     );
     await this.adopt(repository, repositoryRoot);
     return repository;

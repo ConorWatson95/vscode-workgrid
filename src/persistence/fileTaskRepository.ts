@@ -1,4 +1,5 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
+import { StateFileLock } from "./nodeStateFileLock";
 import { TaskRepository, normalizeRoot } from "./taskRepository";
 import {
   decodeTaskStateFile,
@@ -52,8 +53,10 @@ export type NowFn = () => string;
  * the window wide enough to hit; both of those grow with use.
  *
  * The queue is per instance, so it serialises this extension host only. A
- * headless run writing the same file concurrently is still last-writer-wins,
- * and closing that needs a lock file rather than a promise chain.
+ * second *process* — a headless run, or another window on a different worktree
+ * of the same repository — shares the file through the git common dir and
+ * interleaves the same way, which is what the optional `lock` closes. Absent, the
+ * behaviour is the queue alone, so nothing that has not been given one changes.
  */
 export class FileTaskRepository implements TaskRepository {
   private readonly filePath: string;
@@ -66,6 +69,13 @@ export class FileTaskRepository implements TaskRepository {
     private readonly io: StateFileIo,
     private readonly logger?: StateLogSink,
     private readonly now: NowFn = () => new Date().toISOString(),
+    /**
+     * Cross-process mutual exclusion, wrapped around each queued mutation.
+     *
+     * Optional because most callers are a single process and every test is: a
+     * repository without one keeps exactly the in-process guarantee it had.
+     */
+    private readonly lock?: StateFileLock,
   ) {
     this.filePath = taskStateFilePath(gitCommonDir);
     this.quarantinePath = taskStateQuarantinePath(gitCommonDir);
@@ -112,7 +122,13 @@ export class FileTaskRepository implements TaskRepository {
    * promise does not.
    */
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.pending.then(operation, operation);
+    // The lock is taken *inside* the queue, never around it. Held across the
+    // whole queue it would be held while this process waits on its own pending
+    // work, which is exactly the long hold that makes another process break it.
+    const guarded = this.lock
+      ? () => this.lock!.withLock(operation)
+      : operation;
+    const result = this.pending.then(guarded, guarded);
     this.pending = result.catch(() => undefined);
     return result;
   }

@@ -228,3 +228,86 @@ describe("FileTaskRepository concurrent mutation", () => {
     expect((await subject.getAll()).map((t) => t.id)).toEqual(["b"]);
   });
 });
+
+describe("FileTaskRepository cross-process lock", () => {
+  /** Records the order of lock and write, which is the only thing worth asserting. */
+  function recordingLock(events: string[]) {
+    return {
+      async withLock<T>(operation: () => Promise<T>): Promise<T> {
+        events.push("acquire");
+        try {
+          return await operation();
+        } finally {
+          events.push("release");
+        }
+      },
+    };
+  }
+
+  function lockedRepo(io: StateFileIo, lock: { withLock: <T>(o: () => Promise<T>) => Promise<T> }) {
+    return new FileTaskRepository(
+      GIT_DIR,
+      io,
+      undefined,
+      () => "2026-06-01T00:00:00.000Z",
+      lock,
+    );
+  }
+
+  it("holds the lock across the whole read-modify-write", async () => {
+    const events: string[] = [];
+    const io = new FakeIo();
+    const subject = lockedRepo(
+      {
+        async read(p) {
+          events.push("read");
+          return io.read(p);
+        },
+        async write(p, c) {
+          events.push("write");
+          return io.write(p, c);
+        },
+      },
+      recordingLock(events),
+    );
+
+    await subject.save(task());
+
+    expect(events).toEqual(["acquire", "read", "write", "release"]);
+  });
+
+  // Taken inside the queue, never around it: held across the queue it would be
+  // held while this process waits on its own pending work, which is the long
+  // hold that gets a lock broken by somebody else.
+  it("takes the lock once per mutation rather than once per burst", async () => {
+    const events: string[] = [];
+    const subject = lockedRepo(new SlowReadIo(), recordingLock(events));
+
+    await Promise.all([subject.save(task({ id: "a" })), subject.save(task({ id: "b" }))]);
+
+    expect(events.filter((e) => e === "acquire")).toHaveLength(2);
+    // Never overlapping, because the queue already serialised them.
+    expect(events).toEqual(["acquire", "release", "acquire", "release"]);
+  });
+
+  it("still releases when the mutation fails", async () => {
+    const events: string[] = [];
+    const io = new FakeIo();
+    io.failWritesTo = STATE;
+    const subject = lockedRepo(io, recordingLock(events));
+
+    await expect(subject.save(task())).rejects.toThrow("disk full");
+
+    expect(events).toEqual(["acquire", "release"]);
+  });
+
+  it("reads without taking the lock", async () => {
+    const events: string[] = [];
+    const io = new FakeIo();
+    const subject = lockedRepo(io, recordingLock(events));
+
+    await subject.getAll();
+
+    expect(events).toEqual([]);
+  });
+});

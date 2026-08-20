@@ -5,6 +5,7 @@ import { GitStatusService } from "./git/gitStatusService";
 import { GitWorktreeService } from "./git/gitWorktreeService";
 import { GitMergeService } from "./git/gitMergeService";
 import { ExtensionStateTaskRepository } from "./persistence/extensionStateTaskRepository";
+import { NodeStateFileLock } from "./persistence/nodeStateFileLock";
 import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
 import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
 import { TaskWorkspaceService } from "./services/taskWorkspaceService";
@@ -100,6 +101,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     git: worktreeService,
     legacy: legacyRepository,
     logger,
+    // The state file is shared by every worktree of a repository and by a
+    // headless run, so the repository's own mutation queue — which serialises
+    // this host and nothing else — is only half the guarantee.
+    createLock: (stateFilePath) => new NodeStateFileLock(stateFilePath, logger),
   });
   // Declared before `repositoryRoot` exists, and read on every call, because the
   // active repository is resolved after the service graph is built and can
