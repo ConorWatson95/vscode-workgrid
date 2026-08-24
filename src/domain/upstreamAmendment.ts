@@ -49,19 +49,54 @@ export interface UpstreamCorrection {
  * hatch for a change too large to amend is already stated there, and stating it
  * twice is how the two come to disagree. It also keeps the layering honest — the
  * marker belongs to the execution adapter, and the domain has no business naming it.
+ *
+ * `earlier` carries the findings of amendments this one absorbed — corrections of the
+ * same upstream stage that were appended and never ran. They are stated in the order
+ * they happened and in one note, because that is what the stage is actually facing:
+ * one base output and several deltas against it. Delivered as separate subtasks they
+ * cost a session each to re-read the same output, which is the accumulation that hit
+ * the step limit on a 29-stage route — 69 never-run amendments across eight stages.
  */
-export function upstreamAmendmentNote(upstream: UpstreamCorrection): string {
+export function upstreamAmendmentNote(
+  upstream: UpstreamCorrection,
+  earlier: string[] = [],
+): string {
+  const changes = [...earlier, upstream.finding]
+    .map((finding) => finding.trim())
+    .filter((finding) => finding.length > 0);
+  const many = changes.length > 1;
+  // The one-change wording is left exactly as it was rather than generalised, so a
+  // single amendment — still the common case — reads and renders identically to
+  // before this could absorb anything.
   return [
-    `"${upstream.stageName}" was corrected after you ran, so the work above was`,
-    `produced against a version of it that no longer stands.`,
-    "",
-    `What changed there:`,
-    upstream.finding.trim(),
-    "",
-    `Your previous output is above. Bring it into line with that change and nothing`,
-    `else — the rest of what you did still stands, and rewriting it costs the route`,
-    `the whole run this exists to avoid, as well as invalidating the reviews that`,
-    `already passed it. Say what you changed and what you deliberately left alone.`,
+    ...(many
+      ? [
+          `"${upstream.stageName}" was corrected ${changes.length} times after you ran, so`,
+          `the work above was produced against a version of it that no longer stands.`,
+          "",
+          `What changed there, in the order it changed:`,
+          ...changes
+            .flatMap((change, i) => [`(${i + 1} of ${changes.length})`, change, ""])
+            .slice(0, -1),
+          "",
+          `Your previous output is above. Bring it into line with those changes and`,
+          `nothing else — the rest of what you did still stands, and rewriting it costs`,
+          `the route the whole run this exists to avoid, as well as invalidating the`,
+          `reviews that already passed it. Say what you changed and what you`,
+          `deliberately left alone.`,
+        ]
+      : [
+          `"${upstream.stageName}" was corrected after you ran, so the work above was`,
+          `produced against a version of it that no longer stands.`,
+          "",
+          `What changed there:`,
+          changes[0] ?? "",
+          "",
+          `Your previous output is above. Bring it into line with that change and nothing`,
+          `else — the rest of what you did still stands, and rewriting it costs the route`,
+          `the whole run this exists to avoid, as well as invalidating the reviews that`,
+          `already passed it. Say what you changed and what you deliberately left alone.`,
+        ]),
     "",
     `If the change is large enough that amending cannot reach a correct result — a`,
     `different approach is now required, not a different detail — do not half-apply`,

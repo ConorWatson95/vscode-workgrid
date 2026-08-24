@@ -590,6 +590,29 @@ only the stage the operator corrected. It now reaches the stages behind it. Rule
   costs those stages nothing. The old note on `CorrectionUndo` — that no snapshot could
   bring the later stages back — was true only because their replies had already been
   destroyed.
+- **An amendment that has not run absorbs the next correction rather than sitting beside
+  it** (24 Aug 2026). Amendments appended unconditionally, so eight corrections of two
+  stages left **69 never-run amendments across eight downstream stages** on
+  `Purchases vs Sales Phase 3` — 77 sessions to reach the first gate against a
+  `MAX_STEPS` of 40, so the advance exhausted before it could stop anywhere a human
+  would see why. Every one of those notes describes a delta against the *same* unrun
+  base output and opens with "your previous output is above", so delivered separately
+  they each pay a session to re-read it: this is `correctStage`'s own argument — do not
+  start cold — applied to the amendments of one stage instead of the stages behind one
+  correction. A round that produced nothing is not a round, which is also what keeps
+  `stageHistory` honest, since it renders each as a distinct account of the stage.
+  Restricted to the **same upstream stage**, which is what makes it free: `withdrawAmendments`
+  matches on `upstream.stageId`, and a subtask absorbing two stages' corrections could be
+  attributed to neither. It keeps the **earliest** `at` and `undo` — the settlement
+  withdrawal already reaches for — so withdrawing the later of two absorbed corrections
+  restores further back than that one alone, honest for the same reason absorbing is safe:
+  no work happened between them. The raw findings are kept on `upstream.findings` because
+  `finding` is the *composed* note, and merging notes would mean parsing prose back into
+  its parts; an amendment predating that field is appended beside rather than absorbed,
+  since nesting one note in another hands the stage two sets of instructions — the failure
+  `HANDOFF`-beside-`VERDICT` already taught this codebase. Raising `MAX_STEPS` is the wrong
+  lever and its comment was stale either way: "a real route is well under ten steps" was
+  written against routes far shorter than the 29-stage, 178-subtask ones now running.
 - **A change too large to amend is still a rebuild**, declined through the existing
   `CORRECTION-DECLINED` path, which is honoured on exactly these subtasks. The note names
   no marker itself: `correctionPrompt` already states it, and the domain has no business

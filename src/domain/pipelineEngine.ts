@@ -687,40 +687,89 @@ function reopenAfter(
     };
 
     if (amendable(s)) {
-      const ordinal = s.subtasks.filter((sub) => sub.correction?.upstream).length + 1;
+      // Snapshotted so withdrawing the upstream correction can put this stage back
+      // too. Before amendment there was nothing to put back — the replies were gone —
+      // which is why `CorrectionUndo` said it covered only the corrected stage's own
+      // settlement.
+      const undo = {
+        status: s.status,
+        finishedAt: s.finishedAt,
+        verdict: s.verdict,
+        verification: s.verification,
+        blocked: s.blocked,
+      };
+
+      // An amendment for this same upstream stage that has not run yet absorbs this
+      // correction instead of being appended beside it. A round that produced nothing
+      // is not a round: both notes describe deltas against the same unrun base output,
+      // so delivered separately they cost a session each to re-read it. Unbounded, that
+      // is what exhausted the step limit — eight corrections of two stages left 69
+      // never-run amendments across eight downstream stages, 77 sessions before the
+      // route could reach a gate that would have stopped it.
+      //
+      // Restricted to the *same* upstream stage so `withdrawAmendments` needs no
+      // change: it matches on `upstream.stageId`, and a subtask that absorbed two
+      // stages' corrections could not be attributed to either. It keeps the earliest
+      // `at` and `undo` with it, which is the settlement `withdrawAmendments` already
+      // reaches for — so withdrawing the later of two absorbed corrections restores
+      // further back than that one correction alone. Honest here, and for the same
+      // reason absorbing is safe at all: no work happened between them.
+      //
+      // Requires `findings`, so this only ever absorbs an amendment this version
+      // wrote. `finding` on an older one is the composed note, and nesting one note
+      // inside another would hand the stage two sets of instructions — the failure
+      // `HANDOFF`-beside-`VERDICT` already taught this codebase to avoid.
+      const absorbing = [...s.subtasks]
+        .reverse()
+        .find(
+          (sub) =>
+            sub.status === "pending" &&
+            !sub.reply &&
+            !sub.activity &&
+            sub.correction?.upstream?.stageId === upstream!.stageId &&
+            sub.correction.upstream.findings !== undefined,
+        );
+
+      const note = (earlier: string[]) => upstreamAmendmentNote(upstream!, earlier);
+
+      const amend = (existing: Subtask | undefined): Subtask => {
+        const earlier = existing?.correction?.upstream?.findings ?? [];
+        const findings = [...earlier, upstream!.finding];
+        const ordinal = existing
+          ? undefined
+          : s.subtasks.filter((sub) => sub.correction?.upstream).length + 1;
+        return {
+          ...existing,
+          id: existing?.id ?? `${s.id}-amend-${ordinal}`,
+          title: existing?.title ?? amendmentTitle(upstream!.stageName, ordinal!),
+          // The note is the *finding*, because that is what `correctionPrompt`
+          // reads for a correction subtask; `prompt` goes unused on this path and
+          // is kept in step only so a reader of the state file is not misled.
+          prompt: note(earlier),
+          status: "pending" as const,
+          correction: {
+            finding: note(earlier),
+            // The earliest correction's timestamp and settlement are kept, because
+            // that is the one whose withdrawal has to restore this stage.
+            at: existing?.correction?.at ?? at,
+            upstream: {
+              stageId: upstream!.stageId,
+              stageName: upstream!.stageName,
+              findings,
+            },
+            undo: existing?.correction?.undo ?? undo,
+          },
+        };
+      };
+
       later[i] = {
         ...cleared,
         // `startedAt` is kept: the stage did start, and the amendment is a
         // continuation of it rather than a fresh run. Wiping it would misreport the
         // elapsed time of work that genuinely happened.
-        subtasks: [
-          ...s.subtasks,
-          {
-            id: `${s.id}-amend-${ordinal}`,
-            title: amendmentTitle(upstream!.stageName, ordinal),
-            // The note is the *finding*, because that is what `correctionPrompt`
-            // reads for a correction subtask; `prompt` goes unused on this path and
-            // is kept in step only so a reader of the state file is not misled.
-            prompt: upstreamAmendmentNote(upstream!),
-            status: "pending" as const,
-            correction: {
-              finding: upstreamAmendmentNote(upstream!),
-              at,
-              upstream: { stageId: upstream!.stageId, stageName: upstream!.stageName },
-              // Snapshotted so withdrawing the upstream correction can put this stage
-              // back too. Before amendment there was nothing to put back — the replies
-              // were gone — which is why `CorrectionUndo` said it covered only the
-              // corrected stage's own settlement.
-              undo: {
-                status: s.status,
-                finishedAt: s.finishedAt,
-                verdict: s.verdict,
-                verification: s.verification,
-                blocked: s.blocked,
-              },
-            },
-          },
-        ],
+        subtasks: absorbing
+          ? s.subtasks.map((sub) => (sub.id === absorbing.id ? amend(sub) : sub))
+          : [...s.subtasks, amend(undefined)],
       };
       return;
     }

@@ -97,6 +97,23 @@ export class AskUserService {
   }
 
   /**
+   * Cumulative blocked-on-human time for a task, **including a wait still open**.
+   *
+   * `humanWaitMs` counts settled waits only, which is right for the usage totals it
+   * feeds: a wait that has not ended has no length to book. The stage timeout needs the
+   * opposite reading — a stage blocked *right now* is the case it exists for, and one
+   * still waiting contributes nothing to the settled tally, so a timer reading that
+   * would see the whole wait as working time and kill the stage for waiting.
+   */
+  blockedMs(taskId: string, at: string = this.now()): number {
+    let total = this.waits.total(taskId);
+    for (const ask of this.waiting(taskId)) {
+      total += waitedMs(ask.waitingSince, at);
+    }
+    return total;
+  }
+
+  /**
    * Time a question has been waiting *so far*, for one still outstanding.
    *
    * Separate from the tally, which only counts settled waits: a stage blocked right

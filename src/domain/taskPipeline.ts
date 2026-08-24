@@ -75,8 +75,15 @@ export interface Subtask {
      * was right each time and had the ground moved under it. A ledger that conflated
      * them would send the next investigation at exactly the wrong stage. It is also
      * what lets `undoCorrection` find the amendments one correction caused.
+     *
+     * `findings` are the upstream findings this amendment answers, raw and in order —
+     * more than one when it absorbed corrections of the same stage that were appended
+     * while it was still pending. Kept apart from `finding`, which is the composed
+     * note, because a note cannot be merged with another without parsing prose back
+     * into the parts it was rendered from. Absent on amendments recorded before
+     * coalescing existed, which is why every reader treats it as optional.
      */
-    upstream?: { stageId: string; stageName: string };
+    upstream?: { stageId: string; stageName: string; findings?: string[] };
   };
 }
 

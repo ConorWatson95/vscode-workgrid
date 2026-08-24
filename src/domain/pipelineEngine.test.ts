@@ -2210,8 +2210,138 @@ describe("correctStage", () => {
     expect(amendment.correction?.upstream).toEqual({
       stageId: "implement",
       stageName: "Implement",
+      findings: ["wrong cast"],
     });
     expect(amendment.correction?.finding).toContain("wrong cast");
+  });
+
+  it("absorbs a second correction into an amendment that has not run yet", () => {
+    // The accumulation that hit the step limit on a live 29-stage route: eight
+    // corrections of two stages left 69 never-run amendments across eight downstream
+    // stages, 77 sessions before the route could reach a gate. Both notes describe
+    // deltas against the same unrun base output, so separately they cost a session
+    // each to re-read it. A round that produced nothing is not a round.
+    const once = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const twice = must(correctStage(once, "implement", { finding: "wrong grain", at: "t2" }));
+
+    const amendments = twice.stages[1].subtasks.filter((s) => s.correction?.upstream);
+    expect(amendments).toHaveLength(1);
+    expect(amendments[0].correction?.upstream?.findings).toEqual([
+      "wrong cast",
+      "wrong grain",
+    ]);
+    // Both changes reach the stage, in the order they happened.
+    expect(amendments[0].correction?.finding).toContain("wrong cast");
+    expect(amendments[0].correction?.finding).toContain("wrong grain");
+    expect(amendments[0].status).toBe("pending");
+  });
+
+  it("keeps the earliest correction's timestamp and settlement on an absorbed amendment", () => {
+    // `withdrawAmendments` reaches for `amendments[0].correction.undo`, and matches on
+    // `correction.at`. The earliest is the one whose withdrawal has to restore this
+    // stage, so withdrawing the later of two absorbed corrections restores further back
+    // than that one alone — honest for the same reason absorbing is safe: no work
+    // happened between them.
+    const once = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const twice = must(correctStage(once, "implement", { finding: "wrong grain", at: "t2" }));
+
+    const amendment = twice.stages[1].subtasks.filter((s) => s.correction?.upstream)[0];
+    expect(amendment.correction?.at).toBe("t1");
+    expect(amendment.correction?.undo?.status).toBe("passed");
+  });
+
+  it("appends rather than absorbs once the amendment has run", () => {
+    // Then it genuinely is a new round: it responds to output that now exists, and
+    // folding a further change into it would rewrite a brief already acted on.
+    const once = must(correctStage(ran(), "implement", { finding: "wrong cast", at: "t1" }));
+    const acted = {
+      ...once,
+      stages: once.stages.map((s, i) =>
+        i === 1
+          ? {
+              ...s,
+              subtasks: s.subtasks.map((sub) =>
+                sub.correction?.upstream
+                  ? { ...sub, status: "done" as const, reply: "Amended the cast." }
+                  : sub,
+              ),
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+
+    const twice = must(correctStage(acted, "implement", { finding: "wrong grain", at: "t2" }));
+    const amendments = twice.stages[1].subtasks.filter((s) => s.correction?.upstream);
+    expect(amendments).toHaveLength(2);
+    expect(amendments[1].title).toBe('Amend for "Implement" (2)');
+  });
+
+  it("appends rather than absorbs when a different stage was corrected", () => {
+    // Restricted to the same upstream stage so `withdrawAmendments` needs no change:
+    // it matches on `upstream.stageId`, and a subtask that absorbed two stages'
+    // corrections could not be attributed to either.
+    const base = ran();
+    const withPlan = {
+      ...base,
+      stages: [
+        {
+          id: "plan", name: "Plan", kind: "implementation", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          subtasks: [{
+            id: "plan-1", title: "Plan", prompt: "p", status: "done" as const,
+            reply: "Planned.", activity: { costUsd: 1 },
+          }],
+        } as unknown as TaskStage,
+        ...base.stages,
+      ],
+    } as TaskPipeline;
+
+    const once = must(correctStage(withPlan, "plan", { finding: "wrong tab", at: "t1" }));
+    const twice = must(
+      correctStage(once, "implement", { finding: "wrong cast", at: "t2" }),
+    );
+
+    const amendments = twice.stages[2].subtasks.filter((s) => s.correction?.upstream);
+    expect(amendments).toHaveLength(2);
+    expect(amendments.map((a) => a.correction?.upstream?.stageId)).toEqual([
+      "plan",
+      "implement",
+    ]);
+  });
+
+  it("appends beside an amendment predating coalescing rather than nesting its note", () => {
+    // `finding` on an older amendment is the composed note, not a raw finding, so
+    // absorbing it would hand the stage two sets of instructions — the failure
+    // `HANDOFF`-beside-`VERDICT` already taught this codebase to avoid. Keyed on
+    // `findings` being absent, so only amendments this version wrote are absorbed.
+    const base = ran();
+    const legacy = {
+      ...base,
+      stages: base.stages.map((s, i) =>
+        i === 1
+          ? {
+              ...s,
+              subtasks: [
+                ...s.subtasks,
+                {
+                  id: "review-amend-2", title: 'Amend for "Implement"', prompt: "p",
+                  status: "pending" as const,
+                  correction: {
+                    finding: '"Implement" was corrected after you ran, so…',
+                    at: "t1",
+                    upstream: { stageId: "implement", stageName: "Implement" },
+                  },
+                },
+              ],
+            }
+          : s,
+      ),
+    } as TaskPipeline;
+
+    const next = must(correctStage(legacy, "implement", { finding: "wrong grain", at: "t2" }));
+    const amendments = next.stages[1].subtasks.filter((s) => s.correction?.upstream);
+    expect(amendments).toHaveLength(2);
+    expect(amendments[1].correction?.upstream?.findings).toEqual(["wrong grain"]);
   });
 
   it("still clears a later stage's evidence, which certified the old output", () => {

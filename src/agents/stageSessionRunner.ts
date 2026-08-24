@@ -9,6 +9,7 @@ import { Logger } from "../logging/logger";
 import { redactSecrets } from "../domain/secretRedaction";
 import { assessMcpReadiness } from "../domain/mcpReadiness";
 import { stageTools as defaultStageTools } from "../domain/stageTools";
+import { stageTimeoutDecision } from "../domain/stageTimeout";
 import { McpServerError, McpServerStatus } from "../domain/mcpServerStatus";
 
 /** How often a running stage's progress is reported to whoever is watching. */
@@ -134,6 +135,15 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
      * has needed yet.
      */
     private readonly stageTools: () => string[] = () => defaultStageTools(),
+    /**
+     * Blocked-on-human time for a task so far, including a wait still open.
+     *
+     * Subtracted from the elapsed time before the hard stop fires, because
+     * `timeoutMs` bounds a *hung CLI* and a stage waiting on a person is not hung —
+     * see `domain/stageTimeout.ts`. Optional, and absent means unmeasured rather
+     * than zero: without it the timer behaves exactly as it did before.
+     */
+    private readonly blockedOnHumanMs?: (taskId: string) => number,
   ) {}
 
   run(
@@ -256,7 +266,37 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         resolve(result);
       };
 
-      const timer = setTimeout(() => {
+      // The budget is *working* time, so the timer re-arms rather than fires once: a
+      // stage held on `ask_user` for an hour has used none of it, and the wait is only
+      // known when the timer looks. Sampled either side of the session like
+      // `blockedOnHumanMs`, since the tally is per task and survives a subtask.
+      const startedAt = Date.now();
+      const blockedBefore = this.blockedOnHumanMs?.(task.id);
+      let timer: ReturnType<typeof setTimeout>;
+      const onDeadline = () => {
+        const blocked =
+          blockedBefore === undefined
+            ? undefined
+            : (this.blockedOnHumanMs?.(task.id) ?? blockedBefore) - blockedBefore;
+        const decision = stageTimeoutDecision(
+          Date.now() - startedAt,
+          this.timeoutMs,
+          blocked,
+        );
+        if (decision.kind === "rearm") {
+          // Announced, because a stage sitting past its own limit is otherwise
+          // indistinguishable from the cap not working — the rule a truncated report
+          // and a discarded file both follow.
+          this.logger.info(
+            `Harness [${task.name}] ${label} is past the ${Math.round(
+              this.timeoutMs / 60000,
+            )}-minute limit but has spent ${Math.round(
+              (blocked ?? 0) / 60000,
+            )} minute(s) waiting on an answer, so the limit has not been reached.`,
+          );
+          timer = setTimeout(onDeadline, decision.afterMs);
+          return;
+        }
         const minutes = Math.round(this.timeoutMs / 60000);
         this.logger.warn(
           `Harness [${task.name}] ${label} hit the ${minutes}-minute limit; stopping it. ` +
@@ -270,11 +310,12 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           ok: false,
           text: lastAssistantText(),
           sessionId: session.sessionId,
-          error: `timed out after ${minutes} minute(s)`,
+          error: `timed out after ${minutes} minute(s) of working time`,
           denials: denials(),
           activity: activity(),
         });
-      }, this.timeoutMs);
+      };
+      timer = setTimeout(onDeadline, this.timeoutMs);
 
       // Watched live rather than scanned at the end: the refusal happens seconds
       // in, and the agent then spends turns working around it.

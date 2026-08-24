@@ -737,6 +737,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // window. Stage sessions only — the ad-hoc chat runners below pass nothing and
     // keep the CLI's full set, because a person is not a stage.
     () => stageTools(configuration.additionalStageTools(repositoryUri)),
+    // The stage timeout bounds a hung CLI, and a stage blocked on `ask_user` is not
+    // hung. Without this the shorter of the two settings always won, so a question
+    // could never outlive `stageTimeoutMinutes` however long `askTimeoutMinutes` was —
+    // and the stage was then recorded as having timed out rather than as having waited.
+    (taskId) => askUser.blockedMs(taskId),
   );
   /**
    * The project's routes and rules as they are on disk right now.
