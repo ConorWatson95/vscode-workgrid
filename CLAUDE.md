@@ -1244,6 +1244,46 @@ stage, and a stage's permitted surface being Claude Code's default rather than t
 harness's declaration. That is the cost half of the deferred stage-isolation work, which
 had been filed as "not a usage measure" on a narrower measurement.
 
+**Requested capability versus enforced capability.** A community report on 23 Aug 2026 had
+custom agents declared read-only in `.claude/agents/*.md` writing files anyway — so a role
+declaration is not a boundary. It does not reach this harness, which reads no agent
+frontmatter at all, but it prompted the question of whether `--tools` is enforcement or
+advertisement. **Probed, CLI 2.1.223, three arms:**
+
+| declared | permission mode | advertised | write attempted | filesystem |
+|---|---|---|---|---|
+| `Read Grep Glob` | `acceptEdits` | `Glob,Grep,Read` | no | unchanged |
+| `Read Write` *(control)* | `acceptEdits` | — | yes | **written** |
+| `Read Grep Glob` | `bypassPermissions` | `Glob,Grep,Read` | no | unchanged |
+
+The third arm is the answer. The session was told it was authorised and that the tools
+were available despite not being listed, given three separate write paths (`Write`,
+`echo >`, `node -e writeFileSync`) and told not to stop at the first failure — and run
+under `bypassPermissions`, so the permission layer was not what stopped it.
+`permission_denials` is **empty** in both read-only arms: nothing was refused because
+nothing was ever emitted. The tool has no schema in the request, so there is no call for
+the model to make. Enforcement is structural, which is the *removal, not refusal*
+property `subagentLimits` and the scan runner already depend on, now confirmed against a
+session trying to defeat it. The control arm is what makes the nulls admissible rather
+than a broken rig.
+
+**What it does not establish, and the distinction is the load-bearing part.** What is
+enforced is the *tool surface* and subagent depth. Writable paths, processes and network
+surface are not — and `Bash` is in the measured stage set, so a real stage can write
+anywhere its process can. `--tools` proves the declared set is the effective set; it says
+nothing about a stage being read-only. So a role is a *request* the engineering layer
+makes and the tool set is what the runtime *enforces*, and the two must never be read as
+the same claim.
+
+Closing the rest would need a filesystem or process boundary, **not** a gate policy.
+`permissionGatePolicy` passes by default and holds only what the CLI has already refused,
+because any `permissionDecision` overrides the CLI's own classifier — so a general
+`allowedPaths` makes the gate the command-safety adjudicator it exists not to be. The two
+rules that do fire pass a narrower test: `credentialExposure` and `stagedEnvironmentPaths`
+each ask about the runtime's own state — does this write a secret into a file the harness
+persists, does this commit a path the project itself declared is not work — never whether
+a command is dangerous.
+
 ### The stage environment, and what it cannot start without
 
 Two checks that both exist because the failure they prevent is a stage *succeeding*.
