@@ -1860,6 +1860,59 @@ Five rules, each load-bearing:
   engineering advice — the line `credentialExposure` holds. Saying which one belongs in
   the commit would be making the judgement instead of handing it over.
 
+### One tool could open the worktree and the other could not
+
+`MAX_WORKTREE_FOLDER_NAME` in `pathUtilities.ts`, 24 Aug 2026. A task name here is
+routinely a whole sentence, and the worktree folder was `<repo>-<the whole thing
+slugified>` with no cap — so seven live worktrees had roots of 97 to **173**
+characters. Visual Studio then refused to load a solution with *"The imported project
+file ... could not be loaded. Could not find a part of the path"*, naming a NuGet
+`.targets` file that was plainly on disk.
+
+**`LongPathsEnabled` is per process, not per machine**, and that is the whole fact.
+The registry flag is honoured only for a binary whose manifest declares
+`longPathAware`. Checked both:
+
+| binary | manifest |
+|---|---|
+| `MSBuild.exe` (VS 18) | `longPathAware` |
+| `devenv.exe` 18.9.12112.369 | **absent** |
+
+So the same 270-character import builds under `MSBuild.exe` and is unopenable by
+`devenv.exe`, with the registry set to 1 either way. The first probe here was
+`MSBuild.exe` reporting `IMPORT OK`, which was a real measurement of the wrong
+process and led to the wrong conclusion — the file existing and one tool reading it
+says nothing about the tool the operator actually opens the solution in.
+
+The budget is measured from the deepest path, not guessed: 170 characters of tracked
+tail in that repository, so the root must be ≤ 88 to clear 259 with the separator.
+A 17-character parent (`C:/Dev/worktrees/`) plus the 60-character cap is 77.
+
+Three rules:
+
+- **The directory is capped and the branch is not.** Refs have no length limit worth
+  worrying about, and the branch name is how the work is recognised in a commit, a
+  pull request and a stand-up. Capping both would pay a real cost to fix a problem
+  only the filesystem has.
+- **The truncated tail is replaced by a digest of the whole slug, never simply cut.**
+  These names share long prefixes — two campaign tasks opening
+  `include-retail-r2-dealers-in-trade-parts-rebate-campaigns-` would collide on one
+  directory, and the second task would be handed the first one's worktree. Truncation
+  stops at a hyphen so the name still reads as words.
+- **A repository name that alone fills the cap keeps its length.** The repo name is
+  the part that says which checkout this is, so the cap is overshot rather than the
+  name mangled.
+
+**Repairing an existing worktree is a move plus one field.** `git worktree move`,
+then `worktreePath` — and *only* that field. The old path also appears 20 to 174
+times per task inside recorded `commands`, `pathsWritten` and replies; those are the
+verbatim record `claimEvidence` attributes worktrees from, and rewriting them to
+tidy a path would be falsifying history. The move fails with `Permission denied`
+while any process holds the root as its cwd, which for a worktree under a route
+means a live `claude.exe` and its children — the holder is found by reading each
+process's cwd, since only the root directory is busy and everything inside it
+renames fine.
+
 ### Keeping a worktree the checkout it claims to be
 
 Two rules in `worktreeProvisioner.ts`, both learned from a task that was dirty before
