@@ -935,7 +935,10 @@ goes with it, and nothing is discarded here. One correctness rule came with it â
 splittable stage is emptied so it goes back through `planStage`, *except* when it carries
 a correction: a stage that failed after being corrected did not fail because its split
 was wrong, and emptying it would destroy the retained rounds this whole change exists to
-protect.
+protect. Nor are finished units re-opened â€” a stage fails as soon as any subtask does, so
+its siblings are routinely `done`, and on a corrected stage those are exactly the rounds
+being preserved. Their replies survived a retry either way; what changes is that they are
+not paid for a second time.
 
 **And the error text was being read as a review finding** (`findingsOfSubtasks`). When a
 session dies mid-turn the CLI's own account of it is the last thing in the transcript, so

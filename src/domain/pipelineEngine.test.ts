@@ -376,6 +376,9 @@ describe("retryStage", () => {
       status: "pending",
       correction: { finding: "wrong cast" },
     });
+    // And only the correction. The rounds that finished are not paid for again —
+    // re-running them is the waste this command exists to avoid.
+    expect(pipeline.stages[0].subtasks.filter((s) => s.status === "done")).toHaveLength(2);
     expect(nextAction(pipeline)).toMatchObject({ kind: "run" });
   });
 

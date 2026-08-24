@@ -2169,16 +2169,25 @@ export function retryStage(
   // transport. Emptying it would throw away exactly the work this command was added
   // to stop people throwing away.
   const corrected = stage.subtasks.some((s) => s.correction);
+  // And only the units that did not finish are re-opened. A stage fails as soon as any
+  // subtask does, so its siblings are routinely `done` — re-running those would be the
+  // waste this command exists to avoid, at its most expensive on the corrected stage
+  // above, where the finished units are the rounds being preserved. Their replies were
+  // kept either way; what changes is that they are not paid for again.
   const subtasks = stage.splittable && !corrected
     ? []
-    : stage.subtasks.map((s) => ({
-        ...s,
-        status: "pending" as const,
-        sessionId: undefined,
-        startedAt: undefined,
-        finishedAt: undefined,
-        failureReason: undefined,
-      }));
+    : stage.subtasks.map((s) =>
+        s.status === "done" || s.status === "skipped"
+          ? s
+          : {
+              ...s,
+              status: "pending" as const,
+              sessionId: undefined,
+              startedAt: undefined,
+              finishedAt: undefined,
+              failureReason: undefined,
+            },
+      );
 
   return ok({
     ...replaceStage(pipeline, {
