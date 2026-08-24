@@ -931,7 +931,7 @@
           "type": "number",
           "default": 45,
           "scope": "resource",
-          "markdownDescription": "Hard stop for a single route subtask, so a hung CLI cannot stall a route forever. A stage that hits this is recorded as **failed**, so prefer a generous value: planning or investigation stages on a large repository legitimately take tens of minutes, and per-process overhead on the machine (on-access virus scanning of every process launch, most often) multiplies that. Whatever the stage produced before the cap is kept in the log."
+          "markdownDescription": "Hard stop for a single route subtask, so a hung CLI cannot stall a route forever. A stage that hits this is recorded as **failed**, so prefer a generous value: planning or investigation stages on a large repository legitimately take tens of minutes, and per-process overhead on the machine (on-access virus scanning of every process launch, most often) multiplies that. Whatever the stage produced before the cap is kept in the log.\n\nThis bounds **working** time. Measured time blocked on an `ask_user` question is subtracted, because a stage waiting on a person is not hung — otherwise this would be the effective cap on a question too, and it is much shorter than **Ask Timeout Minutes**."
         },
         "taskWorkspaces.askTimeoutMinutes": {
           "type": "number",

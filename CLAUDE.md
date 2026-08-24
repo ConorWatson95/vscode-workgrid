@@ -446,6 +446,47 @@ worked out.
   same tree row, panel and answer flow as a `NEEDS-INFO` one, and only the submit
   handler differs — answer the waiting call, or enrich the brief and re-run.
 
+### The shorter of two timeouts always won
+
+`domain/stageTimeout.ts`, 24 Aug 2026. `askTimeoutMinutes` (120) sets `MCP_TOOL_TIMEOUT`
+so a question can wait human latency rather than machine latency — and
+`stageTimeoutMinutes` (45) was a flat wall-clock `setTimeout` over the whole subtask, so
+a question could never actually outlive **45** minutes whatever the ask timeout said. The
+setting whose own description says it bounds a *hung CLI* was bounding a person thinking.
+
+Worse in the direction that misleads: when it fired, the subtask was recorded as
+`timed out after 45 minute(s)` — a hang. That is `transientFailure`'s complaint arriving
+by another route, a wait that was never the stage's doing charged to the stage, and the
+remedy the operator reaches for is the wrong one.
+
+The timer now **re-arms** rather than firing once, and the budget is *working* time:
+elapsed minus the human wait the harness already measures. Four rules:
+
+- **The wait must include one still open** (`AskUserService.blockedMs`). `humanWaitMs`
+  counts settled waits only, which is right for the usage totals it feeds and exactly
+  wrong here — a stage blocked *right now* is the case this exists for, and it
+  contributes nothing to the settled tally, so a timer reading that would see the whole
+  wait as working time and kill the stage for waiting.
+- **Unmeasured wait is working time.** A runner built without the reader behaves exactly
+  as it did before. Defaulting the other way switches the hung-CLI bound off wherever
+  the ask channel is unavailable, which is precisely where a hang cannot be a question.
+- **A re-arm has a floor** (30s). A stage that had nearly used its budget and is now
+  blocked has ~0 remaining while the open wait keeps growing, so an unfloored re-arm
+  fires again immediately for as long as nobody answers. The cost is overshooting the
+  budget by up to the floor, which is the right trade against a spinning timer.
+- **Announced when it re-arms**, because a stage sitting past its own stated limit is
+  otherwise indistinguishable from the cap not working — the rule truncated output and a
+  discarded file both follow.
+
+**An unlimited timeout is not the answer to either**, and the reasons differ. Unlimited
+*stage* timeout removes the only protection against a wedged CLI, and a route that never
+advances then looks identical to one waiting on you — the failure that tells you which is
+the thing lost. Unlimited *ask* timeout is closer to defensible, since a question waiting
+overnight is the designed case, but MCP has no cancel: an unanswered call holds the
+session, its context and its process open, and `release`'s abandon path is what
+guarantees every `tools/call` gets a result. Something has to end it; a bound with a
+message beats a cliff with none.
+
 ### Seeing and steering a run
 
 Three related facilities, all answers to "the pipeline is a snapshot and the

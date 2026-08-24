@@ -50,9 +50,10 @@ const MIN_REARM_MS = 30_000;
  *   `stageUsage` and `stageProductivity` already follow. Defaulting the other way would
  *   switch the hung-CLI bound off wherever the ask channel is unavailable, which is
  *   precisely where a hang cannot be a question.
- * - **The wait is clamped to the elapsed time.** The tally is per *task* and survives a
- *   subtask, so a reading that outruns the session's own clock means the sampling
- *   slipped; crediting more wait than time has passed would make the budget unbounded.
+ * - **No more wait is credited than time that has passed.** The tally is per *task* and
+ *   survives a subtask, so a reading can outrun the session's own clock. Working time
+ *   floors at zero rather than going negative, which would re-arm for longer than the
+ *   setting allows and quietly turn `stageTimeoutMinutes` into something larger.
  */
 export function stageTimeoutDecision(
   elapsedMs: number,

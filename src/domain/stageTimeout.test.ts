@@ -25,17 +25,23 @@ describe("stageTimeoutDecision", () => {
   });
 
   it("floors a re-arm rather than spinning on an open wait", () => {
-    // A wait still in flight leaves the remaining budget at ~0, which would fire again
+    // A stage that had nearly used its budget and is now blocked: the remaining budget
+    // is ~0 and the open wait keeps growing, so an unfloored re-arm fires again
     // immediately for as long as nobody answers.
-    const decision = stageTimeoutDecision(90 * MINUTE, 45 * MINUTE, 45 * MINUTE - 1);
-    expect(decision).toEqual({ kind: "rearm", afterMs: 30_000 });
+    const elapsed = 45 * MINUTE + 40 * MINUTE - 1;
+    expect(stageTimeoutDecision(elapsed, 45 * MINUTE, 40 * MINUTE)).toEqual({
+      kind: "rearm",
+      afterMs: 30_000,
+    });
   });
 
-  it("clamps a wait that outruns the elapsed time", () => {
-    // The tally is per task and survives a subtask, so a slipped sampling must not
-    // make the budget unbounded.
+  it("never credits more wait than time that has passed", () => {
+    // The tally is per task and survives a subtask, so a slipped sampling could read
+    // more wait than this session has existed for. Working time floors at zero rather
+    // than going negative and buying a budget longer than the setting.
     expect(stageTimeoutDecision(45 * MINUTE, 45 * MINUTE, 999 * MINUTE)).toEqual({
-      kind: "expired",
+      kind: "rearm",
+      afterMs: 45 * MINUTE,
     });
   });
 });
