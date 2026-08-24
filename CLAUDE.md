@@ -949,6 +949,46 @@ Eleventh false stop of that family and the third to arrive through the *label*; 
 the rule the handoff already follows — a failed stage's conclusion is not a conclusion —
 applied per subtask, so the surviving rounds of a corrected stage keep their findings.
 
+### Two ways a stopped stage looked like a running one
+
+Both found on 24 Aug 2026, from one failure: `winget upgrade --all` moved Claude Code from
+the npm shim to the native installer, which wrote its PATH entry at **machine** scope as
+the literal `%USERPROFILE%\.local\bin` — expanded in the system context, so every process
+on the box got `C:\windows\system32\config\systemprofile\.local\bin` and the real
+`claude.exe` was on no PATH at all. Not a harness bug, but it exercised two.
+
+**A stage holding a failed subtask spun in blue** (`stagePresentation`). `finishSubtask`
+fails a *stage* only once every subtask has resolved — right for judging the stage — and
+the driver stops at the first failure rather than spending sessions on siblings whose plan
+is probably wrong. So the commonest shape of a failed stage is `active` with one failed
+subtask and the rest pending, and the row said **In progress** on a route that had
+stopped, with the reason nowhere on it. Worse, `stage-active` is not what
+**Retry This Stage** is keyed on, so the one command that could move it was not offered —
+the fix shipped that morning was unreachable in exactly the case it was written for. Keyed
+on a failed subtask rather than on "nothing is active": a subtask reverted by a question or
+a held call leaves the same shape while the route is legitimately waiting (`stageBlock`
+presents those), and a failure is terminal, so there is no window mid-advance where this
+misreads a stage between subtasks.
+
+**And the command was spawned unquoted** (`commandForShell`). `claudeCommand` is routinely
+an absolute path once the CLI is not on PATH, and a Windows profile name with a space in it
+is ordinary — so the spawn failed as `'C:\Users\Conor' is not recognized`, which reads as
+the CLI being missing rather than as the path having been cut in half. **The rule is the
+opposite of the permission-gate hook's**, which is why it is recorded rather than copied.
+Probed through node's `spawn(..., { shell: true })` on CLI 2.1.223:
+
+| command | resolves |
+|---|---|
+| `claude` | yes |
+| `"claude"` | **no** |
+| an absolute path containing a space | **no** |
+| the same path, quoted | yes |
+
+cmd resolves a bare name against PATH and PATHEXT and looks for a quoted one literally, so
+quoting unconditionally — the hook's rule, where a silent failure is indistinguishable from
+the feature being off — would break the default here. Quote on whitespace, and what makes
+that a measurement rather than a guess is that both arms were run.
+
 ### Work that belongs to no stage
 
 Every stage is told to stay within its objective and say so rather than reach

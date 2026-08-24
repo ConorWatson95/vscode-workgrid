@@ -45,8 +45,34 @@ export function stagePresentation(
 function statusVisual(stage: TaskStage, outstandingInPipeline?: number): StageVisual {
   const detail = stageDetail(stage, outstandingInPipeline);
 
+  // A stage the engine has not settled but which is holding a failed subtask is not
+  // running, whatever its status says. `finishSubtask` fails a *stage* only once every
+  // subtask has resolved — right for judging the stage — and the driver stops at the
+  // first failure rather than spending sessions on siblings whose plan is probably
+  // wrong. So the common shape of a failed stage is `active` with one failed subtask
+  // and the rest pending: the row spun, in blue, on a route that had stopped, and the
+  // reason for the stop was not on it anywhere.
+  //
+  // Two things follow from reading it correctly, and the second is the one that
+  // matters: the row carries the failure reason, and its `contextValue` becomes
+  // `stage-failed`, which is what **Retry This Stage** is keyed on. Keyed on a failed
+  // subtask rather than on "nothing is active", because a subtask reverted by a
+  // question or a held call leaves the same shape while the route is legitimately
+  // waiting — `stageBlock` already presents those — and because a failure is terminal,
+  // so there is no window mid-advance where this misreads a stage between subtasks.
+  const failedSubtask = stage.subtasks.some((s) => s.status === "failed");
+
   switch (stage.status) {
     case "active":
+      if (failedSubtask) {
+        return {
+          iconId: "error",
+          colorId: "charts.red",
+          label: "Failed",
+          description: firstFailureReason(stage) ?? "failed",
+          contextValue: "stage-failed",
+        };
+      }
       return {
         iconId: "loading~spin",
         colorId: "charts.blue",

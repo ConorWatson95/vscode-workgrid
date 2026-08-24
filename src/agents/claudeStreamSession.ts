@@ -31,7 +31,7 @@ import {
   isEmptyHandoff,
   parseHandoff,
 } from "./handoff";
-import { buildCliArgs } from "./claudeCliArgs";
+import { buildCliArgs, commandForShell } from "./claudeCliArgs";
 import { redactSecrets } from "../domain/secretRedaction";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -263,7 +263,9 @@ export class ClaudeStreamSession {
     // repository with MCP servers, and with nothing logged in between it reads
     // as the extension having stalled.
     this.spawnedAtMs = Date.now();
-    this.child = spawn(this.options.command, args, {
+    // Quoted only when it needs to be — see `commandForShell`, which records the
+    // probe. An absolute path with a space in it is the case that failed.
+    this.child = spawn(commandForShell(this.options.command, useShell), args, {
       cwd: this.options.worktreePath,
       windowsHide: true,
       shell: useShell,

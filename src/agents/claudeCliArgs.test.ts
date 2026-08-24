@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCliArgs, resolveMcpConfigPath } from "./claudeCliArgs";
+import { buildCliArgs, commandForShell, resolveMcpConfigPath } from "./claudeCliArgs";
 
 const BASE = { sessionId: "sess-1", permissionMode: "acceptEdits" };
 
@@ -371,5 +371,33 @@ describe("--disallowed-tools", () => {
     } as Parameters<typeof buildCliArgs>[0]);
 
     expect(args[args.length - 2]).toBe("--mcp-config");
+  });
+});
+
+describe("commandForShell", () => {
+  const WITH_SPACE = "C:\Users\Conor Watson\.local\bin\claude.exe";
+
+  it("quotes a path containing a space, which is what cmd cuts in half", () => {
+    // Measured: unquoted, cmd stops at the space and reports "'C:\Users\Conor' is not
+    // recognized" — which reads as the CLI being missing rather than as the path
+    // having been truncated.
+    expect(commandForShell(WITH_SPACE, true)).toBe(`"${WITH_SPACE}"`);
+  });
+
+  it("leaves a bare command alone, because a quoted one does not resolve", () => {
+    // The opposite of the permission-gate hook's rule, and the reason this is not
+    // quoted unconditionally: `"claude"` is looked for literally and fails, while
+    // `claude` resolves against PATH and PATHEXT.
+    expect(commandForShell("claude", true)).toBe("claude");
+  });
+
+  it("never quotes when no shell will re-parse it", () => {
+    // Passed straight as argv, the quotes would become part of the path.
+    expect(commandForShell(WITH_SPACE, false)).toBe(WITH_SPACE);
+    expect(commandForShell(WITH_SPACE, undefined)).toBe(WITH_SPACE);
+  });
+
+  it("tolerates a setting typed with surrounding whitespace", () => {
+    expect(commandForShell("  claude  ", true)).toBe("claude");
   });
 });

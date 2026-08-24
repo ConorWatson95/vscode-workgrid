@@ -120,6 +120,35 @@ function quoteForShell(value: string, useShell: boolean | undefined): string {
 }
 
 /**
+ * The CLI command itself, as it must be written when a shell will re-parse it.
+ *
+ * Not the same rule as the permission-gate hook command, which is quoted
+ * *unconditionally* because a silent failure there is indistinguishable from the gate
+ * being off. Probed here on CLI 2.1.223, through node's `spawn(..., { shell: true })`:
+ *
+ * | command | resolves |
+ * |---|---|
+ * | `claude` | yes |
+ * | `"claude"` | **no** — `'"claude"' is not recognized` |
+ * | an absolute path containing a space | **no** — stops at the space |
+ * | the same path, quoted | yes |
+ *
+ * So quoting unconditionally would break the default and the commonest case, which is
+ * the opposite of the hook's failure direction: cmd resolves a bare name against PATH
+ * and PATHEXT, and a quoted one it looks for literally. Quote when there is whitespace,
+ * leave it alone otherwise — and what makes that safe rather than a guess is that both
+ * arms are measured.
+ *
+ * The `claudeCommand` setting is what makes this necessary. It is routinely an absolute
+ * path once the CLI is not on PATH, and on Windows a profile name with a space in it is
+ * ordinary — so an unquoted command failed as `'C:\Users\Conor' is not recognized`,
+ * which reads as the CLI being missing rather than as the path having been cut in half.
+ */
+export function commandForShell(command: string, useShell: boolean | undefined): string {
+  return quoteForShell(command.trim(), useShell);
+}
+
+/**
  * Resolves the configured MCP config to an absolute path, or undefined when
  * there is nothing usable to pass.
  *

@@ -139,6 +139,42 @@ describe("stagePresentation", () => {
     expect(stagePresentation(stage({ status: "failed" })).contextValue).toBe("stage-failed");
   });
 
+  it("reads a stage holding a failed subtask as failed, not as working", () => {
+    // The shape a failed stage actually has: the engine fails a *stage* only once
+    // every subtask resolves, and the driver stops at the first failure. So the row
+    // spun in blue on a route that had stopped, with the reason nowhere on it — and
+    // `stage-active` is not what Retry This Stage is keyed on, so the one command that
+    // could move it was not offered.
+    const visual = stagePresentation(
+      stage({
+        status: "active",
+        subtasks: [
+          {
+            id: "s1",
+            title: "One",
+            prompt: "",
+            status: "failed",
+            failureReason: "session failed — the CLI exited with code 1",
+          },
+          { id: "s2", title: "Two", prompt: "", status: "pending" },
+        ],
+      }),
+    );
+    expect(visual.iconId).toBe("error");
+    expect(visual.contextValue).toContain("stage-failed");
+    expect(visual.description).toContain("exited with code 1");
+  });
+
+  it("still spins while a subtask is genuinely in flight", () => {
+    const visual = stagePresentation(
+      stage({
+        status: "active",
+        subtasks: [{ id: "s1", title: "One", prompt: "", status: "active" }],
+      }),
+    );
+    expect(visual.iconId).toBe("loading~spin");
+  });
+
   it("marks a stage with output as correctable, whatever its status", () => {
     const ran = { ...subtask("a", "done"), reply: "did it" };
     for (const status of ["passed", "failed", "awaiting-approval", "pending"] as const) {
