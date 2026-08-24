@@ -446,6 +446,50 @@ worked out.
   same tree row, panel and answer flow as a `NEEDS-INFO` one, and only the submit
   handler differs — answer the waiting call, or enrich the brief and re-run.
 
+### The setting was right and bounded the wrong quantity
+
+24 Aug 2026. Questions kept dying in about seven minutes with `askTimeoutMinutes` at
+**120**, and the state file said why nothing above was the cause: two failures in
+`qubeautoapp`, both `asked N question(s) that were never answered`, **no**
+`timed out after N minute(s)` at all. Blocked time 448s for one question and 919s for
+two — the same ~450s twice, across two models, so a fixed bound and not an operator
+giving up. The installed build did set `MCP_TOOL_TIMEOUT`, and neither setting was
+overridden anywhere.
+
+**The CLI bounds elapsed time and silence separately, and a question is bounded by
+silence.** `MCP_TOOL_TIMEOUT` caps the call; a *second* mechanism aborts a call that has
+sent "no response or progress notification" for a while, configurable as
+`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` or, per server, as a `timeout` field. A blocking
+`ask_user` is silent by design — blocking *is* the mechanism — so it is the textbook idle
+server, and the one setting named after the behaviour governed a quantity that was never
+reached. Same shape as the unquoted hook command: the feature looked configured, the
+setting existed, and the thing it named was not the thing in control.
+
+**Declared per server, not through the global env var**, which the CLI's own message
+offers as the alternative. The global switch also lifts the abort off the project's own
+MCP servers in every stage session, and there a silent server really is a wedged one —
+the stage would hang to the stage timeout and be recorded as a hung CLI, which is the
+misattribution this whole area keeps producing. Ours is the only server the harness knows
+is *meant* to go quiet. Absent leaves the field off entirely rather than defaulting, the
+rule an unmeasured wait already follows, and a tiny value is clamped to a minute for the
+reason `askTimeoutEnv` clamps.
+
+**Probed on CLI 2.1.223**, and designed to make the field bite *earlier* than the default
+so the answer arrives in seconds rather than minutes. A stdio server whose one tool never
+replies and sends no progress, called from an untrusted cwd through `--mcp-config`:
+
+| server entry | outcome |
+|---|---|
+| `"timeout": 20000` | aborted, `tool "wait_forever" timed out after 20s` |
+| no `timeout` field | still blocking at **120s**, when the probe was killed |
+
+So the field is honoured on a `--mcp-config` server, which was the open question — the
+CLI's message mentions it only for a server "configured in your MCP settings".
+
+**Not probed, and adjacent:** `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS` sits beside these. A
+long call being auto-backgrounded would be a third bound with a third failure shape, and
+nothing here has looked at it.
+
 ### The shorter of two timeouts always won
 
 `domain/stageTimeout.ts`, 24 Aug 2026. `askTimeoutMinutes` (120) sets `MCP_TOOL_TIMEOUT`

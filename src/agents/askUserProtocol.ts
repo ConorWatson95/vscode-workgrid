@@ -123,6 +123,27 @@ export function buildAskMcpConfig(options: {
   interpreter: string;
   serverPath: string;
   inboxPath: string;
+  /**
+   * How long this server may stay **silent** on a call, in ms.
+   *
+   * Not the same bound as `MCP_TOOL_TIMEOUT`, which is why raising that one did not
+   * work. The CLI aborts a tool call that has sent "no response or progress" for a
+   * while — measured on *silence*, not on elapsed time — and a blocking `ask_user`
+   * is silent by design, since blocking is the whole mechanism. So the setting was
+   * set correctly and a question still died in about seven minutes.
+   *
+   * Declared **per server** rather than through `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`,
+   * which the same CLI message offers as the global alternative. The global switch
+   * would also lift the abort off the project's own MCP servers in every stage
+   * session, and there a silent server really is a wedged one — the stage would then
+   * hang to the stage timeout and be recorded as a hung CLI, which is the
+   * misattribution this whole area keeps producing. Ours is the only server the
+   * harness knows is *meant* to go quiet.
+   *
+   * Omitted when absent rather than defaulted, so a caller that does not know keeps
+   * the CLI's own behaviour instead of being given a number this module invented.
+   */
+  idleTimeoutMs?: number;
 }): Record<string, unknown> {
   return {
     mcpServers: {
@@ -130,6 +151,9 @@ export function buildAskMcpConfig(options: {
         command: options.interpreter,
         // Passed as argv, not a shell string, so no quoting is involved.
         args: [options.serverPath, options.inboxPath],
+        ...(options.idleTimeoutMs === undefined
+          ? {}
+          : { timeout: Math.max(Math.floor(options.idleTimeoutMs), 60_000) }),
       },
     },
   };

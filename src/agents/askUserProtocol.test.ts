@@ -88,6 +88,36 @@ describe("buildAskMcpConfig", () => {
     expect(Object.keys(config().mcpServers)).toEqual([ASK_SERVER_NAME]);
   });
 
+  it("declares an idle timeout, because silence is bounded separately", () => {
+    // `MCP_TOOL_TIMEOUT` bounds elapsed time; the CLI aborts a call that has sent no
+    // response or progress for a while, and a blocking question is silent by design.
+    const server = buildAskMcpConfig({
+      interpreter: "node",
+      serverPath: "ask.js",
+      inboxPath: "questions",
+      idleTimeoutMs: 120 * 60_000,
+    }) as any;
+    expect(server.mcpServers[ASK_SERVER_NAME].timeout).toBe(7_200_000);
+  });
+
+  it("omits the timeout when the caller does not know one", () => {
+    // Absent must leave the CLI's own behaviour in charge rather than inventing a
+    // number here — the rule an unmeasured wait already follows.
+    expect(config().mcpServers[ASK_SERVER_NAME].timeout).toBeUndefined();
+  });
+
+  it("clamps a tiny idle timeout to a minute", () => {
+    // Zero or negative would abort the call almost immediately, which presents as the
+    // question channel silently not working — the reason `askTimeoutEnv` clamps too.
+    const server = buildAskMcpConfig({
+      interpreter: "node",
+      serverPath: "ask.js",
+      inboxPath: "questions",
+      idleTimeoutMs: 0,
+    }) as any;
+    expect(server.mcpServers[ASK_SERVER_NAME].timeout).toBe(60_000);
+  });
+
   it("passes paths as argv rather than a shell string", () => {
     // No quoting is involved, which is what makes a path with spaces safe here —
     // unlike the hook command, which is shelled.

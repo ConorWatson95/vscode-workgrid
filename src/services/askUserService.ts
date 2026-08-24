@@ -48,6 +48,16 @@ export class AskUserService {
     /** Node, or whatever can run the server script. */
     private readonly interpreter: () => string,
     private readonly now: () => string = () => new Date().toISOString(),
+    /**
+     * How long a question may go unanswered, in ms — the same `askTimeoutMinutes`
+     * that sets `MCP_TOOL_TIMEOUT`, declared a second time as the server's own idle
+     * timeout because the CLI bounds elapsed time and silence separately, and a
+     * blocking question is bounded by the second one. Read per `prepare`, so
+     * changing the setting reaches the next subtask without a restart.
+     *
+     * Absent leaves the field off entirely and the CLI's own default in charge.
+     */
+    private readonly idleTimeoutMs?: () => number,
   ) {}
 
   private readonly pending = new Map<string, PendingAsk>();
@@ -154,6 +164,7 @@ export class AskUserService {
             interpreter: this.interpreter(),
             serverPath,
             inboxPath,
+            idleTimeoutMs: this.idleTimeoutMs?.(),
           }),
           null,
           2,

@@ -330,6 +330,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     nodeGateFileSystem,
     logger,
     () => configuration.gateInterpreter(repositoryUri),
+    undefined,
+    // The same setting that sets `MCP_TOOL_TIMEOUT`, declared again as this server's
+    // own idle timeout: the CLI bounds elapsed time and silence separately, and a
+    // question blocking by design is bounded by the silence one. Raising only the
+    // first is why questions kept dying in about seven minutes.
+    () => configuration.askTimeoutMinutes(repositoryUri) * 60 * 1000,
   );
   context.subscriptions.push({ dispose: () => askUser.dispose() });
 
