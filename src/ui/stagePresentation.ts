@@ -1,5 +1,5 @@
 import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
-import { parseReviewFindings, summariseFindings } from "../domain/reviewFindings";
+import { findingsOfSubtasks, summariseFindings } from "../domain/reviewFindings";
 import { isCorrectable, undoableCorrection } from "../domain/pipelineEngine";
 
 /**
@@ -124,9 +124,10 @@ function stageDetail(stage: TaskStage, outstandingInPipeline?: number): string {
   // A review's findings, on the row. A stage that reported a critical problem and
   // then passed — because reviewing was its job and it did it — was a green row
   // saying nothing, so the findings were only discoverable by opening the report.
-  const findings = summariseFindings(
-    parseReviewFindings(stage.subtasks.map((s) => s.reply ?? "").join("\n\n")),
-  );
+  // Read only from the subtasks that reached a conclusion: a failed one's reply is
+  // the CLI's account of the failure, and "API Error: 529 Overloaded" parses as a
+  // critical. See `findingsOfSubtasks`.
+  const findings = summariseFindings(findingsOfSubtasks(stage.subtasks));
   if (findings) parts.push(findings);
 
   if (outstanding > 0) {

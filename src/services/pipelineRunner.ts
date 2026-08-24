@@ -49,6 +49,11 @@ import { substitutePlaceholders } from "../domain/commandPlaceholders";
 import { taskTicket } from "../domain/ticketReference";
 import { describeDiscard, DiscardSelection } from "../domain/worktreeDiscard";
 import {
+  backoffMs,
+  DEFAULT_TRANSIENT_ATTEMPTS,
+  isTransientFailure,
+} from "../domain/transientFailure";
+import {
   CommandOutcome,
   VerificationCommandRunner,
   describeVerification,
@@ -340,6 +345,21 @@ export class PipelineRunner {
       worktreePath: string,
       signal?: AbortSignal,
     ) => Promise<DiscardSelection | undefined>,
+    /**
+     * How many times a subtask whose session died on someone else's capacity is run
+     * again before a human is told. A function, because it derives from a setting.
+     *
+     * Zero switches the retry off and restores the old behaviour exactly: a transient
+     * failure then holds the stage on its first occurrence, which is still better than
+     * failing it, but nothing is re-run unattended.
+     */
+    private readonly transientAttempts: () => number = () => DEFAULT_TRANSIENT_ATTEMPTS,
+    /**
+     * Waits between those attempts. Injected for the reason every clock here is: the
+     * runner's tests must not spend five real minutes proving a backoff.
+     */
+    private readonly delay: (ms: number) => Promise<void> = (ms) =>
+      new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
 
   /**
@@ -568,6 +588,17 @@ export class PipelineRunner {
    * which reclaims one it is about to run regardless of age.
    */
   private readonly startedSubtasks = new Set<string>();
+
+  /**
+   * How many times each subtask has been re-run after a transport failure.
+   *
+   * In memory rather than on the pipeline, deliberately. The count exists to stop
+   * one advance looping forever on an outage; a reload or a fresh Advance Route is a
+   * human deciding to try again, and that should get a fresh budget rather than
+   * inherit an exhausted one from a state file written an hour ago. Nothing about the
+   * work is recorded here, so nothing is lost with it.
+   */
+  private readonly transientRetries = new Map<string, number>();
 
   /**
    * Stops a route mid-flight. Called when the user stops the task's agent:
@@ -931,6 +962,15 @@ export class PipelineRunner {
           // the next iteration's abort check do it, so the reverted subtask is
           // already saved and the route is resumable.
           if (result.cancelled) return { outcome: { kind: "cancelled" }, steps };
+          // The transport failed, not the stage. Wait, then round again: the subtask
+          // is pending, so `nextAction` hands back the same one. A retry costs a step
+          // of the loop's budget, which is right — an outage should exhaust the
+          // advance rather than be invisible in it.
+          if (result.transient) {
+            await this.delay(result.transient.waitMs);
+            if (signal?.aborted) return { outcome: { kind: "cancelled" }, steps };
+            continue;
+          }
           if (result.denied) {
             return {
               outcome: {
@@ -1050,6 +1090,8 @@ export class PipelineRunner {
     question?: string[];
     cancelled?: boolean;
     denied?: PermissionDenial[];
+    /** The session died on the transport. Wait this long and run it again. */
+    transient?: { reason: string; waitMs: number; attempt: number; budget: number };
   }> {
     const { stage, subtask } = action;
 
@@ -1260,6 +1302,73 @@ export class PipelineRunner {
         cancelled: true,
       };
     }
+
+    // A session that died on somebody else's capacity has told us nothing about the
+    // stage. Recorded as a failure it fails the whole stage, `nextAction` reports
+    // `blocked`, and the only way onward is `revertToStage` — which discards the stage
+    // and everything after it. That is what a 529 used to cost on a correction run:
+    // the same price as a wrong approach, for a reason that was never about the work.
+    //
+    // Reverted rather than judged, exactly as a stop and a question are: nothing has
+    // been decided about this subtask, so the route must resume from it.
+    if (!reply.ok && isTransientFailure(reply.error)) {
+      const attempt = (this.transientRetries.get(subtask.id) ?? 0) + 1;
+      const budget = Math.max(0, this.transientAttempts());
+      const cause = reply.error ?? "the transport failed";
+      const reverted = revertSubtask(pipeline, subtask.id);
+      if (reverted.ok) pipeline = reverted.value;
+      // Not counted as an intervention: `revertSubtask` records one only when given a
+      // clock, and a retry the harness performs itself is not supervision.
+      //
+      // Dropped from the owned set too, or the next advance reads a subtask this host
+      // abandoned as one it is still running and refuses to touch it.
+      this.startedSubtasks.delete(subtask.id);
+      // Recorded on this exit like every other, because a promotion stage that died
+      // mid-turn has still left whatever worktrees it made.
+      const saved = await this.recordAppearedWorktrees(
+        await this.save(task, pipeline),
+        claimsBefore,
+        stage,
+        steps,
+        reply.activity?.commands ?? [],
+      );
+
+      if (attempt <= budget) {
+        this.transientRetries.set(subtask.id, attempt);
+        const waitMs = backoffMs(attempt);
+        // warn, not info: an operator watching a route stall deserves to find the
+        // reason without turning the log level up.
+        this.logger.warn(
+          `Harness [${task.name}] "${stage.name}" hit a transport failure: ${cause}. ` +
+            `Nothing about the stage is wrong — retrying in ` +
+            `${Math.round(waitMs / 1000)}s (attempt ${attempt} of ${budget}).`,
+        );
+        steps.push(
+          `"${subtask.title}" hit a transport failure; retrying in ` +
+            `${Math.round(waitMs / 1000)}s (${attempt} of ${budget}).`,
+        );
+        return { task: saved, failed: false, transient: { reason: cause, waitMs, attempt, budget } };
+      }
+
+      this.transientRetries.delete(subtask.id);
+      // Held, never failed. The stage has not been judged and there is nothing for
+      // anyone to read in its account — so what it needs is another advance once the
+      // API is back, not the discard that a failed stage's only remedy would demand.
+      const reason =
+        `the transport kept failing (${cause}) after ${budget} retr` +
+        `${budget === 1 ? "y" : "ies"}. Nothing about the stage is wrong; ` +
+        "Advance Route runs it again.";
+      this.logger.error(`Harness [${task.name}] "${stage.name}" held: ${reason}`);
+      steps.push(`"${stage.name}" is held: ${reason}`);
+      return {
+        task: await this.save(saved, recordStageBlocked(saved.pipeline!, stage.id, reason)),
+        failed: true,
+        reason,
+      };
+    }
+    // Past that point the subtask reached an outcome of its own, so the retry budget
+    // it may have spent belongs to a failure that is over.
+    this.transientRetries.delete(subtask.id);
 
     // A question takes precedence over every other reading of the reply: the work
     // was not done, so it must not be recorded as done or failed.

@@ -59,6 +59,22 @@ export class HarnessSettings {
       : fallback;
   }
 
+  /**
+   * Like `positive`, but zero is a meaning rather than a mistake.
+   *
+   * Kept separate deliberately: for a timeout zero would be nonsense and falling back
+   * is right, while for a retry budget it is the way to switch the retry off — and
+   * `positive` would silently restore the default, which is the shape of bug this
+   * codebase has been bitten by from the other direction (`subagentLimits` clamping a
+   * zero the CLI reads as unset).
+   */
+  private atLeastZero(key: string, fallback: number): number {
+    const value = this.reader.get<number>(key, fallback);
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : fallback;
+  }
+
   private list(key: string, fallback: string[]): string[] {
     const configured = this.reader.get<string[]>(key, []);
     const cleaned = (Array.isArray(configured) ? configured : [])
@@ -320,6 +336,21 @@ export class HarnessSettings {
    */
   askTimeoutMinutes(): number {
     return this.positive("askTimeoutMinutes", 120);
+  }
+
+  /**
+   * How many times a subtask whose session died on the transport is run again before
+   * a human is told.
+   *
+   * Three, because an overload clears in seconds to minutes and the backoff reaches
+   * roughly five of them — long enough to sit out the outages that were costing whole
+   * stages, short enough that a real outage is reported rather than retried silently
+   * all afternoon. Zero switches it off: a transient failure then holds the stage on
+   * its first occurrence, which is still not a *failed* stage, so nothing is
+   * discarded either way. See `domain/transientFailure.ts`.
+   */
+  transientRetryAttempts(): number {
+    return this.atLeastZero("transientRetryAttempts", 3);
   }
 
   /**

@@ -888,6 +888,64 @@ Two answers, and only the second needs no cooperation:
   outranks it entirely**, because this is a substitute for `selfReported` evidence and
   something other than the agent has certified the work.
 
+### A failure that was never the stage's
+
+`domain/transientFailure.ts` + `taskWorkspaces.transientRetryAttempts`, 24 Aug 2026.
+Every failing path recorded the same thing — `finishSubtask(..., "failed")`, which fails
+the whole stage — so an API returning 529 was indistinguishable from a stage that got
+the work wrong. `nextAction` then reports `blocked`, and **the only command that could
+move a failed stage was `revertToStage`**, which discards the stage and everything after
+it. An outage cost exactly what a wrong approach costs.
+
+Worst on a correction run, which is where it was found. `correctStage` exists because a
+cold re-run cost $12.48 and 44 minutes to change a type, and its whole mechanism is
+*keeping* what the stage already produced; a transport error was throwing that saving
+away for a reason that was never about the work.
+
+- **Reverted, never judged**, the rule a stop and a `NEEDS-INFO` already follow: nothing
+  has been decided about the subtask, so the route resumes from it. No intervention is
+  counted — `revertSubtask` records one only when given a clock, and a retry the harness
+  performs is not supervision.
+- **Held when the retries run out, never failed.** The stage has not been judged and
+  there is nothing in its account to read, so what it needs is another advance once the
+  API is back — not the discard a failed stage's only remedy would demand. Reuses
+  `recordStageBlocked`, so no new mechanism.
+- **Anything unrecognised is the stage's.** Only a reason positively identified as the
+  transport's earns a retry, which keeps every existing failure behaving exactly as it
+  did. Keyed on the shapes an API error has — a status code beside a recognised name, a
+  named network condition — never on a word like "overloaded", which a stage could
+  legitimately write about a database.
+- **A limit no backoff reaches the other side of is not transient**, checked first. A
+  plan or credit limit arrives wearing 429's clothes, and retrying would spend the
+  budget discovering that and then report the wrong reason.
+- **The budget is in memory, not on the pipeline.** It exists to stop one advance looping
+  forever on an outage; a reload or a fresh Advance Route is a human deciding to try
+  again and should get a fresh budget rather than inherit an exhausted one from a state
+  file written an hour ago. Nothing about the work is held there, so nothing is lost
+  with it. Jittered backoff, because several tasks advancing at once fail on the *same*
+  overload and would otherwise retry in lockstep, arriving together exactly when
+  capacity is thinnest.
+
+**`retryStage` had existed in `pipelineEngine` since the engine gained a `failed`
+status, and was called from nowhere** — no command, no menu entry. So every failure with
+a re-runnable cause (a timeout, an MCP server that was down and is now up) also cost a
+discard. **Retry This Stage** wires it, on `stage-failed` only. It asks for no reason,
+unlike a re-run: a re-run asks because it is discarding a run whose account of itself
+goes with it, and nothing is discarded here. One correctness rule came with it — a
+splittable stage is emptied so it goes back through `planStage`, *except* when it carries
+a correction: a stage that failed after being corrected did not fail because its split
+was wrong, and emptying it would destroy the retained rounds this whole change exists to
+protect.
+
+**And the error text was being read as a review finding** (`findingsOfSubtasks`). When a
+session dies mid-turn the CLI's own account of it is the last thing in the transcript, so
+the reply persisted for that subtask is the error — and `inlineSeverity` reads
+`API Error: 529 Overloaded` as a label introducing a critical. The report opened on
+"Findings — 1 critical", the critical being the outage, and the tree row said the same.
+Eleventh false stop of that family and the third to arrive through the *label*; closed by
+the rule the handoff already follows — a failed stage's conclusion is not a conclusion —
+applied per subtask, so the surviving rounds of a corrected stage keep their findings.
+
 ### Work that belongs to no stage
 
 Every stage is told to stay within its objective and say so rather than reach

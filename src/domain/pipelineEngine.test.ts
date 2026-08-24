@@ -350,6 +350,35 @@ describe("retryStage", () => {
     expect(nextAction(pipeline)).toMatchObject({ kind: "split" });
   });
 
+  it("keeps a corrected splittable stage's rounds instead of re-splitting it", () => {
+    // The retained rounds are the whole saving `correctStage` exists for, and a stage
+    // that failed after being corrected did not fail because its split was wrong — it
+    // failed for the reason on the row, which is usually the transport. Emptying it
+    // would throw away exactly what the retry was added to stop people throwing away.
+    let pipeline = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    // A reply on each: `correctStage` refuses a stage with nothing to correct.
+    pipeline = must(
+      finishSubtask(pipeline, "build-1", { status: "done", at: T, reply: "built one" }),
+    );
+    pipeline = must(
+      finishSubtask(pipeline, "build-2", { status: "done", at: T, reply: "built two" }),
+    );
+    const corrected = must(correctStage(pipeline, "build", { finding: "wrong cast", at: T }));
+    const fix = corrected.stages[0].subtasks.find((s) => s.correction);
+    expect(fix).toBeDefined();
+    pipeline = must(finishSubtask(corrected, fix!.id, { status: "failed", at: T }));
+
+    pipeline = must(retryStage(pipeline, "build"));
+    expect(pipeline.stages[0].status).toBe("pending");
+    expect(pipeline.stages[0].subtasks.map((s) => s.id)).toContain(fix!.id);
+    // The correction is pending again, and it still knows what it was asked to fix.
+    expect(pipeline.stages[0].subtasks.find((s) => s.id === fix!.id)).toMatchObject({
+      status: "pending",
+      correction: { finding: "wrong cast" },
+    });
+    expect(nextAction(pipeline)).toMatchObject({ kind: "run" });
+  });
+
   it("clears run state on a single-unit stage so it can run again", () => {
     let pipeline = must(skipStage(createPipeline(ROUTE), "build", T));
     pipeline = must(startSubtask(pipeline, "review-1", { sessionId: "s1", at: T }));

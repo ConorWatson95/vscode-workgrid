@@ -4,6 +4,7 @@ import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
 import {
   correctStage,
+  retryStage,
   ruleInsertionIndex,
   undoCorrection,
   undoableCorrection,
@@ -167,6 +168,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.approveStage", (arg) => approveStageCommand(ctx, arg)),
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
+    register("taskWorkspaces.retryStage", (arg) => retryStageCommand(ctx, arg)),
     register("taskWorkspaces.correctStage", (arg) => correctStageCommand(ctx, arg)),
     register("taskWorkspaces.undoCorrection", (arg) => undoCorrectionCommand(ctx, arg)),
     register("taskWorkspaces.setExperimentArm", (arg) => setExperimentArmCommand(ctx, arg)),
@@ -1079,6 +1081,68 @@ async function compareRunsCommand(ctx: CommandContext, arg: unknown): Promise<vo
  * doing again. Recreating the task would work but throws away its history and
  * everything already approved.
  */
+/**
+ * Runs a failed stage again, discarding nothing.
+ *
+ * The gap this closes had been open since the engine gained a `failed` status:
+ * `nextAction` reports `blocked` for a failed stage, and the only command that could
+ * move it was "Re-run This Stage…", which discards the stage *and everything after
+ * it*. `retryStage` had existed in the engine all along and was called from nowhere,
+ * so every failure — a transport error, a timeout, an MCP server that was down and is
+ * now up — cost what a wrong approach costs.
+ *
+ * No reason is asked for, unlike a re-run. A re-run asks because it is discarding a
+ * run whose account of itself goes with it, and the new session would otherwise start
+ * cold with the same brief. Nothing is being discarded here and no later stage is
+ * touched, so there is nothing for a note to correct — the operator wanting to say
+ * something has "Correct This Stage…" and "Re-run This Stage…" either side of it.
+ */
+async function retryStageCommand(ctx: CommandContext, arg: unknown): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await rowPipelineTask(ctx, arg, "retry this stage");
+  if (!task) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop the agent before retrying.`,
+    );
+    return;
+  }
+
+  const retried = retryStage(task.pipeline, arg.stage.id, new Date().toISOString());
+  if (!retried.ok) {
+    void vscode.window.showWarningMessage(retried.error.message);
+    return;
+  }
+
+  // Reloaded for the same reason a revert reloads: the stage that just became pending
+  // is exactly the one whose instructions should come from current config.
+  const refreshed = ctx.stageDefinitions
+    ? refreshPendingStages(retried.value, ctx.stageDefinitions())
+    : { pipeline: retried.value, changed: [] as string[] };
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: refreshed.pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] retrying "${arg.stage.name}"; nothing was discarded` +
+      (refreshed.changed.length > 0
+        ? `, and ${refreshed.changed.join(", ")} reloaded from harness.json.`
+        : "."),
+  );
+
+  const next = await vscode.window.showInformationMessage(
+    `"${arg.stage.name}" will run again. Nothing after it was touched.`,
+    "Advance Route",
+  );
+  if (next === "Advance Route") {
+    await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
 async function revertToStageCommand(
   ctx: CommandContext,
   arg: unknown,

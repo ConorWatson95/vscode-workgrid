@@ -239,6 +239,32 @@ function statedNonBlocking(text: string): boolean {
 }
 
 /** "1 critical, 2 important, 4 suggestions", or undefined when there are none. */
+/**
+ * The findings of a stage, read from the subtasks that actually reached a conclusion.
+ *
+ * A failed subtask's reply is excluded, and that is not tidiness. When a session dies
+ * mid-turn the CLI's own account of it is the last thing in the transcript, so the
+ * reply persisted for that subtask is the error — and `inlineSeverity` reads
+ * "API Error: 529 Overloaded" as a label introducing a critical. A stage that failed
+ * because the API was overloaded therefore reported one critical finding whose text
+ * was the outage, on the row and at the top of the report. The tenth false stop of
+ * this family, arriving through the label again, and the same rule closes it as
+ * closes the handoff: a failed stage's conclusion is not a conclusion.
+ *
+ * Structurally typed rather than taking a `TaskStage`, so this stays a pure reader of
+ * text and the UI keeps one place to ask the question.
+ */
+export function findingsOfSubtasks(
+  subtasks: readonly { status: string; reply?: string }[],
+): ReviewFinding[] {
+  return parseReviewFindings(
+    subtasks
+      .filter((subtask) => subtask.status !== "failed")
+      .map((subtask) => subtask.reply ?? "")
+      .join("\n\n"),
+  );
+}
+
 export function summariseFindings(findings: readonly ReviewFinding[]): string | undefined {
   if (findings.length === 0) return undefined;
   return SEVERITY_ORDER.filter((severity) =>

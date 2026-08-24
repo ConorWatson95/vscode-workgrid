@@ -68,22 +68,35 @@ function task(): TaskWorkspace {
   };
 }
 
-/** Records prompts and replies with canned text, keyed by label prefix. */
+interface CannedReply {
+  ok?: boolean;
+  text: string;
+  /**
+   * The failure reason, when the reply is a failure.
+   *
+   * Its exact words matter now that `classifyFailure` reads them: "API Error: 529
+   * Overloaded" and "error_max_turns" are the same shape of failure to this fake and
+   * opposite outcomes in the runner.
+   */
+  error?: string;
+  activity?: {
+    commands?: string[];
+    pathsWritten?: string[];
+    toolCounts?: Record<string, number>;
+  };
+}
+
+/**
+ * Records prompts and replies with canned text, keyed by label prefix.
+ *
+ * A list of replies under one key is consumed in order, the last one standing once it
+ * runs out — which is how a retry is expressed: fail on the transport, then succeed.
+ */
 function fakeSessions(
-  replies: Record<
-    string,
-    {
-      ok?: boolean;
-      text: string;
-      activity?: {
-        commands?: string[];
-        pathsWritten?: string[];
-        toolCounts?: Record<string, number>;
-      };
-    }
-  > = {},
+  replies: Record<string, CannedReply | CannedReply[]> = {},
 ): StageSessionRunner & { calls: { label: string; prompt: string }[] } {
   const calls: { label: string; prompt: string }[] = [];
+  const consumed = new Map<string, number>();
   return {
     calls,
     async run(_task, prompt, label) {
@@ -92,11 +105,19 @@ function fakeSessions(
       // `key !== undefined`, not `key ?`: "" is a legitimate catch-all prefix and is
       // falsy, so a reply registered under it was silently ignored and every caller
       // got the default "ok, done" instead of what it asked for.
-      const reply = key !== undefined ? replies[key] : undefined;
+      const canned = key !== undefined ? replies[key] : undefined;
+      let reply: CannedReply | undefined;
+      if (Array.isArray(canned)) {
+        const at = consumed.get(key!) ?? 0;
+        reply = canned[Math.min(at, canned.length - 1)];
+        consumed.set(key!, at + 1);
+      } else {
+        reply = canned;
+      }
       return {
         ok: reply?.ok ?? true,
         text: reply?.text ?? "done",
-        error: (reply?.ok ?? true) ? undefined : "agent failed",
+        error: (reply?.ok ?? true) ? undefined : (reply?.error ?? "agent failed"),
         // Commands are what a worktree claim is attributed by, so a test about claims has
         // to say what the stage ran.
         activity: reply?.activity,
@@ -134,6 +155,8 @@ function makeRunner(
     staleAfterMs?: number;
     /** What the declared-path discard reports having done, if the project declared any. */
     discard?: DiscardSelection;
+    /** How many times a transport failure is re-run. Defaults to the shipped 3. */
+    transientAttempts?: number;
   } = {},
 ) {
   const repo = options.repo ?? new InMemoryTaskRepository();
@@ -190,6 +213,12 @@ function makeRunner(
             events.push("discard");
             return options.discard;
           },
+      () => options.transientAttempts ?? 3,
+      // Recorded rather than waited out: the backoff is measured in minutes and the
+      // test suite is measured in milliseconds.
+      async (ms) => {
+        events.push(`wait:${ms > 0}`);
+      },
     ),
     verified,
     events,
@@ -2550,6 +2579,101 @@ describe("a stage that promotes by pull request", () => {
  * so no advance was there to reclaim it, and Stop wrote nothing at all. One sat
  * `active` for two hours after its session had finished.
  */
+/**
+ * A session that died on somebody else's capacity.
+ *
+ * The failure this exists for, verbatim: a correction run ended on a 529, which was
+ * recorded as the stage failing — and a failed stage's only remedy is `revertToStage`,
+ * which discards the stage and everything after it. So an outage cost exactly what a
+ * wrong approach costs, on the one kind of run whose entire purpose is keeping what
+ * the stage already produced.
+ */
+describe("a transport failure", () => {
+  const OVERLOADED =
+    "API Error: 529 Overloaded. This is a server-side issue, usually temporary — " +
+    "try again in a moment.";
+
+  it("runs the subtask again and carries on, recording nothing against the stage", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": [{ ok: false, text: "", error: OVERLOADED }, { text: "done" }],
+    });
+    const { repo, runner, events } = makeRunner(sessions);
+    await repo.save(task());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    // The same subtask, twice, with a wait in between — and the route got all the
+    // way to its gate, which is the whole point: nothing was discarded.
+    const attempts = sessions.calls.filter((c) => c.label === "build:build-1");
+    expect(attempts).toHaveLength(2);
+    expect(events).toContain("wait:true");
+    expect(report.outcome).toMatchObject({ kind: "awaitingApproval" });
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.status).toBe("passed");
+    // Nothing about the failure is on the record. It was not the stage's.
+    expect(build?.subtasks.some((sub) => sub.failureReason)).toBe(false);
+  });
+
+  it("holds the stage rather than failing it once the retries run out", async () => {
+    // Held, not failed, is the load-bearing half: a failed stage cannot be moved
+    // except by the command that discards it, which is what made an outage expensive.
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": { ok: false, text: "", error: OVERLOADED },
+    });
+    const { repo, runner } = makeRunner(sessions, { transientAttempts: 1 });
+    await repo.save(task());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({ kind: "blocked", stageId: "build" });
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.status).not.toBe("failed");
+    expect(build?.blocked).toContain("transport");
+    // Pending, so the next advance simply runs it again once the API is back.
+    expect(build?.subtasks.find((sub) => sub.id === "build-1")?.status).toBe("pending");
+  });
+
+  it("still fails a stage on a reason that is the stage's own", async () => {
+    // The guard on the whole feature. Retrying a failure the stage caused reaches the
+    // same wall, and hiding it as an outage is worse than the cost it saves.
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": { ok: false, text: "", error: "error_max_turns" },
+    });
+    const { repo, runner, events } = makeRunner(sessions);
+    await repo.save(task());
+
+    const report = await runner.advance((await repo.get("t1"))!);
+
+    expect(report.outcome).toMatchObject({ kind: "blocked", stageId: "build" });
+    expect(sessions.calls.filter((c) => c.label === "build:build-1")).toHaveLength(1);
+    expect(events).not.toContain("wait:true");
+    // The subtask, not the stage: the engine fails a stage only once every subtask has
+    // resolved, and the driver stops at the first failure rather than spending the rest.
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    const failed = build?.subtasks.find((sub) => sub.id === "build-1");
+    expect(failed?.status).toBe("failed");
+    expect(failed?.failureReason).toContain("error_max_turns");
+  });
+
+  it("retries nothing when the budget is zero, and still does not fail the stage", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": { ok: false, text: "", error: OVERLOADED },
+    });
+    const { repo, runner } = makeRunner(sessions, { transientAttempts: 0 });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    expect(sessions.calls.filter((c) => c.label === "build:build-1")).toHaveLength(1);
+    const build = (await repo.get("t1"))?.pipeline?.stages.find((s) => s.id === "build");
+    expect(build?.status).not.toBe("failed");
+  });
+});
+
 describe("reclaimStale", () => {
   /** A task wedged mid-subtask, as a dead host leaves it in the state file. */
   function wedged(startedAt: string): TaskWorkspace {

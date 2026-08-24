@@ -957,6 +957,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // the repository root, so a branch cannot add to the list of files deleted on its
     // own way past a gate.
     (worktreePath, signal) => worktreeDiscards.discard(worktreePath, signal),
+    // How many times a subtask whose session died on the transport is simply run
+    // again. Read per failure, so an operator who has had enough of an outage can
+    // set it to 0 without a restart and get the old behaviour: held on the first
+    // occurrence rather than retried.
+    () => configuration.transientRetryAttempts(repositoryUri),
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

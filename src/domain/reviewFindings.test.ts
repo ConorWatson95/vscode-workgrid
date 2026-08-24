@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  findingsOfSubtasks,
   formatFindings,
   hasBlockingFindings,
   parseReviewFindings,
@@ -556,5 +557,34 @@ describe("a marker whose severity word is two words", () => {
     expect(parseReviewFindings("Fixture setup notes — the harness seeds two rows")).toEqual(
       [],
     );
+  });
+});
+
+describe("findingsOfSubtasks", () => {
+  const OVERLOADED =
+    "API Error: 529 Overloaded. This is a server-side issue, usually temporary — " +
+    "try again in a moment. If it persists, check https://status.claude.com.";
+
+  it("does not read a failed session's own error as a critical finding", () => {
+    // What the report actually showed: "Findings — 1 critical", the critical being the
+    // outage. `inlineSeverity` reads "API Error" as a label and the sentence after it
+    // as the finding it introduces — so a stage that never ran reported a blocker.
+    expect(parseReviewFindings(OVERLOADED)).toHaveLength(1);
+    expect(
+      findingsOfSubtasks([{ status: "failed", reply: OVERLOADED }]),
+    ).toEqual([]);
+  });
+
+  it("keeps the findings of the rounds that did reach a conclusion", () => {
+    // A corrected stage keeps every round, which is the saving `correctStage` exists
+    // for — so one failed round must not take the others' findings with it.
+    expect(
+      findingsOfSubtasks([
+        { status: "done", reply: "- Critical: the join double-counts purchases" },
+        { status: "failed", reply: OVERLOADED },
+      ]),
+    ).toEqual([
+      { severity: "critical", text: "the join double-counts purchases" },
+    ]);
   });
 });

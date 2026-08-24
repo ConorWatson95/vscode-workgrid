@@ -2162,7 +2162,14 @@ export function retryStage(
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
 
-  const subtasks = stage.splittable
+  // A splittable stage is emptied so it goes back through `planStage` — except when
+  // it carries a correction. The retained rounds are the whole saving `correctStage`
+  // exists for, and a stage that failed *after* being corrected did not fail because
+  // its split was wrong: it failed for the reason on the row, which is usually the
+  // transport. Emptying it would throw away exactly the work this command was added
+  // to stop people throwing away.
+  const corrected = stage.subtasks.some((s) => s.correction);
+  const subtasks = stage.splittable && !corrected
     ? []
     : stage.subtasks.map((s) => ({
         ...s,

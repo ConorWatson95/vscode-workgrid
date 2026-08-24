@@ -1,7 +1,7 @@
 import { Subtask, SubtaskActivity, TaskStage, TaskPipeline } from "../domain/taskPipeline";
 import {
+  findingsOfSubtasks,
   formatFindings,
-  parseReviewFindings,
   summariseFindings,
 } from "../domain/reviewFindings";
 import { redactSecrets } from "../domain/secretRedaction";
@@ -384,9 +384,7 @@ export function formatStageReport(
   // is the answer to "I always find myself scrolling forever": the reply is what the
   // report is opened for, and it used to sit at the very bottom, under the tool
   // counts, the file lists, the commands and their output.
-  const findings = parseReviewFindings(
-    stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
-  );
+  const findings = findingsOfSubtasks(stage.subtasks);
   if (findings.length > 0) {
     lines.push(
       "",
