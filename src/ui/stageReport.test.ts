@@ -614,3 +614,56 @@ describe("a stage that was corrected", () => {
     expect(report).toContain("## What the agent reported");
   });
 });
+
+describe("a stage repaired many times, held at a gate", () => {
+  // Measured on a real gate: ten rounds rendered 60,159 characters and the report was
+  // truncated — which loses the end of the standing round, the one part a reader is
+  // there for. Folding the replies alone was not enough, because command output is
+  // capped per subtask so ten subtasks carry ten times the cap.
+  const round = (n: number, latest: boolean) => ({
+    id: `review-${n}`,
+    title: `Round ${n}`,
+    prompt: "p",
+    status: "done" as const,
+    reply: `Findings, revision ${n}. ` + "x".repeat(4000),
+    activity: { commands: ["git diff " + "y".repeat(200)], output: "z".repeat(18000) },
+    ...(n > 1
+      ? {
+          correction: {
+            finding: "upstream moved",
+            at: "t1",
+            upstream: { stageId: "app", stageName: "Implement the application", findings: ["f"] },
+          },
+        }
+      : {}),
+    ...(latest ? {} : {}),
+  });
+
+  const stage = {
+    id: "review", name: "Code review", kind: "codeReview", status: "awaiting-approval",
+    intent: "review it", splittable: false, requiresApproval: false,
+    subtasks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => round(n, n === 10)),
+  } as never;
+
+  const task = { id: "t", name: "T", branch: "b", baseBranch: "main", worktreePath: "/w", status: "ready" } as never;
+
+  it("fits without truncation", () => {
+    const md = formatStageReport(task, stage);
+    expect(md.length).toBeLessThan(MAX_REPORT_CHARS);
+    expect(md).not.toContain("This report was truncated");
+  });
+
+  it("keeps the standing round whole, body and mechanics", () => {
+    const md = formatStageReport(task, stage);
+    expect(md).toContain("Findings, revision 10");
+    expect(md).toContain("the version that stands");
+    expect(md).toContain("tools, commands and output");
+  });
+
+  it("says a folded round is superseded rather than opening on nothing", () => {
+    const md = formatStageReport(task, stage);
+    expect(md).toContain("<details><summary>");
+    expect(md).toContain("Superseded by a later round");
+    expect(md).not.toContain("Findings, revision 5");
+  });
+});

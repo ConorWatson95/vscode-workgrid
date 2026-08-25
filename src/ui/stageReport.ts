@@ -282,6 +282,20 @@ export function formatCorrectionCostLine(pipeline: TaskPipeline): string | undef
  */
 export const MAX_REPORT_CHARS = 60000;
 
+/**
+ * What stands in for a superseded round's body.
+ *
+ * Said rather than left blank, for the reason truncated output and a discarded file are
+ * both announced: a `<details>` that opens on nothing reads as the record having been
+ * lost.
+ */
+function supersededNote(): string {
+  return (
+    "_Superseded by a later round. Its findings were carried forward into the version " +
+    "that stands; the full text is kept in the task state file._"
+  );
+}
+
 /** Cuts an over-long report at a line boundary and says so. */
 function capReport(markdown: string): string {
   if (markdown.length <= MAX_REPORT_CHARS) return markdown;
@@ -400,6 +414,7 @@ export function formatStageReport(
   // a settled stage — the finding is in the summary line, so the reader can tell what
   // is inside without opening it, which is what makes folding it honest.
   const rounds = stageRounds(stage);
+  const runRounds = rounds.filter((round) => round.kind === "run").length;
   // `awaiting-approval` folds too, and it is the status that matters most. The rule was
   // "settled only", on the reasoning that somebody reading a held stage is watching a
   // repair rather than reading a conclusion. That is true of a stage still working and
@@ -417,10 +432,21 @@ export function formatStageReport(
   for (const round of rounds) {
     const heading = roundHeading(round, rounds.length > 1);
     const body = formatSubtaskReply(round.subtask, heading !== undefined);
-    const fold = foldRepairs && round.kind !== "run" && !round.latest;
+    // The base run folds too once a repair has superseded it, but only when there is
+    // exactly one — a split stage's parallel units are all `run` rounds and each holds a
+    // different part of the answer, which is what the kind test was protecting.
+    const fold =
+      foldRepairs && !round.latest && (round.kind !== "run" || runRounds === 1);
     lines.push("", "---", "");
     if (heading && fold) {
-      lines.push(`<details><summary>${heading}</summary>`, "", ...body, "", "</details>");
+      // The heading only. Folding kept every superseded body in the document, so a
+      // stage repaired nine times still rendered around 30,000 characters of
+      // near-identical review text — and this report was truncated at 60k, which is the
+      // one failure mode that loses the *end* of the standing round. A superseded round
+      // is not evidence a reader is looking for; what they need is that it happened and
+      // what it was asked to fix, which the heading carries. The full text stays in the
+      // state file, and the note says so rather than implying it is gone.
+      lines.push(`<details><summary>${heading}</summary>`, "", supersededNote(), "", "</details>");
     } else {
       if (heading) {
         lines.push(`## ${heading}${round.latest ? " · the version that stands" : ""}`, "");
@@ -502,7 +528,22 @@ export function formatStageReport(
   // what you want while a stage runs or when one has gone wrong, and noise when you
   // are reading a finished stage's conclusion.
   const settled = stage.status === "passed" || stage.status === "skipped";
+  // A superseded round's mechanics go entirely, on the same reasoning as its body and
+  // for a sharper reason: this is where the size is. Command output is capped per
+  // *subtask*, so a stage with ten of them carries ten times the cap, and folding the
+  // replies alone still left this report over 60k — truncated, which loses the end of
+  // the standing round, the one part a reader is there for. What the superseded round
+  // ran is in the state file; that it ran and what it was asked to fix is in its
+  // heading above.
+  const superseded = new Set(
+    foldRepairs
+      ? rounds
+          .filter((round) => !round.latest && (round.kind !== "run" || runRounds === 1))
+          .map((round) => round.subtask.id)
+      : [],
+  );
   for (const subtask of stage.subtasks) {
+    if (superseded.has(subtask.id)) continue;
     const detail = formatSubtaskDetail(subtask);
     if (detail.length === 0) continue;
     const heading = `What ${stage.subtasks.length > 1 ? `"${subtask.title}"` : "it"} did — tools, commands and output`;
