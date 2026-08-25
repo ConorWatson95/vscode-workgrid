@@ -1,5 +1,5 @@
 import { outstandingDeferrals } from "./pipelineEngine";
-import { parseReviewFindings, summariseFindings } from "./reviewFindings";
+import { ReviewFinding, findingsOfSubtasks, summariseFindings } from "./reviewFindings";
 import { sendBackTargets } from "./stageRefresh";
 import { StageEvidence, stageEvidence } from "./stageEvidence";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
@@ -84,13 +84,49 @@ export function approvalAdvice(
   };
 }
 
+/**
+ * The send-back target the blocking findings actually name, if they name one.
+ *
+ * Reviews here say who owns a finding — "Owned by \"Implement the application\"" — and
+ * the suggestion ignored it, offering `sendBackTo`'s first entry instead. On a real gate
+ * that meant "send the findings to Navigation and permissions" for a critical about a
+ * grid callback in the controller: the operator either notices and opens the picker, or
+ * accepts and pays a stage to be told the finding is not its work.
+ *
+ * Only the blocking findings, and only their own text. A suggestion naming another stage
+ * must not redirect a critical, and matching the whole reply would catch every stage a
+ * review merely mentions — one here says "stages 5-9 own nav/permissions, and I did not
+ * re-audit those", naming three stages it is sending nothing to.
+ *
+ * Falls back to the positional rule when the findings name nothing, or name more than
+ * one stage. A wrong confident target is worse than the old guess, because the operator
+ * reads the sentence and trusts it.
+ */
+function namedByFindings(
+  findings: readonly ReviewFinding[],
+  targets: readonly TaskStage[],
+): TaskStage | undefined {
+  const text = findings
+    .filter((f) => f.severity === "critical" || f.severity === "important")
+    .map((f) => f.text.toLowerCase())
+    .join(" ");
+  if (!text) return undefined;
+  const named = targets.filter((t) => text.includes(`"${t.name.toLowerCase()}"`));
+  return named.length === 1 ? named[0] : undefined;
+}
+
 function verdictAdvice(
   pipeline: TaskPipeline,
   stage: TaskStage,
 ): Omit<ApprovalAdvice, "evidence" | "declined"> {
-  const findings = parseReviewFindings(
-    stage.subtasks.map((subtask) => subtask.reply ?? "").join("\n\n"),
-  );
+  // Through `findingsOfSubtasks`, which reads the round that stands. Pooling every
+  // round inline here — which this did — is the same bug the findings summary had, at
+  // a second call site, and the two then contradicted each other on one screen: the
+  // report said "1 critical, 4 important, 4 suggestions" while the approval box above
+  // it said "10 critical, 24 important, 32 suggestions" about the same ten rounds. The
+  // gate is where a person decides whether to send work back, so the inflated number
+  // was the one being acted on.
+  const findings = findingsOfSubtasks(stage.subtasks);
   const summary = summariseFindings(findings);
   const blocking = stage.verdict === "block";
   const outstanding = outstandingItems(pipeline, stage);
@@ -116,7 +152,7 @@ function verdictAdvice(
       ? `This review found ${summary}.`
       : "This review said the work should not proceed.";
     if (targets.length > 0) {
-      const target = targets[0];
+      const target = namedByFindings(findings, targets) ?? targets[0];
       return {
         headline,
         // Named rather than "an earlier stage": the whole point is that the reader
@@ -173,7 +209,7 @@ function verdictAdvice(
   };
 }
 
-function hasBlocking(findings: ReturnType<typeof parseReviewFindings>): boolean {
+function hasBlocking(findings: readonly ReviewFinding[]): boolean {
   return findings.some(
     (finding) => finding.severity === "critical" || finding.severity === "important",
   );

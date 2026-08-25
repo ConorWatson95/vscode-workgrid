@@ -167,3 +167,66 @@ describe("approvalAdvice", () => {
     expect(approvalAdvice(pipe([implement, review]), review).action).toBe("approve");
   });
 });
+
+const NL = String.fromCharCode(10);
+const CRITICAL_OWNED =
+  '- 8. the grid has no CallbackRouteValues. Owned by "Implement the application".';
+
+describe("a review corrected and amended many times", () => {
+  // Measured on a real gate: the report said "1 critical, 4 important, 4 suggestions"
+  // and the approval box above it said "10 critical, 24 important, 32 suggestions" —
+  // about the same ten rounds, on one screen. The gate is where the decision is made,
+  // so the inflated number was the one being acted on.
+  const round = (reply: string, amend = true) => ({
+    id: amend ? `r-amend-${reply.length}` : "r-1",
+    title: "Review",
+    prompt: "p",
+    status: "done" as const,
+    reply,
+    ...(amend
+      ? { correction: { finding: "upstream moved", at: "t1", upstream: { stageId: "app", stageName: "Implement the application", findings: ["x"] } } }
+      : {}),
+  });
+
+  const pipeline = (): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        { id: "app", name: "Implement the application", kind: "implementation", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "nav", name: "Navigation and permissions", kind: "implementation", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        {
+          id: "review", name: "Code review", kind: "codeReview", status: "awaiting-approval",
+          intent: "", splittable: false, requiresApproval: false,
+          sendBackTo: ["nav", "app"],
+          subtasks: [
+            round(["**Critical**", "- 1. the dropdown is ignored"].join(NL), false),
+            round(["**Critical**", "- 1. the dropdown is ignored. Unchanged."].join(NL)),
+            round(["**Critical**", CRITICAL_OWNED].join(NL)),
+          ],
+        },
+      ],
+    }) as TaskPipeline;
+
+  it("counts the round that stands, not every round", () => {
+    const p = pipeline();
+    const advice = approvalAdvice(p, p.stages[2]);
+    expect(advice.findings).toBe("1 critical");
+  });
+
+  it("suggests the stage the blocking finding names, not the first allowed one", () => {
+    const p = pipeline();
+    const advice = approvalAdvice(p, p.stages[2]);
+    expect(advice.sendBackTo?.id).toBe("app");
+  });
+
+  it("falls back to the positional target when the findings name nobody", () => {
+    // "nav" is what the positional rule picks here, and it is what a real gate
+    // suggested for a critical about a controller: "Send the findings to
+    // Navigation and permissions". Kept as the fallback deliberately — a wrong
+    // confident target is worse than a guess the operator already distrusts.
+    const p = pipeline();
+    p.stages[2].subtasks[2].reply = ["**Critical**", "- 8. the grid has no CallbackRouteValues."].join(NL);
+    const advice = approvalAdvice(p, p.stages[2]);
+    expect(advice.sendBackTo?.id).toBe("nav");
+  });
+});

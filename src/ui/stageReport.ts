@@ -400,8 +400,19 @@ export function formatStageReport(
   // a settled stage — the finding is in the summary line, so the reader can tell what
   // is inside without opening it, which is what makes folding it honest.
   const rounds = stageRounds(stage);
+  // `awaiting-approval` folds too, and it is the status that matters most. The rule was
+  // "settled only", on the reasoning that somebody reading a held stage is watching a
+  // repair rather than reading a conclusion. That is true of a stage still working and
+  // false of one at a gate: a stage awaiting approval has finished, and the reader is
+  // there to decide whether to accept it. Held open, a review corrected and amended nine
+  // times rendered ten full accounts of itself — around 30,000 characters of
+  // near-identical text — at the one moment a person has to find the finding that is
+  // still outstanding. `active`, `failed` and `pending` still show everything, which is
+  // the case the original rule was written for.
   const foldRepairs =
-    (stage.status === "passed" || stage.status === "skipped") &&
+    (stage.status === "passed" ||
+      stage.status === "skipped" ||
+      stage.status === "awaiting-approval") &&
     rounds.filter((round) => round.kind !== "run").length > 1;
   for (const round of rounds) {
     const heading = roundHeading(round, rounds.length > 1);
