@@ -643,6 +643,40 @@ export interface TaskPipeline {
    * route that churns everywhere, and those have opposite fixes.
    */
   discarded?: DiscardedRun[];
+  /**
+   * Why the last advance stopped, when it stopped for a reason no stage records.
+   *
+   * The tree groups a task by reading its stages, and a route that has simply *stopped*
+   * looks identical to one somebody put down: nothing active, nothing failed, no gate,
+   * a pending stage next — which `groupForTask` files as `parked`. That word describes a
+   * decision, and the state it was describing was a 40-step limit being hit on
+   * `Purchases vs Sales Phase 3`. The only account of it was a toast — *"hit the 40-step
+   * limit without finishing"* — which is gone the moment it is dismissed or missed, and
+   * an operator running five tasks reads the row afterwards, not the notification.
+   *
+   * So the reason is persisted, and it is the fact the notification was carrying: the
+   * route needs another advance, and nothing about the stages says so. Recorded only for
+   * the outcomes that leave no other trace — a failed stage, a question, a held call and
+   * a gate all record themselves and must not be duplicated here.
+   *
+   * Cleared when an advance starts, so it is never a stale explanation of a run that has
+   * since moved. That is also what keeps it honest as a *last* advance rather than an
+   * ever-growing history: what a reader needs is why it is stopped now.
+   */
+  lastAdvance?: AdvanceStop;
+}
+
+/** Why an advance ended without finishing, when nothing else records it. */
+export interface AdvanceStop {
+  /**
+   * `exhausted` — the step limit; the route is fine and needs another advance.
+   * `cancelled` — somebody stopped it, or the extension host went away underneath it,
+   * which is indistinguishable from the outside and has the same remedy.
+   */
+  reason: "exhausted" | "cancelled";
+  at: string;
+  /** Steps taken, for `exhausted`, so the row can say how far it got. */
+  steps?: number;
 }
 
 /** One stage's runs, discarded by a re-open, and what they had cost. */

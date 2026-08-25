@@ -317,7 +317,21 @@ export function activeStageLabel(pipeline: TaskPipeline | undefined): string | u
   const current =
     stages.find((stage) => stage.status === "active") ??
     stages.find((stage) => stage.status === "awaiting-approval");
-  if (!current) return undefined;
+
+  // Nothing is in play, and the last advance stopped for a reason no stage carries. The
+  // row is the only place this can be said now that the notification has gone: an
+  // operator with five tasks reads the list, not a toast they may never have seen. Named
+  // after the stage it stopped in front of, because "advance again" without saying where
+  // is a row that tells you to act and not what you would be resuming.
+  if (!current) {
+    const stopped = pipeline?.lastAdvance;
+    if (!stopped) return undefined;
+    const next = stages.find((stage) => stage.status === "pending");
+    const where = next ? ` before "${next.name}"` : "";
+    return stopped.reason === "exhausted"
+      ? `stopped${where} after ${stopped.steps ?? 0} steps — advance again`
+      : `stopped${where} — advance again`;
+  }
 
   const block = stageBlock(pipeline, current);
   if (block) return `${current.name} — ${blockedStageVisual(block).description}`;

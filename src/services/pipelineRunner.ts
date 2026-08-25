@@ -237,10 +237,30 @@ export interface RunReport {
 }
 
 /**
- * Upper bound on transitions per invocation. Guards against a rule set or split
- * that somehow cycles; a real route is well under ten steps.
+ * Upper bound on transitions per invocation. Guards against a rule set or split that
+ * somehow cycles.
+ *
+ * Proportional to the pipeline, because a flat bound stopped being a runaway guard and
+ * became a wall. The old comment — "a real route is well under ten steps" — was written
+ * against routes far shorter than the 27-stage ones now running, and on
+ * `Purchases vs Sales Phase 3` reaching the first gate took 77 sessions against a limit
+ * of 40: the advance ended in the middle, having done nothing wrong, and reported a
+ * cycle it had not found.
+ *
+ * Every subtask is one step, so the work already in the pipeline is the honest basis,
+ * plus headroom for the amendments and splits an advance creates as it goes. The flat 40
+ * stays as a floor so a small route behaves exactly as before. It is still a *guard* and
+ * not a budget: a genuine cycle re-runs one stage forever and exceeds any proportional
+ * bound just as fast, while a long legitimate route now finishes rather than stopping
+ * where nobody was watching.
  */
-const MAX_STEPS = 40;
+function maxSteps(pipeline: TaskPipeline | undefined): number {
+  const subtasks = (pipeline?.stages ?? []).reduce(
+    (total, stage) => total + stage.subtasks.length,
+    0,
+  );
+  return Math.max(40, subtasks * 2 + (pipeline?.stages.length ?? 0));
+}
 
 export class PipelineRunner {
   constructor(
@@ -771,8 +791,16 @@ export class PipelineRunner {
     this.denied = [];
     let current = task;
 
-    for (let step = 0; step < MAX_STEPS; step++) {
-      if (signal?.aborted) return { outcome: { kind: "cancelled" }, steps };
+    // Cleared before anything runs, so a recorded stop is never a stale explanation of
+    // a run that has since moved on. Written back only if it was set: an advance must
+    // not cost a state-file write merely by starting.
+    if (current.pipeline?.lastAdvance) {
+      current = await this.save(current, { ...current.pipeline, lastAdvance: undefined });
+    }
+
+    const limit = maxSteps(current.pipeline);
+    for (let step = 0; step < limit; step++) {
+      if (signal?.aborted) return { outcome: { kind: "cancelled" }, steps: await this.recordStop(current, "cancelled", step, steps) };
 
       // One git call per iteration, shared by the two things that depend on it.
       const moved = await this.branchState(current);
@@ -1018,7 +1046,47 @@ export class PipelineRunner {
       }
     }
 
-    return { outcome: { kind: "exhausted", steps: MAX_STEPS }, steps };
+    return {
+      outcome: { kind: "exhausted", steps: limit },
+      steps: await this.recordStop(current, "exhausted", limit, steps),
+    };
+  }
+
+  /**
+   * Persists why an advance stopped, and says so in the run summary.
+   *
+   * Only for the two outcomes that leave no other trace. A failed stage, a question, a
+   * held call and a gate all record themselves on the pipeline, and duplicating them
+   * here would give the tree two sources for one fact — the disagreement `stageHistory`
+   * and the findings summary already demonstrated.
+   *
+   * A save failure is swallowed on purpose: this is an explanation, and losing the
+   * advance's own report in order to complain about not being able to file one would
+   * trade a missing note for a missing outcome.
+   */
+  private async recordStop(
+    task: TaskWorkspace,
+    reason: "exhausted" | "cancelled",
+    steps: number,
+    summary: string[],
+  ): Promise<string[]> {
+    if (!task.pipeline) return summary;
+    summary.push(
+      reason === "exhausted"
+        ? `Stopped after ${steps} steps without reaching a gate. Advance again to continue.`
+        : "Stopped before finishing. Advance again to continue.",
+    );
+    try {
+      await this.save(task, {
+        ...task.pipeline,
+        lastAdvance: { reason, at: new Date().toISOString(), steps },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Harness [${task.name}] could not record why the advance stopped: ${String(error)}`,
+      );
+    }
+    return summary;
   }
 
   /** Runs the planning agent for a splittable stage and records the subtasks. */

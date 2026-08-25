@@ -7,6 +7,7 @@ import {
   GROUP_ORDER,
 } from "./taskGrouping";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import { activeStageLabel } from "./stagePresentation";
 
 const stage = (over: Partial<TaskStage> = {}): TaskStage =>
   ({
@@ -390,5 +391,51 @@ describe("a gate the route has not reached", () => {
       } as Partial<TaskStage>),
     ]);
     expect(of(broken)).toBe("needs-you");
+  });
+});
+
+describe("a route that stopped rather than being parked", () => {
+  // `Purchases vs Sales Phase 3` hit the step limit and sat under "Parked" — a word for
+  // a decision — with its only account of itself a toast already dismissed.
+  const stopped = (extra: Record<string, unknown> = {}) => ({
+    status: "ready",
+    heldCalls: 0,
+    pipeline: {
+      routeId: "r",
+      stages: [
+        { id: "a", name: "A", kind: "implementation", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "b", name: "B", kind: "codeReview", status: "pending", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+      ],
+      lastAdvance: { reason: "exhausted", at: "t1", steps: 40 },
+      ...extra,
+    },
+  }) as never;
+
+  it("is yours, not parked", () => {
+    expect(groupForTask(stopped())).toBe("needs-you");
+  });
+
+  it("says so on the row, naming what it stopped in front of", () => {
+    const label = activeStageLabel((stopped() as { pipeline: TaskPipeline }).pipeline);
+    expect(label).toContain("stopped");
+    expect(label).toContain("B");
+    expect(label).toContain("advance again");
+  });
+
+  it("is parked again once the reason is cleared", () => {
+    const clean = stopped() as { pipeline: { lastAdvance?: unknown } };
+    clean.pipeline.lastAdvance = undefined;
+    expect(groupForTask(clean as never)).toBe("parked");
+  });
+
+  it("never outranks something that describes the task better", () => {
+    // A failed stage, a gate or a question is a truer account than "it stopped".
+    const failed = stopped() as { pipeline: { stages: { status: string }[] } };
+    failed.pipeline.stages[1].status = "failed";
+    expect(groupForTask(failed as never)).toBe("needs-you");
+
+    const working = stopped() as { pipeline: { stages: { status: string }[] } };
+    working.pipeline.stages[1].status = "active";
+    expect(groupForTask(working as never)).toBe("working");
   });
 });

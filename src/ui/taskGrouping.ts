@@ -257,6 +257,16 @@ export function groupForTask(input: GroupInput): TaskGroupId {
 
   if (stages.some((stage) => stage.status === "active")) return "working";
   if (!current) return "done";
+
+  // A route that *stopped* is not a route somebody put down, and until this was recorded
+  // the two were indistinguishable: nothing active, nothing failed, no gate, a pending
+  // stage next. `Purchases vs Sales Phase 3` hit the 40-step limit and sat in `parked`,
+  // a word that describes a decision, while its only account of itself was a toast that
+  // had already been dismissed. Checked last, deliberately — anything else claiming the
+  // task is a better description of it, and a stop reason is only ever the explanation
+  // for a task that would otherwise look idle.
+  if (input.pipeline?.lastAdvance) return "needs-you";
+
   return "parked";
 }
 
