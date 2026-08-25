@@ -613,6 +613,19 @@ export function isCorrectable(stage: TaskStage): boolean {
 }
 
 /**
+ * The lowest amendment number this stage is not already using.
+ *
+ * Keyed on the ids actually present, which is the only thing that makes the result
+ * unique — a count says how many there are, not which numbers they took.
+ */
+function freeAmendmentOrdinal(stage: TaskStage): number {
+  const taken = new Set(stage.subtasks.map((sub) => sub.id));
+  let ordinal = 1;
+  while (taken.has(`${stage.id}-amend-${ordinal}`)) ordinal += 1;
+  return ordinal;
+}
+
+/**
  * Re-opens every stage after `index`, and books what that threw away.
  *
  * Shared by `correctStage` and `undoCorrection` because the rule is one rule, and
@@ -743,9 +756,21 @@ function reopenAfter(
       const amend = (existing: Subtask | undefined): Subtask => {
         const earlier = existing?.correction?.upstream?.findings ?? [];
         const findings = [...earlier, upstream!.finding];
-        const ordinal = existing
-          ? undefined
-          : s.subtasks.filter((sub) => sub.correction?.upstream).length + 1;
+        // Counting amendments was not enough to number the next one, because
+        // `withdrawAmendments` *removes* them: withdraw the second and third of four and
+        // the count drops to two, so the next amendment is numbered three — beside a
+        // surviving four — and the one after that collides with it outright. Two
+        // subtasks then share an id, and `finishSubtask` matches by id, so it settles
+        // the first and leaves the pending one pending forever. The stage never
+        // advances, and the advance loops on it until it hits the step limit, which is
+        // exactly how `Purchases vs Sales Phase 3` came to be stuck across six stages at
+        // once with an unexplained exhaustion behind it.
+        //
+        // So the number is chosen against what exists rather than against how many
+        // exist. Kept as the smallest free ordinal rather than max-plus-one, since the
+        // number is shown to a reader as "Amend for X (3)" and skipping numbers because
+        // a withdrawn round once used them tells them nothing true.
+        const ordinal = existing ? undefined : freeAmendmentOrdinal(s);
         return {
           ...existing,
           id: existing?.id ?? `${s.id}-amend-${ordinal}`,

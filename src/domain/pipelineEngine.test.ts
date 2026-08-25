@@ -2092,6 +2092,106 @@ describe("assessing work that already exists", () => {
   });
 });
 
+describe("duplicate subtask ids in a stored record", () => {
+  const stored = () => ({
+    routeId: "r",
+    stages: [
+      {
+        id: "commit", name: "Commit", kind: "deployment", status: "pending",
+        intent: "", splittable: false, requiresApproval: false,
+        subtasks: [
+          { id: "commit-1", title: "Commit", prompt: "p", status: "done", reply: "ran" },
+          { id: "commit-amend-1", title: "A1", prompt: "p", status: "done" },
+          { id: "commit-amend-4", title: "A4", prompt: "p", status: "done", reply: "ran" },
+          { id: "commit-amend-3", title: "A3", prompt: "p", status: "failed" },
+          { id: "commit-amend-4", title: "A4 again", prompt: "p", status: "pending" },
+        ],
+      },
+    ],
+  });
+
+  it("renames the later one so the stage can advance", () => {
+    // `finishSubtask` matches by id: with two the same it settles the first and the
+    // pending one stays pending forever, which is how six stages of one task stuck.
+    const p = normalizePipeline(stored())!;
+    const ids = p.stages[0].subtasks.map((s) => s.id);
+    expect(new Set(ids).size).toBe(5);
+    // The round that ran keeps its id; the pending duplicate is the one moved.
+    expect(p.stages[0].subtasks[2].id).toBe("commit-amend-4");
+    expect(p.stages[0].subtasks[2].reply).toBe("ran");
+    expect(p.stages[0].subtasks[4].id).toBe("commit-amend-2");
+    expect(p.stages[0].subtasks[4].status).toBe("pending");
+  });
+
+  it("leaves a record with no duplicates exactly as it was", () => {
+    const clean = stored();
+    clean.stages[0].subtasks.pop();
+    const p = normalizePipeline(clean)!;
+    expect(p.stages[0].subtasks.map((s) => s.id)).toEqual([
+      "commit-1", "commit-amend-1", "commit-amend-4", "commit-amend-3",
+    ]);
+  });
+});
+
+describe("amendment numbering after a withdrawal", () => {
+  // Measured on `Purchases vs Sales Phase 3`: six stages each held two subtasks with
+  // the same id. `finishSubtask` matches by id, so it settled the first and left the
+  // pending one pending; the stage never advanced and the advance looped on it to the
+  // step limit.
+  const stage = (ids: string[]): TaskStage =>
+    ({
+      id: "commit", name: "Commit", kind: "deployment", status: "passed",
+      intent: "", splittable: false, requiresApproval: false,
+      subtasks: ids.map((id) => ({
+        id, title: id, prompt: "p", status: "done" as const, reply: "did it",
+        ...(id.includes("amend")
+          ? { correction: { finding: "f", at: "t0", upstream: { stageId: "plan", stageName: "Plan", findings: ["f"] } } }
+          : {}),
+      })),
+    }) as TaskStage;
+
+  const pipelineWith = (ids: string[]): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        {
+          id: "plan", name: "Plan", kind: "planning", status: "passed",
+          intent: "", splittable: false, requiresApproval: false,
+          subtasks: [{ id: "plan-1", title: "Plan", prompt: "p", status: "done" as const, reply: "planned" }],
+        } as TaskStage,
+        stage(ids),
+      ],
+    }) as TaskPipeline;
+
+  it("does not reuse an id a surviving amendment already holds", () => {
+    // 1 and 4 survive a withdrawal of 2 and 3: counting gives 3, then 4 — a collision.
+    const p = must(correctStage(pipelineWith(["commit-1", "commit-amend-1", "commit-amend-4"]), "plan", {
+      finding: "changed again", at: "t1",
+    }));
+    const ids = p.stages[1].subtasks.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("commit-amend-2");
+  });
+
+  it("keeps numbering unique across repeated corrections", () => {
+    let p = pipelineWith(["commit-1", "commit-amend-1", "commit-amend-4"]);
+    for (const at of ["t1", "t2", "t3"]) {
+      p = must(correctStage(p, "plan", { finding: `finding ${at}`, at }));
+      // Settle the amendment so the next correction appends rather than absorbing it.
+      p = {
+        ...p,
+        stages: p.stages.map((s) =>
+          s.id === "commit"
+            ? { ...s, subtasks: s.subtasks.map((sub) => ({ ...sub, status: "done" as const, reply: "did it" })) }
+            : s,
+        ),
+      };
+    }
+    const ids = p.stages[1].subtasks.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("narrowAmendments", () => {
   // The measured episode: a correction that added one line to a Razor view re-opened
   // twelve stages, three of them reviews a rule added for SQL paths. Each spent a

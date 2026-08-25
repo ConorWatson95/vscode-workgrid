@@ -785,6 +785,43 @@ export interface QuestionItem {
  * they are treated as an unnamed ad-hoc route and given the fields the engine
  * needs. Returns undefined for absent input so callers can pass through.
  */
+/**
+ * Subtask ids made unique within their stage, repairing records already written.
+ *
+ * Ids were numbered by counting amendments, and `withdrawAmendments` removes them — so
+ * withdrawing the middle of a run made the next number collide with a surviving one.
+ * Two subtasks then shared an id, and `finishSubtask` matches by id: it settled the
+ * first and left the pending one pending, so the stage could never advance and the
+ * advance looped on it to the step limit. Six stages of one task were stuck that way at
+ * once.
+ *
+ * Repaired here rather than by a migration because this runs on every read, so a state
+ * file written by an older build heals on load in whichever host opens it first, and no
+ * version has to know about any other. Renaming is safe for the same reason the bug was
+ * dangerous — nothing outside the stage refers to a subtask by id; `correction.upstream`
+ * names a *stage*, and the runtime's own references are resolved within a single
+ * advance.
+ *
+ * The **later** occurrence is renamed, never the first: the earlier one is the round
+ * that ran, and it is the one whose id appears in whatever is already recorded against
+ * it. The new number is the lowest free one, matching how a fresh amendment is numbered.
+ */
+function uniqueSubtaskIds(subtasks: Subtask[], stageId: string): Subtask[] {
+  const seen = new Set<string>();
+  return subtasks.map((subtask) => {
+    const id = subtask?.id;
+    if (typeof id !== "string" || !seen.has(id)) {
+      if (typeof id === "string") seen.add(id);
+      return subtask;
+    }
+    let ordinal = 1;
+    while (seen.has(`${stageId}-amend-${ordinal}`)) ordinal += 1;
+    const replacement = `${stageId}-amend-${ordinal}`;
+    seen.add(replacement);
+    return { ...subtask, id: replacement };
+  });
+}
+
 export function normalizePipeline(
   stored: unknown,
 ): TaskPipeline | undefined {
@@ -817,7 +854,10 @@ export function normalizePipeline(
       sendBackTo: Array.isArray(stage.sendBackTo)
         ? stage.sendBackTo.filter((id): id is string => typeof id === "string")
         : undefined,
-      subtasks: Array.isArray(stage.subtasks) ? stage.subtasks : [],
+      subtasks: uniqueSubtaskIds(
+        Array.isArray(stage.subtasks) ? stage.subtasks : [],
+        stage.id ?? `stage-${index + 1}`,
+      ),
       startedAt: stage.startedAt,
       finishedAt: stage.finishedAt,
     };
