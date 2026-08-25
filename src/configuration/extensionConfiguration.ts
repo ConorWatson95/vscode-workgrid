@@ -141,6 +141,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).askTimeoutMinutes();
   }
 
+  amendmentModel(scope?: vscode.Uri): string {
+    return this.settings(scope).amendmentModel();
+  }
+
   transientRetryAttempts(scope?: vscode.Uri): number {
     return this.settings(scope).transientRetryAttempts();
   }

@@ -10,6 +10,7 @@ import {
   repositionRuleStages,
   repositionRouteStages,
   syncHandoffs,
+  refreshRulePaths,
 } from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 import { RouteDefinition } from "./taskRoute";
@@ -1203,5 +1204,74 @@ describe("refreshGateDeclarations and the scope-backfill hazard", () => {
   it("backfills scopes for a pipeline with no checklist at all", () => {
     const result = refreshGateDeclarations(withItems([]), gateRoute());
     expect(result.pipeline.stages.find((s) => s.id === "signoff")?.checklistScope).toBe("dev-site");
+  });
+});
+
+describe("refreshRulePaths", () => {
+  // The narrowing was measured on a repository whose rule-added reviews all had
+  // `rulePaths: null`, because `applyRules` records the pattern only when it creates a
+  // stage. The fix arrived somewhere it could not apply.
+  const source = {
+    routes: [],
+    rules: [
+      {
+        id: "sql",
+        reason: "SQL objects changed",
+        pathPattern: "\.sql$",
+        stage: { id: "r-sql-object-review", label: "SQL review", kind: "domainReview", intent: "i" },
+      },
+      {
+        id: "mapping",
+        reason: "mapping changed",
+        pathPattern: "Mapping/",
+        exceptPattern: "\.test\.",
+        stage: { id: "r-mapping-review", label: "Mapping review", kind: "domainReview", intent: "i" },
+      },
+    ],
+  } as never;
+
+  const pipeline = (over: Record<string, unknown> = {}): TaskPipeline =>
+    ({
+      routeId: "r",
+      stages: [
+        { id: "rc-plan", name: "Plan", kind: "planning", status: "passed", intent: "", splittable: false, requiresApproval: false, subtasks: [] },
+        { id: "r-sql-object-review", name: "SQL review", kind: "domainReview", status: "passed", intent: "", splittable: false, requiresApproval: false, addedByRule: "SQL objects changed", subtasks: [], ...over },
+        { id: "r-mapping-review", name: "Mapping review", kind: "domainReview", status: "pending", intent: "", splittable: false, requiresApproval: false, addedByRule: "mapping changed", subtasks: [] },
+      ],
+    }) as TaskPipeline;
+
+  it("fills in the pattern on a stage that has already run", () => {
+    const out = refreshRulePaths(pipeline(), source);
+    expect(out.changed).toContain("r-sql-object-review");
+    expect(out.pipeline.stages[1].rulePaths?.pathPattern).toBe("\.sql$");
+  });
+
+  it("carries the exception across", () => {
+    const out = refreshRulePaths(pipeline(), source);
+    expect(out.pipeline.stages[2].rulePaths).toEqual({
+      pathPattern: "Mapping/",
+      exceptPattern: "\.test\.",
+    });
+  });
+
+  it("updates a pattern the operator has since changed", () => {
+    const out = refreshRulePaths(pipeline({ rulePaths: { pathPattern: "old" } }), source);
+    expect(out.pipeline.stages[1].rulePaths?.pathPattern).toBe("\.sql$");
+  });
+
+  it("leaves a route stage alone, and a rule that no longer exists", () => {
+    const p = pipeline();
+    (p.stages[1] as { addedByRule?: string }).addedByRule = "a rule since deleted";
+    p.stages[1].id = "r-gone";
+    const out = refreshRulePaths(p, source);
+    expect(out.changed).not.toContain("r-gone");
+    expect(out.pipeline.stages[0].rulePaths).toBeUndefined();
+  });
+
+  it("returns the pipeline untouched when nothing differs", () => {
+    const once = refreshRulePaths(pipeline(), source);
+    const twice = refreshRulePaths(once.pipeline, source);
+    expect(twice.changed).toEqual([]);
+    expect(twice.pipeline).toBe(once.pipeline);
   });
 });

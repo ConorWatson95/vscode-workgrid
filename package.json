@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.109.4",
+  "version": "0.110.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -939,6 +939,12 @@
           "minimum": 0,
           "scope": "resource",
           "markdownDescription": "How long a stage may block on an `ask_user` question before the CLI gives up on the call. **`0` (the default) waits indefinitely.**\n\nThe harness exists so one engineer can supervise several tasks at once, which means a question raised while you are working on another task — or at lunch, or overnight — is the designed case. Any finite bound turns that into a race you have to remember, and needing to check a task before a timer expires is the supervision the harness is meant to remove.\n\nNot the same bound as **Stage Timeout Minutes**, which bounds a *hung* CLI: a stage waiting on a person is not hung, and the stage timer already excludes measured waiting.\n\nThe wait does not survive the window. The CLI process belongs to the extension host, so a reload or a restart ends the session holding the question and the subtask runs again — `0` removes the clock, not the process. A question still unanswered when a session ends **fails** the subtask rather than passing silently."
+        },
+        "taskWorkspaces.amendmentModel": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Model for **amendment** subtasks — a stage bringing its own output into line after the stage it was built on was corrected. Empty (the default) uses the stage's own model.\n\nAmendments are the largest line in a route's bill and the narrowest work in it: measured over one day, $63.86 of $101.68 across 165 sessions, and 29 of 32 on one task wrote no file at all — they read a finding, went to look, and reported that nothing in their output changes.\n\nNever applied to a **correction**, where the stage got its own work wrong and is being asked to fix it. That is the work; this is the question of whether anything follows from someone else's."
         },
         "taskWorkspaces.transientRetryAttempts": {
           "type": "number",

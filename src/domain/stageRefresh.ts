@@ -272,6 +272,55 @@ function hasResolved(stage: TaskStage): boolean {
  *
  * Returns the pipeline unchanged when nothing differs, so callers can skip a save.
  */
+/**
+ * Brings `rulePaths` on rule-added stages into line with the project's rules.
+ *
+ * `applyRules` records the pattern when it *creates* a stage, which reaches new tasks
+ * and no existing one — so on a repository with fourteen live tasks, every rule-added
+ * review had `rulePaths: null` and `narrowAmendments` could spare none of them. The
+ * measurement that motivated the narrowing was taken on exactly those tasks, so the fix
+ * arrived somewhere it could not apply.
+ *
+ * Its own pass rather than part of `refreshGateDeclarations`, because the source differs:
+ * a gate declaration comes from the *route*, and this comes from the *rules*. Same
+ * argument for why it is safe on a stage that has already run, though — a rule's path
+ * pattern says what the review is *about*, which is a fact about why the stage exists
+ * and not an instruction given to a run. `intent` may not be reloaded that way; this may.
+ *
+ * Written whenever it differs from config, not only when absent. A pattern the operator
+ * has since narrowed should narrow what the amendment check believes, and the stale value
+ * is the one nobody chose. A stage whose rule no longer exists keeps what it has: the
+ * rule set is the authority on rules it still defines, and silence about a removed one is
+ * not a statement that the review is about nothing.
+ */
+export function refreshRulePaths(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; changed: string[] } {
+  const changed: string[] = [];
+
+  const stages = pipeline.stages.map((stage) => {
+    if (!stage.addedByRule) return stage;
+    const rule = source.rules.find((entry) => entry.stage.id === stage.id);
+    if (!rule) return stage;
+
+    const next = {
+      pathPattern: rule.pathPattern,
+      ...(rule.exceptPattern ? { exceptPattern: rule.exceptPattern } : {}),
+    };
+    if (
+      stage.rulePaths?.pathPattern === next.pathPattern &&
+      stage.rulePaths?.exceptPattern === next.exceptPattern
+    ) {
+      return stage;
+    }
+    changed.push(stage.id);
+    return { ...stage, rulePaths: next };
+  });
+
+  return changed.length > 0 ? { pipeline: { ...pipeline, stages }, changed } : { pipeline, changed };
+}
+
 export function refreshGateDeclarations(
   pipeline: TaskPipeline,
   source: StageDefinitionSource,

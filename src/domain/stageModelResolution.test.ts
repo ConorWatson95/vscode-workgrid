@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveStageModel, StageModelSource } from "./stageModelResolution";
+import {
+  resolveAmendmentModel,
+  resolveStageModel,
+  StageModelSource,
+} from "./stageModelResolution";
 import { RouteDefinition } from "./taskRoute";
 import { ReviewRule } from "./reviewRules";
 
@@ -116,5 +120,34 @@ describe("resolveStageModel", () => {
       addedByRule: "rule-r-pester",
     });
     expect(model).toBe("sonnet");
+  });
+});
+
+describe("resolveAmendmentModel", () => {
+  const amendment = { correction: { upstream: { stageId: "app", stageName: "App" } } };
+  const correction = { correction: { finding: "wrong cast", at: "t1" } };
+  const plain = {};
+
+  it("runs an amendment on the cheaper model", () => {
+    expect(resolveAmendmentModel("sonnet", amendment, "opus")).toBe("sonnet");
+  });
+
+  it("never cheapens a correction — that is the stage's own work", () => {
+    expect(resolveAmendmentModel("sonnet", correction, "opus")).toBe("opus");
+  });
+
+  it("leaves an ordinary subtask alone", () => {
+    expect(resolveAmendmentModel("sonnet", plain, "opus")).toBe("opus");
+  });
+
+  it("inherits when nothing is configured, so no route changes until it is", () => {
+    for (const configured of [undefined, "", "   "]) {
+      expect(resolveAmendmentModel(configured, amendment, "opus")).toBe("opus");
+    }
+  });
+
+  it("passes through an undefined stage model rather than inventing one", () => {
+    expect(resolveAmendmentModel(undefined, amendment, undefined)).toBeUndefined();
+    expect(resolveAmendmentModel("sonnet", amendment, undefined)).toBe("sonnet");
   });
 });

@@ -34,7 +34,7 @@ import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { WorktreeDiscardService } from "./services/worktreeDiscardService";
 import { parsePorcelainChanges } from "./domain/worktreeDiscard";
 import { SuggestionScanService } from "./services/suggestionScanService";
-import { refreshGateDeclarations } from "./domain/stageRefresh";
+import { refreshGateDeclarations, refreshRulePaths } from "./domain/stageRefresh";
 import {
   SCAN_DISALLOWED_TOOLS,
   SCAN_TIMEOUT_MS,
@@ -975,6 +975,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // set it to 0 without a restart and get the old behaviour: held on the first
     // occurrence rather than retried.
     () => configuration.transientRetryAttempts(repositoryUri),
+    // The backoff between those attempts keeps its default. Named as a hole rather than
+    // omitted, because the next argument is positional and this constructor now has
+    // enough parameters that a silent shift is the likely mistake — one happened while
+    // adding the argument below.
+    undefined,
+    // Amendment subtasks only, and only when configured — see `resolveAmendmentModel`
+    // for the measurement. Last, because every argument here is positional.
+    () => configuration.amendmentModel(repositoryUri),
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a
@@ -1046,14 +1054,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const corrected: string[] = [];
       for (const task of tasks) {
         if (!task.pipeline) continue;
-        const result = refreshGateDeclarations(task.pipeline, source);
-        if (result.changed.length === 0) continue;
+        // Two passes, one save. `refreshRulePaths` reads the *rules* where the other
+        // reads the route — see its own note — and a stage can need both.
+        const gates = refreshGateDeclarations(task.pipeline, source);
+        const paths = refreshRulePaths(gates.pipeline, source);
+        const changed = [...new Set([...gates.changed, ...paths.changed])];
+        if (changed.length === 0) continue;
         await repository.save({
           ...task,
-          pipeline: result.pipeline,
+          pipeline: paths.pipeline,
           updatedAt: new Date().toISOString(),
         });
-        corrected.push(`${task.name}: ${result.changed.join(", ")}`);
+        corrected.push(`${task.name}: ${changed.join(", ")}`);
       }
       if (corrected.length > 0) {
         tree.refresh();

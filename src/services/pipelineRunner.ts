@@ -1,6 +1,7 @@
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import { Subtask, SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import {
+  resolveAmendmentModel,
   resolveStageModel,
   StageModelSource,
 } from "../domain/stageModelResolution";
@@ -381,6 +382,16 @@ export class PipelineRunner {
      */
     private readonly delay: (ms: number) => Promise<void> = (ms) =>
       new Promise((resolve) => setTimeout(resolve, ms)),
+    /**
+     * Model for amendment subtasks, when a cheaper one is configured — see
+     * `resolveAmendmentModel`. Last in the list, and that is not arbitrary: every
+     * argument here is positional, so inserting one in the middle silently shifts each
+     * callback after it onto the wrong parameter. It typechecked as `any` and would have
+     * run.
+     *
+     * A function because it is a setting the operator can change between advances.
+     */
+    private readonly amendmentModel: () => string | undefined = () => undefined,
   ) {}
 
   /**
@@ -532,6 +543,22 @@ export class PipelineRunner {
     const source = this.stageModelSource();
     if (!source) return stage.model;
     return resolveStageModel(source, task.pipeline?.routeId ?? "", stage);
+  }
+
+  /**
+   * The model for one subtask: the stage's, unless this is an amendment and a cheaper
+   * model is configured for those. See `resolveAmendmentModel` for the measurement.
+   */
+  private modelForSubtask(
+    task: TaskWorkspace,
+    stage: TaskStage,
+    subtask: Subtask,
+  ): string | undefined {
+    return resolveAmendmentModel(
+      this.amendmentModel?.(),
+      subtask,
+      this.modelFor(task, stage),
+    );
   }
 
   /**
@@ -1250,7 +1277,7 @@ export class PipelineRunner {
     let reply;
     try {
       reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
-        model: this.modelFor(task, stage),
+        model: this.modelForSubtask(task, stage, subtask),
         requiredMcpServers: stage.requiredMcpServers,
         onDenial: (denial) => this.onDenial(task, denial),
         onActivity: (activity) =>

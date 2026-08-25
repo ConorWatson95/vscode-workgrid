@@ -340,6 +340,14 @@ export class HarnessSettings {
    * bitten by from both directions. See `domain/askTimeout.ts` for why unbounded is
    * spelled as a very large number and never as an absent variable.
    */
+  /**
+   * Model for amendment subtasks; empty means the stage's own. See
+   * `domain/stageModelResolution.ts` for why this is amendments only.
+   */
+  amendmentModel(): string {
+    return this.text("amendmentModel", "");
+  }
+
   askTimeoutMinutes(): number {
     return this.atLeastZero("askTimeoutMinutes", 0);
   }

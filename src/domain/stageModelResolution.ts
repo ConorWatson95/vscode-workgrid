@@ -74,3 +74,37 @@ function normalize(model: string | undefined): string | undefined {
   const trimmed = model?.trim();
   return trimmed ? trimmed : undefined;
 }
+
+/**
+ * The model an *amendment* subtask should run on, when a cheaper one is configured.
+ *
+ * Measured on 25 Aug 2026: amendments were **$63.86 of the day's $101.68 — 63%, across
+ * 165 sessions** at $0.39 each, and $50.63 of that ran on Opus. On one task, 29 of 32
+ * amendments wrote no file at all: what they did was read a finding, go and look, and
+ * report "nothing in this stage's output changes". That is not work a frontier model is
+ * needed for, and it is the largest single line in the harness's bill.
+ *
+ * **Amendments only, never a correction.** The distinction `Subtask.correction.upstream`
+ * exists to keep is exactly the one that matters here: a correction is the stage getting
+ * its own work wrong and being asked to fix it — real work, on the stage's own terms — and
+ * an amendment is being told the ground moved and asked whether anything follows. Running
+ * a correction cheaper would be economising on the thing that produces the output.
+ *
+ * **Absent means inherit**, so nothing changes until it is configured. A model is not a
+ * timeout: quietly moving execution to a cheaper tier is a change to how the work is
+ * done, and the harness must not make that choice on an operator's behalf.
+ *
+ * Deliberately one value rather than per kind or per stage. The rule being expressed is
+ * about the *shape of the task* — a narrow, bounded "does this still hold?" — which is
+ * the same shape whatever stage is answering it, and a per-stage surface would need a
+ * reason to differ that nothing here has.
+ */
+export function resolveAmendmentModel(
+  configured: string | undefined,
+  subtask: { correction?: { upstream?: unknown } },
+  stageModel: string | undefined,
+): string | undefined {
+  const cheap = configured?.trim();
+  if (!cheap) return stageModel;
+  return subtask.correction?.upstream ? cheap : stageModel;
+}
