@@ -33,6 +33,7 @@ import {
   unexecutedPlanSteps,
   recordQuestion,
   retryStage,
+  narrowAmendments,
   unansweredQuestions,
   setChecklistItem,
   skipStage,
@@ -2088,6 +2089,123 @@ describe("assessing work that already exists", () => {
     };
     const approved = must(approveStage(heldReview, "review", "2026-08-07T09:00:00Z"));
     expect(approved.stages.find((s) => s.id === "build")?.status).toBe("pending");
+  });
+});
+
+describe("narrowAmendments", () => {
+  // The measured episode: a correction that added one line to a Razor view re-opened
+  // twelve stages, three of them reviews a rule added for SQL paths. Each spent a
+  // session to report "Changed: nothing."
+  const cascaded = (): TaskPipeline => {
+    const withAmendment = (
+      id: string,
+      extra: Partial<TaskStage>,
+      findings = ["missing @using"],
+    ): TaskStage =>
+      ({
+        id, name: id, kind: "domainReview", status: "pending",
+        intent: "", splittable: false, requiresApproval: false,
+        subtasks: [
+          {
+            id: `${id}-1`, title: id, prompt: "p", status: "done" as const,
+            reply: "Reviewed.", activity: { costUsd: 0.5 },
+          },
+          {
+            id: `${id}-amend-1`, title: "Amend", prompt: "n", status: "pending" as const,
+            correction: {
+              finding: "n", at: "t1",
+              upstream: { stageId: "app", stageName: "Implement the application", findings },
+              undo: { status: "passed" as const, finishedAt: "t0" },
+            },
+          },
+        ],
+        ...extra,
+      }) as TaskStage;
+
+    return {
+      routeId: "report-change",
+      stages: [
+        {
+          id: "app", name: "Implement the application", kind: "implementation",
+          status: "active", intent: "", splittable: false, requiresApproval: false,
+          subtasks: [
+            {
+              id: "app-1", title: "App", prompt: "p", status: "done" as const,
+              reply: "Built it.", activity: { costUsd: 3 },
+            },
+            {
+              id: "app-fix-1", title: "Fix", prompt: "p", status: "done" as const,
+              correction: { finding: "missing @using", at: "t1" },
+              reply: "Added the using.",
+              activity: { pathsWritten: ["C:/w/App/Views/Index.cshtml"] },
+            },
+          ],
+        } as TaskStage,
+        withAmendment("sql-review", {
+          addedByRule: "SQL objects changed",
+          rulePaths: { pathPattern: "\\.sql$" },
+        }),
+        withAmendment("resx-review", {
+          addedByRule: "resx changed",
+          rulePaths: { pathPattern: "\\.resx$" },
+        }),
+        withAmendment("build", {}),
+      ],
+    } as TaskPipeline;
+  };
+
+  it("withdraws the amendments the correction could not have reached", () => {
+    const p = narrowAmendments(cascaded(), "app", "app-fix-1");
+    for (const id of ["sql-review", "resx-review"]) {
+      const stage = p.stages.find((s) => s.id === id)!;
+      expect(stage.status).toBe("passed");
+      expect(stage.finishedAt).toBe("t0");
+      expect(stage.subtasks).toHaveLength(1);
+    }
+  });
+
+  it("leaves a route stage alone, because nothing declares what it is about", () => {
+    // A build stage is about every file, and guessing an arbitrary stage's subject
+    // from paths is the inference this refuses everywhere else.
+    const build = narrowAmendments(cascaded(), "app", "app-fix-1").stages.find(
+      (s) => s.id === "build",
+    )!;
+    expect(build.status).toBe("pending");
+    expect(build.subtasks).toHaveLength(2);
+  });
+
+  it("keeps an amendment the correction did reach", () => {
+    const p = cascaded();
+    p.stages[0].subtasks[1].activity = { pathsWritten: ["C:/w/deploy/004.sql"] };
+    const sql = narrowAmendments(p, "app", "app-fix-1").stages.find(
+      (s) => s.id === "sql-review",
+    )!;
+    expect(sql.status).toBe("pending");
+    expect(sql.subtasks).toHaveLength(2);
+  });
+
+  it("keeps an amendment that answers more than this one correction", () => {
+    // An absorbed amendment answers several corrections of the same stage at once,
+    // and only the newest one's written paths are known here.
+    const p = cascaded();
+    const sql = p.stages[1];
+    sql.subtasks[1].correction!.upstream!.findings = ["missing @using", "controls broken"];
+    expect(narrowAmendments(p, "app", "app-fix-1").stages[1].subtasks).toHaveLength(2);
+  });
+
+  it("does nothing when the correction recorded no activity", () => {
+    const p = cascaded();
+    p.stages[0].subtasks[1].activity = undefined;
+    expect(narrowAmendments(p, "app", "app-fix-1")).toBe(p);
+  });
+
+  it("does not act on an amendment subtask", () => {
+    // Only a correction knows what it wrote; an amendment cascades nothing.
+    const p = cascaded();
+    p.stages[0].subtasks[1].correction!.upstream = {
+      stageId: "plan", stageName: "Plan", findings: ["x"],
+    };
+    expect(narrowAmendments(p, "app", "app-fix-1")).toBe(p);
   });
 });
 

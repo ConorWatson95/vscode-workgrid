@@ -21,6 +21,7 @@ import {
   producesChecklist,
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
+import { amendmentIsUnreachable } from "./amendmentReach";
 import { hasUsage, stageUsage, subtasksUsage } from "./stageUsage";
 import {
   amendmentTitle,
@@ -138,6 +139,7 @@ export function stageFromDefinition(
 function createStage(
   definition: RouteStageDefinition,
   addedByRule?: string,
+  rulePaths?: TaskStage["rulePaths"],
 ): TaskStage {
   return {
     id: definition.id,
@@ -146,6 +148,7 @@ function createStage(
     status: "pending",
     intent: definition.intent,
     addedByRule,
+    ...(rulePaths ? { rulePaths } : {}),
     model: definition.model,
     splittable: definition.splittable,
     requiresApproval: definition.gate === "approval",
@@ -265,7 +268,12 @@ export function applyRules(
     const definition = ruleStageDefinition(match.rule);
     if (existing.has(definition.id)) continue;
     existing.add(definition.id);
-    added.push(createStage(definition, match.rule.reason));
+    added.push(
+      createStage(definition, match.rule.reason, {
+        pathPattern: match.rule.pathPattern,
+        ...(match.rule.exceptPattern ? { exceptPattern: match.rule.exceptPattern } : {}),
+      }),
+    );
   }
 
   if (added.length === 0) {
@@ -986,6 +994,81 @@ export function undoableCorrection(stage: TaskStage): Subtask | undefined {
     if (subtask.correction) return subtask.status === "active" ? undefined : subtask;
   }
   return undefined;
+}
+
+/**
+ * Withdraws the amendments a correction demonstrably could not have reached.
+ *
+ * Run when a correction subtask *finishes*, which is the earliest moment the question
+ * can be asked at all: `correctStage` cascades when the operator files the finding,
+ * and what the fix would touch is not knowable until it has touched it. So the
+ * cascade still happens exactly as before and this takes back the part of it that the
+ * evidence rules out — which also means a route with no measurement behaves, at every
+ * step, precisely as it did before this existed.
+ *
+ * Withdrawing rather than never-amending is what keeps the ledger honest too: these
+ * stages were re-opened, and `withdrawAmendments` already knows how to put a stage
+ * back where it was, because withdrawing a correction has always had to.
+ *
+ * Three rules beyond the ones `amendmentIsUnreachable` states:
+ *
+ * - **Only an amendment that has not run.** One with a reply or an activity record has
+ *   already been paid for, and removing it would delete the account of a session that
+ *   happened — the opposite of the saving, and a hole in the history.
+ * - **Only an amendment carrying this one correction.** An absorbed amendment answers
+ *   several corrections of the same upstream stage at once, and this knows the written
+ *   paths of the newest alone. Reaching a verdict about the others from it would be
+ *   settling a review against a change nobody looked at.
+ * - **Nothing is booked as discarded**, for the same reason an amendment is not:
+ *   these stages kept everything they had, and no session was spent.
+ */
+export function narrowAmendments(
+  pipeline: TaskPipeline,
+  stageId: string,
+  correctionSubtaskId: string,
+): TaskPipeline {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) return pipeline;
+
+  const fix = pipeline.stages[index].subtasks.find((s) => s.id === correctionSubtaskId);
+  if (!fix?.correction || fix.correction.upstream) return pipeline;
+  const paths = fix.activity?.pathsWritten;
+
+  const withdrawable = (subtask: Subtask) =>
+    subtask.status === "pending" &&
+    !subtask.reply &&
+    !subtask.activity &&
+    subtask.correction?.upstream?.stageId === stageId &&
+    subtask.correction.upstream.findings?.length === 1;
+
+  let narrowed = false;
+  const stages = pipeline.stages.map((stage, i) => {
+    if (i <= index) return stage;
+    const amendment = stage.subtasks.find(withdrawable);
+    if (!amendment || !amendmentIsUnreachable(stage, paths)) return stage;
+
+    narrowed = true;
+    const undo = amendment.correction!.undo;
+    return {
+      ...stage,
+      subtasks: stage.subtasks.filter((sub) => sub.id !== amendment.id),
+      ...(undo
+        ? {
+            status: undo.status,
+            finishedAt: undo.finishedAt,
+            verdict: undo.verdict,
+            verification: undo.verification,
+            blocked: undo.blocked,
+          }
+        : // No snapshot means this stage's settlement was never captured, so there is
+          // nothing to restore it to and the amendment is left to run. Inventing one
+          // is how a review comes to be recorded as passed by a mechanism whose whole
+          // job was to decide it had nothing to do.
+          {}),
+    };
+  });
+
+  return narrowed ? { ...pipeline, stages } : pipeline;
 }
 
 /**

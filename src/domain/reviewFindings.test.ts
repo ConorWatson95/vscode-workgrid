@@ -587,4 +587,53 @@ describe("findingsOfSubtasks", () => {
       { severity: "critical", text: "the join double-counts purchases" },
     ]);
   });
+
+  it("reads a repaired stage from the round that stands, not from all of them", () => {
+    // The measured failure: a code review amended three times reported every round's
+    // findings at once, so finding 2 appeared as outstanding on the row and at the top
+    // of the report despite revision 1 having marked it RESOLVED.
+    expect(
+      findingsOfSubtasks([
+        {
+          status: "done",
+          reply: [
+            "**Critical**",
+            "- 1. the From dropdown is ignored for Quarterly",
+            "**Important**",
+            "- 2. the new view is SELECT *",
+          ].join("\n"),
+        },
+        {
+          status: "done",
+          correction: { finding: "upstream changed" },
+          reply: ["**Critical**", "- 1. the From dropdown is ignored for Quarterly"].join(
+            "\n",
+          ),
+        },
+      ]),
+    ).toEqual([
+      { severity: "critical", text: "1. the From dropdown is ignored for Quarterly" },
+    ]);
+  });
+
+  it("falls back past a round that reached no conclusion", () => {
+    // An amendment that is still running has no reply and a failed one has the
+    // transport's account instead of its own. Either would blank the findings of a
+    // stage that has real ones, which is the direction that misleads.
+    expect(
+      findingsOfSubtasks([
+        { status: "done", reply: "- Critical: the join double-counts purchases" },
+        { status: "active", correction: { finding: "upstream changed" }, reply: "" },
+      ]),
+    ).toEqual([{ severity: "critical", text: "the join double-counts purchases" }]);
+  });
+
+  it("counts one finding once when two parallel units both file it", () => {
+    expect(
+      findingsOfSubtasks([
+        { status: "done", reply: "- Critical: `p_Summary` double-counts purchases" },
+        { status: "done", reply: "- Critical: p_Summary double-counts purchases" },
+      ]),
+    ).toHaveLength(1);
+  });
 });

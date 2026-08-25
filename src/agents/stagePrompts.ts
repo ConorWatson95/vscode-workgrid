@@ -914,6 +914,40 @@ export function correctionMedium(kind: StageKind): string {
   }
 }
 
+/**
+ * What a repaired stage owes about the output it is *not* changing.
+ *
+ * A review's output is a list, and the runtime reads the standing round's list as the
+ * stage's current findings — because a stage corrected once and amended three times
+ * holds four complete accounts of itself, and counting all four re-raises criticals a
+ * later round resolved. That rule is only safe if the standing round is complete, so
+ * the prompt has to oblige what the parser reads: every finding, carried forward with
+ * its current status, including the ones this repair did not touch.
+ *
+ * It sits *against* the narrowing instruction above it and does not contradict it —
+ * restating a finding is not re-deriving it. The distinction is stated in as many
+ * words because a session told to change nothing else will otherwise report only its
+ * delta, which is what a well-behaved correction of any other kind of stage should do.
+ *
+ * Review stages only. A plan, a deployment or an implementation is corrected in a file
+ * that still holds everything the round before it wrote, so the medium carries the
+ * unchanged parts on its own and asking for a restatement would be asking a session to
+ * re-emit a document it has already edited.
+ */
+function carryForwardRule(kind: StageKind): string[] {
+  if (kind !== "codeReview" && kind !== "domainReview") return [];
+  return [
+    "Your report replaces the one above it as this stage's findings, so it has to be",
+    "complete on its own: list every finding this stage raised, including the ones",
+    "this repair does not touch, each with its current status — outstanding, resolved,",
+    "or superseded, and say which. A finding you leave out is read as one that no",
+    "longer stands, and nothing else will raise it again. Restating a finding is not",
+    "re-deriving it: do not go and re-check the ones the repair does not reach, just",
+    "carry them forward as they were.",
+    "",
+  ];
+}
+
 export function correctionPrompt(
   context: StageContext,
   stage: TaskStage,
@@ -953,6 +987,7 @@ export function correctionPrompt(
     "have already passed the rest of this stage, and changing it invalidates them for",
     "no reason.",
     "",
+    ...carryForwardRule(stage.kind),
     "If the fix turns out to need a change of approach rather than a change of code,",
     "do not make it: that is a re-run, and it is a decision for the person who asked",
     `for this. Say so with a line starting exactly "${CORRECTION_DECLINED_MARKER}"`,

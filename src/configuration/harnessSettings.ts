@@ -333,9 +333,15 @@ export class HarnessSettings {
    * waiting while they work on another one is the designed case. Left at the CLI's own
    * default the call times out, the agent proceeds on assumptions, and the stage that
    * asked because it did not know is recorded as done.
+   *
+   * **Zero means no limit, and is the default.** Read through `atLeastZero` for exactly
+   * that reason — `positive` would restore the fallback and the setting's most useful
+   * value would silently do nothing, which is the shape of bug this codebase has been
+   * bitten by from both directions. See `domain/askTimeout.ts` for why unbounded is
+   * spelled as a very large number and never as an absent variable.
    */
   askTimeoutMinutes(): number {
-    return this.positive("askTimeoutMinutes", 120);
+    return this.atLeastZero("askTimeoutMinutes", 0);
   }
 
   /**

@@ -251,18 +251,87 @@ function statedNonBlocking(text: string): boolean {
  * this family, arriving through the label again, and the same rule closes it as
  * closes the handoff: a failed stage's conclusion is not a conclusion.
  *
+ * **A repaired stage is read from the round that stands, not from all of them.**
+ * `correctStage` keeps everything the stage already produced — that retention is the
+ * whole saving — so a review corrected once and amended three times holds four
+ * complete accounts of itself, each restating the finding list with its statuses
+ * updated. Concatenating them counted every finding once per round and re-raised
+ * criticals a later round had marked resolved: a code review whose revision 2 said
+ * "2. RESOLVED" still reported that finding as outstanding on the row and at the top
+ * of the report, three times over. `stageHistory` already derives which round stands
+ * and folds the superseded ones away; this asks the same question, so the summary and
+ * the body of one report stop disagreeing about which account is current.
+ *
+ * The standing round is the last one that reached a conclusion — not simply the last
+ * subtask, which `stageHistory` can use because it is describing history and this is
+ * not. An amendment that is still running has no reply yet, and a failed one has the
+ * transport's account instead of its own; either would blank the findings of a stage
+ * that has real ones, which is the direction that misleads.
+ *
+ * A stage nothing has repaired keeps every subtask, because a split stage's units are
+ * one round of work done in parallel and each holds a different part of the answer.
+ *
+ * **Then deduplicated.** A split stage's units routinely raise the same finding about
+ * a file they both touched, and a single reply that lists a finding under a heading
+ * and again in a summary parses as two. Same normalisation and same trade as
+ * `deferralKey`: merging two real findings is worse than listing one twice, so nothing
+ * fuzzy. What deduplication deliberately does *not* do is pull findings back from a
+ * superseded round — a finding the standing account dropped because it was fixed would
+ * return, which is the symptom this whole rule exists to remove. That the revision
+ * carries every finding forward is `correctionPrompt`'s job, not the parser's.
+ *
  * Structurally typed rather than taking a `TaskStage`, so this stays a pure reader of
  * text and the UI keeps one place to ask the question.
  */
 export function findingsOfSubtasks(
-  subtasks: readonly { status: string; reply?: string }[],
+  subtasks: readonly { status: string; reply?: string; correction?: unknown }[],
 ): ReviewFinding[] {
-  return parseReviewFindings(
-    subtasks
-      .filter((subtask) => subtask.status !== "failed")
-      .map((subtask) => subtask.reply ?? "")
-      .join("\n\n"),
+  const concluded = subtasks.filter(
+    (subtask) => subtask.status !== "failed" && subtask.reply?.trim(),
   );
+  const repaired = subtasks.some((subtask) => subtask.correction);
+  const standing = repaired ? concluded.slice(-1) : concluded;
+
+  return dedupeFindings(
+    parseReviewFindings(standing.map((subtask) => subtask.reply).join("\n\n")),
+  );
+}
+
+/**
+ * The same finding raised twice, counted once.
+ *
+ * First occurrence wins, which on a review that lists a finding under its severity
+ * heading and again in a closing summary keeps the one carrying the severity. Keyed
+ * on the text alone rather than on severity-and-text: keying on both would let the
+ * same finding stand twice merely because two parallel units filed it differently,
+ * which is the duplicate this exists to remove.
+ */
+function dedupeFindings(findings: readonly ReviewFinding[]): ReviewFinding[] {
+  const seen = new Set<string>();
+  return findings.filter((finding) => {
+    const key = findingKey(finding.text);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Normalised finding text, for telling one round's restatement of a finding from a
+ * new one. Deliberately the same shape as `deferralKey`, and for the same reason: a
+ * revision re-numbers ("1." becomes "Finding 1"), re-quotes and appends its own
+ * verdict after a dash, and none of that makes it a different finding.
+ */
+function findingKey(text: string): string {
+  return text
+    .toLowerCase()
+    .split(/\s[—–]\s|\s--\s/)[0]
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[`'"*_]/g, "")
+    .replace(/\d+/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function summariseFindings(findings: readonly ReviewFinding[]): string | undefined {

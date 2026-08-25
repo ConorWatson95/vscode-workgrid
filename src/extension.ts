@@ -46,7 +46,7 @@ import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { subagentLimitEnv } from "./domain/subagentLimits";
 import { stageTools } from "./domain/stageTools";
-import { askTimeoutEnv } from "./domain/askTimeout";
+import { askTimeoutEnv, askTimeoutMs } from "./domain/askTimeout";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { taskStateDir } from "./persistence/taskStateFile";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
@@ -335,7 +335,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // own idle timeout: the CLI bounds elapsed time and silence separately, and a
     // question blocking by design is bounded by the silence one. Raising only the
     // first is why questions kept dying in about seven minutes.
-    () => configuration.askTimeoutMinutes(repositoryUri) * 60 * 1000,
+    // Through `askTimeoutMs`, not multiplied here: zero means "wait indefinitely" and
+    // multiplying it out would expire every question the instant it was asked.
+    () => askTimeoutMs(configuration.askTimeoutMinutes(repositoryUri)),
   );
   context.subscriptions.push({ dispose: () => askUser.dispose() });
 

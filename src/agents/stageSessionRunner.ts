@@ -252,7 +252,8 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           this.logger.error(
             `Harness [${task.name}] ${label} ended with ${unanswered} question(s) never ` +
               "answered — the CLI's tool timeout fired and the stage proceeded on its own " +
-              "assumptions. Raise taskWorkspaces.askTimeoutMinutes, then re-run it.",
+              "assumptions. Set taskWorkspaces.askTimeoutMinutes to 0 to wait " +
+              "indefinitely, then re-run it.",
           );
           resolve({
             ...result,

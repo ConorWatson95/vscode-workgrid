@@ -7,6 +7,7 @@ import {
 import {
   NextAction,
   finishSubtask,
+  narrowAmendments,
   nextAction,
   planStage,
   recordAssessments,
@@ -1530,6 +1531,25 @@ export class PipelineRunner {
         : reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
+
+    // A correction now knows what it touched, which is the first moment the cascade
+    // it caused can be questioned. Amendments the written paths rule out are taken
+    // back before anybody pays for them — see `domain/amendmentReach.ts` for the 29
+    // of 32 that wrote nothing. Reported, never silent: a review returning to
+    // "passed" without a word looks exactly like one that was skipped.
+    if (reply.ok && subtask.correction && !subtask.correction.upstream) {
+      const before = pipeline;
+      pipeline = narrowAmendments(pipeline, stage.id, subtask.id);
+      const spared = pipeline.stages.filter(
+        (s, i) => s.subtasks.length < before.stages[i].subtasks.length,
+      );
+      if (spared.length > 0) {
+        steps.push(
+          `Left settled, unreachable from what this correction wrote: ` +
+            `${spared.map((s) => `"${s.name}"`).join(", ")}.`,
+        );
+      }
+    }
 
     // A review that found something must not pass as though it had not. This is the
     // one place a stage outcome stops being purely self-reported: the reply is read

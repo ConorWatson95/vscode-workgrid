@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.108.4",
+  "version": "0.109.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -935,9 +935,10 @@
         },
         "taskWorkspaces.askTimeoutMinutes": {
           "type": "number",
-          "default": 120,
+          "default": 0,
+          "minimum": 0,
           "scope": "resource",
-          "markdownDescription": "How long a stage may block on an `ask_user` question before the CLI gives up on the call.\n\nDeliberately much longer than **Stage Timeout Minutes**, which bounds a *hung* CLI — a stage waiting on a person is not hung. The harness exists so one engineer can supervise several tasks at once, so a question waiting while you work on another task is the designed case, not an edge case.\n\nLeft at the CLI's own default the call times out after a few minutes, the agent proceeds on its own assumptions, and the stage that asked precisely because it did not know is recorded as done. A question still unanswered when the session ends now **fails** the subtask rather than passing silently."
+          "markdownDescription": "How long a stage may block on an `ask_user` question before the CLI gives up on the call. **`0` (the default) waits indefinitely.**\n\nThe harness exists so one engineer can supervise several tasks at once, which means a question raised while you are working on another task — or at lunch, or overnight — is the designed case. Any finite bound turns that into a race you have to remember, and needing to check a task before a timer expires is the supervision the harness is meant to remove.\n\nNot the same bound as **Stage Timeout Minutes**, which bounds a *hung* CLI: a stage waiting on a person is not hung, and the stage timer already excludes measured waiting.\n\nThe wait does not survive the window. The CLI process belongs to the extension host, so a reload or a restart ends the session holding the question and the subtask runs again — `0` removes the clock, not the process. A question still unanswered when a session ends **fails** the subtask rather than passing silently."
         },
         "taskWorkspaces.transientRetryAttempts": {
           "type": "number",

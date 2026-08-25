@@ -431,6 +431,22 @@ export interface TaskStage {
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**
+   * What the rule that added this stage matched on, copied from the rule so a
+   * persisted pipeline stays self-describing.
+   *
+   * The rule set lives in project config and is read against git's changed paths;
+   * by the time a correction cascades, nothing in the pipeline knew what a
+   * rule-added review was *about*. Persisting the pattern is what lets
+   * `domain/amendmentReach.ts` tell a review a correction could have invalidated
+   * from one it demonstrably could not — a Razor `@using` fix does not reach the
+   * SQL migration review, and paying a session to have it say so is the 91% of
+   * amendments that changed nothing.
+   *
+   * Absent on every stage recorded before this existed, and on every route stage,
+   * which both mean the same thing: nothing is known, so nothing is narrowed.
+   */
+  rulePaths?: { pathPattern: string; exceptPattern?: string };
+  /**
    * Model for this stage's sessions, copied from the route so a persisted
    * pipeline stays self-describing. Undefined means the configured default.
    */
