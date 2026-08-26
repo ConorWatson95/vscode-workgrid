@@ -964,6 +964,44 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### Two stages that both deployed to DEV, named the other way round
+
+`refreshStageLabels`, 26 Aug 2026. A second operator trying the harness read
+`report-change`'s **"Deploy to DEV"** as the C# deployment. It runs
+`Invoke-SqlDeployment.ps1` and touches no compiled code at all; the code reaches DEV
+at the stage called **"Land on DEV"**, which merges the task branch — and with CI/CD
+building the DEV branch, that merge *is* the deployment. So both stages deploy to
+DEV, the names said neither, and the natural reading was the wrong one. He concluded
+work had been missed; nothing had.
+
+The labels are project config, so the renames are a `harness.json` edit — and the
+useful framing came from the CI/CD fact: name what each stage deploys rather than
+calling one a deploy and the other a merge, since understating the merge hides that
+it is the irreversible act putting code on the shared site.
+
+The harness half is that **`label` was refreshed by nothing**. `refreshPendingStages`
+carries `intent`, `model`, `verify`, `planFile`, `planOutput` and
+`requiresPullRequest`; `refreshGateDeclarations` carries the two gate fields. A rename
+therefore reached no task already in flight — the same class of bug as `checklistScope`
+never reaching the gates that sit longest, and biting in the same place, because a task
+somebody is confused by is by definition one already running.
+
+A third pass, with the **widest rule of the three**, and the width is the whole point.
+`refreshPendingStages` touches nothing that has begun, because an `intent` is an
+instruction given to a run and a stage that ran must keep what it ran with.
+`refreshGateDeclarations` goes one status further, because a scope and an audience
+decide what happens next. A label decides *nothing*: no prompt quotes it, no parser
+reads it, no evidence depends on it. It exists so a person scanning the tree knows what
+a stage is — so a **settled** stage needs the corrected name most, since the history is
+what gets read afterwards. Only the label; everything else about a settled stage is a
+record of what happened.
+
+Found on the way, and the reason the three passes are worth one comment: the sync site
+chains them and saves the **last** pipeline. Written as two it saved `paths.pipeline`;
+adding a third pass without moving the save would have computed every rename and
+discarded it — a silent no-op indistinguishable from the feature being absent, which is
+the failure the unquoted hook command already taught this codebase.
+
 ### A plan that said it was not finished
 
 `domain/planQuestions.ts` + `RouteStageDefinition.planOutput`, 26 Aug 2026. The

@@ -34,7 +34,11 @@ import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { WorktreeDiscardService } from "./services/worktreeDiscardService";
 import { parsePorcelainChanges } from "./domain/worktreeDiscard";
 import { SuggestionScanService } from "./services/suggestionScanService";
-import { refreshGateDeclarations, refreshRulePaths } from "./domain/stageRefresh";
+import {
+  refreshGateDeclarations,
+  refreshRulePaths,
+  refreshStageLabels,
+} from "./domain/stageRefresh";
 import {
   SCAN_DISALLOWED_TOOLS,
   SCAN_TIMEOUT_MS,
@@ -1054,15 +1058,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const corrected: string[] = [];
       for (const task of tasks) {
         if (!task.pipeline) continue;
-        // Two passes, one save. `refreshRulePaths` reads the *rules* where the other
-        // reads the route — see its own note — and a stage can need both.
+        // Three passes, one save. `refreshRulePaths` reads the *rules* where the
+        // others read the route — see its own note — and a stage can need all three.
+        // Each pass takes the previous one's pipeline, and the save must use the
+        // LAST of them, or a pass computes its corrections and throws them away.
         const gates = refreshGateDeclarations(task.pipeline, source);
         const paths = refreshRulePaths(gates.pipeline, source);
-        const changed = [...new Set([...gates.changed, ...paths.changed])];
+        // A label decides nothing, so it refreshes on every stage including settled
+        // ones -- a corrected stage name is needed most on the history somebody is
+        // reading to work out what a stage did.
+        const labels = refreshStageLabels(paths.pipeline, source);
+        const changed = [...new Set([...gates.changed, ...paths.changed, ...labels.changed])];
         if (changed.length === 0) continue;
         await repository.save({
           ...task,
-          pipeline: paths.pipeline,
+          pipeline: labels.pipeline,
           updatedAt: new Date().toISOString(),
         });
         corrected.push(`${task.name}: ${changed.join(", ")}`);

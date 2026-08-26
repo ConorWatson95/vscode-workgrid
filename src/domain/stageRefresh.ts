@@ -322,6 +322,50 @@ export function refreshRulePaths(
   return changed.length > 0 ? { pipeline: { ...pipeline, stages }, changed } : { pipeline, changed };
 }
 
+/**
+ * Brings every stage's displayed name into line with current config.
+ *
+ * A third pass, with the widest rule of the three, and the width is the point.
+ * `refreshPendingStages` touches nothing that has begun, because an `intent` is an
+ * instruction *given to a run* and a stage that ran must keep what it ran with.
+ * `refreshGateDeclarations` goes one status further, because a scope and an audience
+ * decide what happens *next*. A label decides nothing at all: no prompt quotes it,
+ * no parser reads it, no evidence depends on it. It exists solely so a person
+ * scanning the tree knows what a stage is — which means a *settled* stage needs the
+ * corrected name as much as a pending one, since the history is what gets read
+ * afterwards.
+ *
+ * Built 26 Aug 2026, from a colleague misreading `report-change`. Two stages both
+ * put work on DEV and their names said the opposite of what they did: "Deploy to
+ * DEV" runs `Invoke-SqlDeployment.ps1` and touches no C# at all, while "Land on DEV"
+ * merges the branch — which, with CI/CD on the DEV branch, is what actually deploys
+ * the code. He read the first as the code deployment, which is the natural reading.
+ * Renaming them in config would have reached no task already running, and the tasks
+ * already running are exactly the ones somebody is trying to read.
+ *
+ * Only the label. Everything else about a settled stage is a record of what happened
+ * and must not be rewritten by a later config edit.
+ */
+export function refreshStageLabels(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; changed: string[] } {
+  const changed: string[] = [];
+
+  const stages = pipeline.stages.map((stage) => {
+    const definition = findDefinition(source, pipeline.routeId, stage);
+    // A rule-added stage's name comes from the rule, and a stage config no longer
+    // defines keeps the name it ran under — the same rule `refreshPendingStages`
+    // follows for a stage whose id has gone.
+    if (!definition?.label?.trim()) return stage;
+    if (stage.name === definition.label) return stage;
+    changed.push(stage.id);
+    return { ...stage, name: definition.label };
+  });
+
+  return changed.length > 0 ? { pipeline: { ...pipeline, stages }, changed } : { pipeline, changed };
+}
+
 export function refreshGateDeclarations(
   pipeline: TaskPipeline,
   source: StageDefinitionSource,
@@ -809,6 +853,12 @@ function findDefinition(
   stage: Pick<TaskStage, "id" | "addedByRule">,
 ):
   | {
+      /**
+       * The displayed name. Present on a rule stage as well as a route one, so
+       * `refreshStageLabels` corrects a renamed review too — a rule's label is
+       * config in exactly the same way.
+       */
+      label?: string;
       intent?: string;
       model?: string;
       handoff?: boolean;

@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  addMissingStages,
   guidanceFor,
   refreshGateDeclarations,
   refreshPendingStages,
-  addMissingStages,
+  refreshRulePaths,
+  refreshStageLabels,
+  repositionRouteStages,
+  repositionRuleStages,
   revertToStage,
   sendBackTargets,
   sendBackToStage,
-  repositionRuleStages,
-  repositionRouteStages,
   syncHandoffs,
-  refreshRulePaths,
 } from "./stageRefresh";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 import { RouteDefinition } from "./taskRoute";
@@ -1273,5 +1274,74 @@ describe("refreshRulePaths", () => {
     const twice = refreshRulePaths(once.pipeline, source);
     expect(twice.changed).toEqual([]);
     expect(twice.pipeline).toBe(once.pipeline);
+  });
+});
+
+
+/**
+ * A colleague read "Deploy to DEV" as the C# deployment. It runs
+ * `Invoke-SqlDeployment.ps1` and touches no C# at all; the code reaches DEV at the
+ * stage called "Land on DEV", because CI/CD builds the DEV branch. Renaming them in
+ * config reached no task already running — which is exactly the set somebody is
+ * trying to read.
+ */
+describe("refreshStageLabels", () => {
+  const source = (label: string) => ({
+    routes: [
+      {
+        id: "r",
+        label: "R",
+        description: "",
+        stages: [
+          {
+            id: "deploy",
+            label,
+            kind: "deployment" as const,
+            intent: "i",
+            splittable: false,
+            gate: "auto" as const,
+          },
+        ],
+      },
+    ],
+    rules: [],
+  });
+
+  const pipelineWith = (name: string, status: TaskStage["status"] = "pending"): TaskPipeline => ({
+    routeId: "r",
+    stages: [stage({ id: "deploy", name, status })],
+  });
+
+  it("renames a pending stage", () => {
+    const before = pipelineWith("Deploy to DEV");
+    const { pipeline, changed } = refreshStageLabels(before, source("Deploy the SQL to DEV"));
+    expect(changed).toEqual(["deploy"]);
+    expect(pipeline.stages[0].name).toBe("Deploy the SQL to DEV");
+  });
+
+  it("renames a stage that has already passed — the widest rule of the three passes", () => {
+    // A label decides nothing: no prompt quotes it, no parser reads it, no evidence
+    // depends on it. The history is what gets read afterwards, so a settled stage
+    // needs the corrected name most. This is what separates it from the other two
+    // passes, both of which leave a stage that has run exactly alone.
+    const before = pipelineWith("Deploy to DEV", "passed");
+    const { pipeline, changed } = refreshStageLabels(before, source("Deploy the SQL to DEV"));
+    expect(changed).toEqual(["deploy"]);
+    expect(pipeline.stages[0].name).toBe("Deploy the SQL to DEV");
+    expect(pipeline.stages[0].status).toBe("passed");
+  });
+
+  it("changes nothing when the label already matches", () => {
+    const before = pipelineWith("Deploy to DEV");
+    const { pipeline, changed } = refreshStageLabels(before, source("Deploy to DEV"));
+    expect(changed).toEqual([]);
+    expect(pipeline).toBe(before);
+  });
+
+  it("keeps the name a stage ran under when config no longer defines it", () => {
+    const before = pipelineWith("Deploy to DEV");
+    const { pipeline, changed } = refreshStageLabels(before, { routes: [], rules: [] });
+    expect(changed).toEqual([]);
+    expect(pipeline.stages[0].name).toBe("Deploy to DEV");
   });
 });
