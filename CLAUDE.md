@@ -964,6 +964,47 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### A revert that replayed the repairs of the run it discarded
+
+`dropRepairs` in `revertToStage`, 26 Aug 2026. The module already states the rule
+twice, in its own comments, about the two fields beside it: re-opening a stage clears
+its `checklist` because keeping it "would gate the task on evidence about work that no
+longer exists", and clears `planSteps` for the same reason. It then mapped every
+**subtask** to pending, correction subtasks included.
+
+A correction exists to fix one specific version of a stage's output; an amendment
+exists to absorb one specific upstream change. A revert throws that output away and
+re-runs the stage cold, so every repair against it is meaningless by construction —
+the identical argument, one field along, never applied.
+
+Measured on NMGB-2814. A revert on `rc-implement-sql` re-ran the stage correctly
+(twelve files, on Opus) and then re-opened **seven historical corrections** as pending
+work: findings from three separate days, 12,000 to 16,000 characters each. The first
+ran, correctly found nothing to do — its finding was about `Index.cshtml:62` and a
+period dropdown fixed two days earlier — wrote no files, and was held. Six more were
+queued behind it, and `rc-implement-app` had **twelve**, giving nineteen Opus sessions
+whose whole content was re-reading findings about versions that no longer existed.
+
+**`correctionChangedNothing` is what made it visible**, and it had shipped that
+morning. Without it the first replay would have settled `passed`, the route would have
+carried on, and the cost would have read as the task simply being expensive. Worth
+recording as the first case where one of these checks caught a defect in the harness
+rather than in a stage.
+
+**`narrowAmendments` does not reach these.** It is keyed on `upstream.stageId`, so it
+absorbs amendments of a common upstream stage and a plain correction — which has no
+upstream — is invisible to it. Filtering on the presence of `correction` covers both
+kinds, which is the right key: what matters is that a subtask is a repair, not what it
+is a repair of.
+
+Two rules:
+
+- **Never empties the stage.** A repair implies a base subtask beside it, but if
+  filtering removed everything the original list is kept, because a stage with no
+  subtasks is skipped rather than re-run — a worse outcome than replaying one repair.
+- **Every base subtask of a split stage survives.** The parallel units are the stage's
+  own work, not repairs of it.
+
 ### Two stages that both deployed to DEV, named the other way round
 
 `refreshStageLabels`, 26 Aug 2026. A second operator trying the harness read

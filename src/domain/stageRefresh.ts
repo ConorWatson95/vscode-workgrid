@@ -544,7 +544,28 @@ export function revertToStage(
       // re-run inherit credit for work that no longer exists, which is the exact
       // confusion per-step accounting exists to remove.
       planSteps: undefined,
-      subtasks: stage.subtasks.map((subtask) => ({
+      // Repairs are dropped, not re-opened. A correction exists to fix one specific
+      // version of a stage's output and an amendment to absorb one specific upstream
+      // change; a revert throws that output away and re-runs the stage cold, so every
+      // repair against it is meaningless by construction. This is the same rule the
+      // two fields above follow, and it was the one place it had not been applied.
+      //
+      // Measured on NMGB-2814, 26 Aug 2026. A revert re-opened seven historical
+      // corrections on `rc-implement-sql` -- findings from three separate days, 12,000
+      // to 16,000 characters each -- as pending work to be replayed against freshly
+      // re-run output. The first ran, correctly found nothing to do (its finding was
+      // about `Index.cshtml:62` and a dropdown fixed two days earlier), wrote no files,
+      // and was held by `correctionChangedNothing`. Six more were queued behind it, and
+      // `rc-implement-app` had twelve. Every one an Opus session re-reading a finding
+      // about a version that no longer exists.
+      //
+      // `narrowAmendments` does not reach these: it is keyed on `upstream.stageId`, and
+      // a plain correction has no upstream. Filtering here covers both kinds.
+      //
+      // Never empties the stage: a repair implies a base subtask beside it, but if
+      // filtering somehow removed everything the original list is kept, because a stage
+      // with no subtasks would be skipped rather than re-run.
+      subtasks: (dropRepairs(stage.subtasks) ?? stage.subtasks).map((subtask) => ({
         ...subtask,
         status: "pending" as const,
         startedAt: undefined,
@@ -845,6 +866,17 @@ export function formatSendBackNote(
   ];
   if (note?.trim()) parts.push(`Also, from the operator: ${note.trim()}`);
   return parts.join("\n\n");
+}
+
+/**
+ * The subtasks of a stage that are its own work rather than a repair of it.
+ *
+ * Returns undefined when that would leave nothing, so the caller can fall back to
+ * the list it had. See `revertToStage` for why repairs are dropped on a revert.
+ */
+function dropRepairs<T extends { correction?: unknown }>(subtasks: readonly T[]): T[] | undefined {
+  const kept = subtasks.filter((subtask) => !subtask.correction);
+  return kept.length > 0 ? kept : undefined;
 }
 
 function findDefinition(

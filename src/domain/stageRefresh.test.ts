@@ -1345,3 +1345,91 @@ describe("refreshStageLabels", () => {
     expect(pipeline.stages[0].name).toBe("Deploy to DEV");
   });
 });
+
+
+/**
+ * A revert must not replay the repairs of the run it just discarded.
+ *
+ * NMGB-2814, 26 Aug 2026: a revert re-opened seven historical corrections on
+ * `rc-implement-sql` as pending work, to be replayed against freshly re-run output.
+ * The first found nothing to do -- its finding was about a dropdown fixed two days
+ * earlier -- wrote no files, and was held by `correctionChangedNothing`. Six more
+ * were queued, and the stage after it had twelve.
+ */
+describe("revertToStage drops repairs", () => {
+  const withSubtasks = (subs: TaskStage["subtasks"]): TaskPipeline => ({
+    routeId: "r",
+    stages: [
+      stage({ id: "build", name: "Build", status: "passed", subtasks: subs }),
+      stage({ id: "ship", name: "Ship", status: "pending" }),
+    ],
+  });
+
+  const sub = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    status: "done" as const,
+    intent: "i",
+    startedAt: "2026-08-24T10:00:00.000Z",
+    ...extra,
+  });
+
+  it("keeps the base subtask and drops correction subtasks", () => {
+    const before = withSubtasks([
+      sub("build-1"),
+      sub("build-fix-1", { correction: { finding: "old finding", at: "2026-08-24T11:46:00.000Z" } }),
+      sub("build-fix-2", { correction: { finding: "older finding", at: "2026-08-25T07:19:00.000Z" } }),
+    ] as TaskStage["subtasks"]);
+
+    const result = revertToStage(before, "build", { at: "2026-08-26T10:27:00.000Z" });
+
+    const subtasks = result!.pipeline.stages[0].subtasks;
+    expect(subtasks.map((s) => s.id)).toEqual(["build-1"]);
+    expect(subtasks[0].status).toBe("pending");
+  });
+
+  it("drops amendments too, which narrowAmendments cannot reach", () => {
+    // Keyed on upstream.stageId, so a plain correction has no upstream and is
+    // invisible to it. Both kinds are repairs of discarded output.
+    const before = withSubtasks([
+      sub("build-1"),
+      sub("build-amend-1", {
+        correction: { finding: "upstream moved", at: "x", upstream: { stageId: "plan" } },
+      }),
+      sub("build-fix-1", { correction: { finding: "f", at: "y" } }),
+    ] as TaskStage["subtasks"]);
+
+    const result = revertToStage(before, "build", { at: "2026-08-26T10:27:00.000Z" });
+
+    expect(result!.pipeline.stages[0].subtasks.map((s) => s.id)).toEqual(["build-1"]);
+  });
+
+  it("keeps every base subtask of a split stage", () => {
+    const before = withSubtasks([
+      sub("build-1"),
+      sub("build-2"),
+      sub("build-fix-1", { correction: { finding: "f", at: "y" } }),
+    ] as TaskStage["subtasks"]);
+
+    const result = revertToStage(before, "build", { at: "2026-08-26T10:27:00.000Z" });
+
+    expect(result!.pipeline.stages[0].subtasks.map((s) => s.id)).toEqual(["build-1", "build-2"]);
+  });
+
+  it("never empties a stage, even if every subtask looks like a repair", () => {
+    // A stage with no subtasks would be skipped rather than re-run, which is worse
+    // than replaying one repair.
+    const before = withSubtasks([
+      sub("build-fix-1", { correction: { finding: "f", at: "y" } }),
+    ] as TaskStage["subtasks"]);
+
+    const result = revertToStage(before, "build", { at: "2026-08-26T10:27:00.000Z" });
+
+    expect(result!.pipeline.stages[0].subtasks).toHaveLength(1);
+  });
+
+  it("leaves a stage with no repairs exactly as before", () => {
+    const before = withSubtasks([sub("build-1"), sub("build-2")] as TaskStage["subtasks"]);
+    const result = revertToStage(before, "build", { at: "2026-08-26T10:27:00.000Z" });
+    expect(result!.pipeline.stages[0].subtasks.map((s) => s.id)).toEqual(["build-1", "build-2"]);
+  });
+});
