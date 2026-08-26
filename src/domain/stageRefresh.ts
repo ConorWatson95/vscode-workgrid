@@ -762,9 +762,32 @@ export function sendBackTargets(
   // findings to planning is a real move — a review that says an object is in the
   // wrong layer has found a planning error — but it re-opens everything after
   // planning, so it must be chosen by name rather than arrived at by default.
+  // Then: a stage that produced something outranks one that produced nothing,
+  // however near it is. `correctStage` works by handing the session its own previous
+  // output and telling it what is wrong with it, so a stage that wrote no files gives
+  // a correction nothing to start from -- and being nearest is exactly how it becomes
+  // the default.
+  //
+  // Measured on NMGB-2814, 26 Aug 2026. A SQL review found three findings, every one
+  // naming a stored procedure or a `.sql` file, and the third saying in as many words
+  // "For the data stage, not for this one". The recommendation offered was
+  // `Navigation and permissions`, which sat immediately before the review and had
+  // written **zero** files across twelve subtasks. `Implement the data`, which wrote
+  // the procedure the findings named, was further away and so lost.
+  //
+  // Kept in the list rather than removed, for `namedByFindings`' reason: sending
+  // findings to a stage that wrote nothing is occasionally right -- a stage that was
+  // *supposed* to write something and did not is a real target -- but it must be
+  // chosen by name rather than arrived at by proximity.
+  const wrote = (stage: TaskStage): boolean =>
+    stage.subtasks.some((subtask) => (subtask.activity?.pathsWritten?.length ?? 0) > 0);
+
+  const work = nearestFirst.filter((stage) => stage.kind !== "planning");
+  const planning = nearestFirst.filter((stage) => stage.kind === "planning");
   return [
-    ...nearestFirst.filter((stage) => stage.kind !== "planning"),
-    ...nearestFirst.filter((stage) => stage.kind === "planning"),
+    ...work.filter(wrote),
+    ...work.filter((stage) => !wrote(stage)),
+    ...planning,
   ];
 }
 

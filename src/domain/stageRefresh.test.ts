@@ -1433,3 +1433,78 @@ describe("revertToStage drops repairs", () => {
     expect(result!.pipeline.stages[0].subtasks.map((s) => s.id)).toEqual(["build-1", "build-2"]);
   });
 });
+
+
+/**
+ * A stage that produced nothing must not become the default send-back target.
+ *
+ * NMGB-2814, 26 Aug 2026: a SQL review raised three findings, every one naming a
+ * stored procedure or a `.sql` file, the third saying "For the data stage, not for
+ * this one". The recommendation offered was `Navigation and permissions` -- which sat
+ * immediately before the review and had written **zero** files across twelve
+ * subtasks, so a correction would have handed its session no previous output at all.
+ */
+describe("sendBackTargets prefers a stage that produced something", () => {
+  const wrote = (paths: string[]) => ({
+    subtasks: [
+      {
+        id: "s1",
+        status: "done" as const,
+        intent: "i",
+        activity: paths.length > 0 ? { pathsWritten: paths } : {},
+      },
+    ],
+  });
+
+  const pipelineOf = (): TaskPipeline => ({
+    routeId: "r",
+    stages: [
+      stage({ id: "impl-sql", name: "Implement the data", kind: "implementation", status: "passed", ...wrote(["a/x.sql"]) }),
+      stage({ id: "nav", name: "Navigation and permissions", kind: "implementation", status: "passed", ...wrote([]) }),
+      stage({
+        id: "review",
+        name: "SQL review",
+        kind: "codeReview",
+        status: "awaiting-approval",
+        sendBackTo: ["kind:implementation"],
+      }),
+    ],
+  });
+
+  it("puts the stage that wrote files first, even though it is further away", () => {
+    const targets = sendBackTargets(pipelineOf(), "review");
+    expect(targets.map((t) => t.id)).toEqual(["impl-sql", "nav"]);
+  });
+
+  it("still offers the empty stage, so it can be chosen by name", () => {
+    // Sending findings to a stage that was supposed to write something and did not is
+    // a real move; it just must not be arrived at by proximity.
+    expect(sendBackTargets(pipelineOf(), "review").map((t) => t.id)).toContain("nav");
+  });
+
+  it("keeps nearest-first among stages that all produced something", () => {
+    const pipeline: TaskPipeline = {
+      routeId: "r",
+      stages: [
+        stage({ id: "first", name: "First", kind: "implementation", status: "passed", ...wrote(["a"]) }),
+        stage({ id: "second", name: "Second", kind: "implementation", status: "passed", ...wrote(["b"]) }),
+        stage({ id: "review", name: "R", kind: "codeReview", status: "awaiting-approval", sendBackTo: ["kind:implementation"] }),
+      ],
+    };
+    expect(sendBackTargets(pipeline, "review").map((t) => t.id)).toEqual(["second", "first"]);
+  });
+
+  it("still ranks planning last, whatever it wrote", () => {
+    const pipeline: TaskPipeline = {
+      routeId: "r",
+      stages: [
+        stage({ id: "plan", name: "Plan", kind: "planning", status: "passed", ...wrote(["plan.md"]) }),
+        stage({ id: "nav", name: "Nav", kind: "implementation", status: "passed", ...wrote([]) }),
+        stage({ id: "review", name: "R", kind: "codeReview", status: "awaiting-approval", sendBackTo: ["kind:implementation", "kind:planning"] }),
+      ],
+    };
+    // The empty implementation stage still outranks planning: planning re-opens
+    // everything after it, so it is the most expensive choice on the list.
+    expect(sendBackTargets(pipeline, "review").map((t) => t.id)).toEqual(["nav", "plan"]);
+  });
+});

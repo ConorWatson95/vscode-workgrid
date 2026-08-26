@@ -964,6 +964,44 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### A send-back offered to the stage that had written nothing
+
+`sendBackTargets`, 26 Aug 2026. The list is ordered nearest-first because "the stage
+that produced the work under review is the likely target", and the caller takes the
+first entry as its recommendation. That was already refined once — a stage that can
+change the work outranks one that only decides what should be done, so planning sorts
+last — and the same argument had a second half nobody had applied.
+
+On NMGB-2814 a SQL review raised three findings. Every one named a stored procedure or
+a `.sql` file, and the third said in as many words *"For the data stage, not for this
+one"*. The recommendation offered was **Navigation and permissions**, which sat
+immediately before the review and had written **zero files across twelve subtasks**.
+`Implement the data`, which wrote the procedure two of the findings named, was further
+away and so lost.
+
+`correctStage` works by handing the session its own previous report and telling it
+what is wrong with it — that retention is the entire saving — so a stage that produced
+nothing gives a correction nothing to start from. This is `stageProductivity`'s
+argument applied to targeting rather than to settling: `pathsWritten` is the same
+evidence, read for a different question.
+
+Two rules:
+
+- **Kept in the list, not removed**, for `namedByFindings`' reason: a stage that was
+  *supposed* to write something and did not is a real target, so it must be reachable
+  — just chosen by name rather than arrived at by proximity.
+- **An empty implementation stage still outranks planning.** Planning re-opens
+  everything after it, which makes it the most expensive choice on the list whatever
+  it wrote.
+
+Not fixed, and the better fix if it is ever worth the parsing: attributing a finding
+to the stage that wrote the file it *names*. `pathsWritten` is recorded verbatim and
+the findings here named `_Detail.sql` explicitly, so the evidence exists — but a
+finding spells a path however it likes (`_Detail.sql:149-155` against
+`dbo.p_Bespoke_DealerReviewSummary_Detail.StoredProcedure.sql`), and fuzzy matching
+that picks the wrong stage is worse than proximity that admits it is guessing. The
+ordering above fixes the observed failure without any of that.
+
 ### Processes the harness started, and the one it must never touch
 
 `domain/sessionProcesses.ts` + `services/sessionProcessRegistry.ts`, 26 Aug 2026.
