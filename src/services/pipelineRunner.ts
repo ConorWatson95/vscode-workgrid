@@ -146,6 +146,13 @@ export interface StageSessionRunner {
        * acts — see `domain/mcpReadiness.ts`.
        */
       requiredMcpServers?: readonly string[];
+      /**
+       * Which subtask the session is for, recorded against its OS process so an
+       * extension host that crashes leaves something reapable — see
+       * `domain/sessionProcesses.ts`.
+       */
+      subtaskId?: string;
+      stageName?: string;
     },
   ): Promise<{
     ok: boolean;
@@ -1284,6 +1291,8 @@ export class PipelineRunner {
     let reply;
     try {
       reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
+        subtaskId: subtask.id,
+        stageName: stage.name,
         model: this.modelForSubtask(task, stage, subtask),
         requiredMcpServers: stage.requiredMcpServers,
         onDenial: (denial) => this.onDenial(task, denial),

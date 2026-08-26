@@ -964,6 +964,73 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### Processes the harness started, and the one it must never touch
+
+`domain/sessionProcesses.ts` + `services/sessionProcessRegistry.ts`, 26 Aug 2026.
+`AgentSessionManager` keeps sessions in a `Map<taskId, ClaudeStreamSession>`,
+`stop()` calls `child.kill()`, and `dispose()` reaps every session on deactivate — so
+stopping a task really does end its process and a clean reload leaves nothing behind.
+What none of it survives is the extension host **crashing**: the map goes with it, and
+a live stage session keeps running with no record of its pid, no owner, and nothing
+that will ever kill it.
+
+The registry writes pid, task, subtask and spawn time at `create` and clears it at
+`stop`; an activation sweep decides what to do with whatever is left.
+
+**The rule that matters most is only ever reap what we started**, and it is written
+from nearly getting it wrong. Investigating a stopped task, a listing of every
+`claude.exe` on the machine showed three running for two days, and they were called
+orphaned stage sessions. They were the operator's **chat tabs** — one of them the
+session having the conversation — and a sweep keyed on the process name would have
+killed all three. The tell was in the command line (a stage session carries
+`--plugin-dir`, `--mcp-config` and `--tools`; an interactive one carries
+`--replay-user-messages` and none of the three), but the honest fix is not a better
+classifier: it is to never classify. A process is a candidate only because the harness
+wrote a record when it spawned it, and anything unrecorded belongs to somebody else
+whatever it looks like.
+
+Rules, each load-bearing:
+
+- **Never on a pid alone.** Pids are reused, so a record surviving a crash may name a
+  process that is now something else — quite possibly one of those chat sessions.
+  Liveness is necessary and not sufficient; the probe must also say the process started
+  when we say we did, within a deliberately generous tolerance. A pid that started far
+  later is *forgotten*, not killed.
+- **An unidentifiable process is kept.** Where the platform cannot supply a start time
+  the answer is keep, the direction `WorktreeDiscardService` and the unmeasured-wait
+  rule already choose: absence of measurement is not permission to act. Windows gets a
+  real answer from one CIM query for every pid at once; elsewhere the field is absent
+  and nothing is ever killed.
+- **A hand-driven session is unreapable by construction.** Its record carries no
+  subtask, so there is nothing that can have gone inactive — safe by shape rather than
+  by a check somebody could get wrong. The same line `--tools` and the protocol skill
+  draw: the runtime narrows a stage, never a person.
+- **Keyed on the subtask, not the stage.** The operator's instinct was to compare
+  against the current stage and kill anything working on an earlier one; the subtask is
+  both simpler and stricter, and it catches the case the stage test misses — a subtask
+  reverted by a stop, a question or a transient failure leaves the stage unchanged.
+- **Kills are announced.** This is the one part of the runtime that terminates
+  something, and a kill nobody can see afterwards is indistinguishable from a process
+  that was never there — the rule a discarded file and truncated output both follow.
+  Nothing is said when nothing happened.
+- **Not on the state file.** A pid is an ephemeral machine-local fact; `state.json`
+  lives under the git common dir, is shared by every worktree and window, and is the
+  durable record of the work. This sits beside the permission gate root under
+  `globalStorageUri`.
+- **Non-fatal throughout.** A sweep that cannot read its registry, probe the OS or kill
+  a process leaves everything as it was. It runs at activation, and failing activation
+  over a tidy-up trades a leaked process for a broken extension.
+- **Activation only.** A periodic sweep is the obvious extension and the wrong trade:
+  the records are written by this window, so the only moment a live process can lose
+  its owner is a host restart, and probing on a timer spends a PowerShell spawn to
+  learn nothing.
+
+Found on the way: **`child.kill()` is not a tree kill on Windows.** The CLI spawns
+tool and subagent processes of its own — 7% of stage sessions use the Agent tool — so
+a stage that had delegated left its children behind. The sweep uses
+`taskkill /T /F`. The in-session `stop()` path still calls `child.kill()`, which is
+the pre-existing behaviour and a separate question.
+
 ### A revert that replayed the repairs of the run it discarded
 
 `dropRepairs` in `revertToStage`, 26 Aug 2026. The module already states the rule

@@ -66,6 +66,11 @@ export interface StageSessions {
     taskId: string,
     options: Omit<StreamSessionOptions, "command">,
     initialPrompt?: string,
+    /**
+     * Which subtask the session is for, so its OS process can be recorded and
+     * reaped if the extension host dies before stopping it.
+     */
+    identity?: { subtaskId?: string; stageName?: string },
   ): StageSession;
   stop(taskId: string): void;
 }
@@ -157,6 +162,15 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
       /** Called as the run works, throttled to `ACTIVITY_INTERVAL_MS`. */
       onActivity?: (activity: SubtaskActivity) => void;
       /**
+       * Which subtask this session is for, recorded against its process so a crashed
+       * extension host leaves something reapable. On the options object rather than a
+       * positional parameter, so no existing call site shifts an argument -- the
+       * mistake that once slid every argument of `PipelineRunner`'s constructor onto
+       * the wrong slot and still typechecked.
+       */
+      subtaskId?: string;
+      stageName?: string;
+      /**
        * MCP servers this stage cannot do its job without. Checked against the
        * CLI's init event and the stage is abandoned if any is unavailable —
        * before the model acts, which is the only point at which abandoning it
@@ -207,6 +221,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         model: override && override.length > 0 ? override : base.model,
       },
       prompt,
+      { subtaskId: options?.subtaskId, stageName: options?.stageName },
     );
 
     return new Promise((resolve) => {

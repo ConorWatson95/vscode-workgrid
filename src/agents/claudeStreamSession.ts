@@ -336,6 +336,17 @@ export class ClaudeStreamSession {
     this.send("/compact");
   }
 
+  /**
+   * The OS process id, while one is running.
+   *
+   * Exposed so `SessionProcessRegistry` can record what was spawned. The registry is
+   * the only thing that needs it, and only because a crashed extension host loses the
+   * session map — see `domain/sessionProcesses.ts`.
+   */
+  get pid(): number | undefined {
+    return this.child && this.child.exitCode === null ? this.child.pid : undefined;
+  }
+
   /** Terminates the session process. */
   stop(): void {
     if (this.child && this.child.exitCode === null) {

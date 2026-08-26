@@ -13,6 +13,7 @@ import { ExtensionConfiguration } from "./configuration/extensionConfiguration";
 import { TerminalManager } from "./processes/terminalManager";
 import { AgentProviderRegistry } from "./agents/agentProviderRegistry";
 import { AgentSessionManager } from "./agents/agentSessionManager";
+import { SessionProcessRegistry } from "./services/sessionProcessRegistry";
 import { SessionArchive } from "./agents/sessionArchive";
 import { ArchivedHistoryRepository } from "./persistence/archivedHistoryRepository";
 import { NativeSessionWatcher } from "./agents/nativeSessionWatcher";
@@ -208,8 +209,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       () => configuration.claudeCommand(repositoryUri),
     ),
   );
-  const sessions = new AgentSessionManager(logger, () =>
-    configuration.claudeCommand(repositoryUri),
+  // Durable record of what was spawned, so an extension host that crashes -- where
+  // `dispose()` never runs -- does not leave a stage session alive with nothing able
+  // to reach it. Machine-local beside the permission gate root, never in the state
+  // file: a pid is ephemeral and that file is shared by every worktree and window.
+  const agentProcesses = new SessionProcessRegistry({
+    directory: vscode.Uri.joinPath(context.globalStorageUri, "agent-processes").fsPath,
+    logger,
+  });
+  const sessions = new AgentSessionManager(
+    logger,
+    () => configuration.claudeCommand(repositoryUri),
+    agentProcesses,
   );
   context.subscriptions.push({ dispose: () => sessions.dispose() });
 
@@ -1093,7 +1104,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.warn(`Could not sync gate declarations: ${String(error)}`);
     }
   };
+  /**
+   * Reaps agent processes an unclean shutdown left running.
+   *
+   * At activation only. A periodic sweep would be the obvious extension and is the
+   * wrong trade: the records are written by this window, so the only moment a live
+   * process can have lost its owner is a host restart -- and probing the OS on a
+   * timer costs a PowerShell spawn to learn nothing. `sweepStaleSubtasks` already
+   * covers the other direction on its own interval.
+   *
+   * The set is every subtask any pipeline currently considers running. A record
+   * naming anything else has outlived its work, including a subtask reverted by a
+   * stop, a question or a transient failure -- which is why this is keyed on the
+   * subtask rather than on the stage, since in those cases the stage never changed.
+   */
+  const sweepAgentProcesses = async (): Promise<void> => {
+    if (!repositoryRoot) return;
+    try {
+      const tasks = await repository.getByRepository(repositoryRoot);
+      const active = new Set<string>();
+      for (const task of tasks) {
+        for (const stage of task.pipeline?.stages ?? []) {
+          for (const subtask of stage.subtasks) {
+            if (subtask.status === "active") active.add(subtask.id);
+          }
+        }
+      }
+      await agentProcesses.sweep(active);
+    } catch (error) {
+      logger.warn(`Harness could not sweep agent processes: ${error}`);
+    }
+  };
+
   void repositoryReady.then(() => syncGateDeclarations());
+  void repositoryReady.then(() => sweepAgentProcesses());
   // Watched as a *file*, because that is what it is. `onDidChangeConfiguration` fires for
   // VS Code settings and never for `harness.json`, so hooking it would have looked
   // correct and only ever run at activation — which is the same class of mistake as the
