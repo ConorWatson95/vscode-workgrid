@@ -2855,3 +2855,124 @@ describe("reclaimStale", () => {
     expect(sessions.calls.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * A plan that says it is not finished, in prose nobody reads.
+ *
+ * NMGB-2814: `rc-plan` closed with eleven items under `## Open questions / risks`
+ * and its own report said they needed answering before the next stage ran. It
+ * settled `passed`, the implementation stage started eleven minutes later, and
+ * every question was answered by a guess -- one of them the performance problem
+ * the report actually shipped with.
+ */
+describe("a planning stage that leaves questions in its plan", () => {
+  const PLANNING: RouteDefinition = {
+    id: "planning",
+    label: "Planning",
+    description: "d",
+    stages: [
+      {
+        id: "plan",
+        label: "Plan",
+        kind: "planning",
+        intent: "Write the plan.",
+        splittable: false,
+        gate: "auto",
+        planOutput: "docs/plans/${branch}/plan.md",
+      },
+      {
+        id: "build",
+        label: "Build",
+        kind: "implementation",
+        intent: "Do it.",
+        splittable: false,
+        gate: "auto",
+      },
+      {
+        id: "human-verification",
+        label: "Sign off",
+        kind: "humanVerification",
+        intent: "Check it.",
+        splittable: false,
+        gate: "approval",
+      },
+    ],
+  };
+
+  const NEWLINE = String.fromCharCode(10);
+  const doc = (...lines: string[]) => lines.join(NEWLINE);
+  const planningTask = () => ({ ...task(), pipeline: createPipeline(PLANNING) });
+  const at = (body: string) => ({ "docs/plans/bug/dealer-mapping/plan.md": body });
+
+  it("holds the stage, and does not run the stage after it", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "Plan written." } });
+    const { runner, repo } = makeRunner(sessions, {
+      files: at(doc("# Plan", "1. Build it.", "", "## Open questions", "- Which colour scheme?")),
+    });
+    const subject = planningTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "plan")!;
+    expect(stage.status).not.toBe("passed");
+    expect(stage.blocked).toContain("unresolved question");
+    expect(stage.blocked).toContain("docs/plans/bug/dealer-mapping/plan.md");
+    expect(sessions.calls.some((c) => c.label.startsWith("build:"))).toBe(false);
+  });
+
+  it("passes a plan whose questions section says none", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: "Plan written." },
+      "build:": { text: "Built." },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      files: at(doc("# Plan", "1. Build it.", "", "## Open questions", "- None.")),
+    });
+    const subject = planningTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(
+      (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "plan")!.status,
+    ).toBe("passed");
+  });
+
+  it("substitutes the branch, so a per-task plan path resolves", async () => {
+    const sessions = fakeSessions({ "plan:": { text: "Plan written." } });
+    const { runner, repo } = makeRunner(sessions, {
+      files: at(doc("## Unresolved", "- Which one?")),
+    });
+    const subject = planningTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(
+      (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "plan")!.blocked,
+    ).toContain("bug/dealer-mapping");
+  });
+
+  it("does nothing for a stage that declares no plan output", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: doc("Plan written.", "## Open questions", "- Which colour scheme?") },
+      "build:": { text: "Built." },
+    });
+    const route: RouteDefinition = {
+      ...PLANNING,
+      stages: PLANNING.stages.map((stage) =>
+        stage.id === "plan" ? { ...stage, planOutput: undefined } : stage,
+      ),
+    };
+    const { runner, repo } = makeRunner(sessions, {});
+    const subject = { ...task(), pipeline: createPipeline(route) };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect(
+      (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "plan")!.status,
+    ).toBe("passed");
+  });
+});

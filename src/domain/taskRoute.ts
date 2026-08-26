@@ -304,6 +304,31 @@ export interface RouteStageDefinition {
    */
   planFile?: string;
   /**
+   * The plan document this stage *writes*, checked for unresolved questions before
+   * the stage is allowed to settle.
+   *
+   * The mirror of `planFile`, which holds a stage to a plan somebody else wrote.
+   * This holds the *author* to having finished it. Measured on NMGB-2814: `rc-plan`
+   * did outstanding work — read the ticket over MCP, downloaded and parsed the
+   * wireframe workbook, read the mock-ups — and closed with eleven items under
+   * `## Open questions / risks`, saying in its own report that they *"need a human
+   * answer before stage 3/4 proceed"*. It settled `passed`, `rc-implement-sql`
+   * started eleven minutes later, and each question was answered by a guess. One of
+   * them predicted the performance problem the report actually shipped with.
+   *
+   * Read from the worktree and placeholder-substituted, for the same reasons as
+   * `planFile` and `verify` respectively: the document is this task's work product,
+   * and the path contains the branch (`docs/plans/${branch}/rc-plan.md`).
+   *
+   * Declared rather than inferred from the stage kind or from `pathsWritten`. A
+   * planning stage does not necessarily produce a document a later stage reads, and
+   * inference from written paths is unavailable anyway — `rc-plan` wrote its plan
+   * with a shell heredoc, so `SubtaskActivity.pathsWritten` was empty. A check that
+   * silently does not fire is the failure the quoted hook command taught this
+   * codebase to fear.
+   */
+  planOutput?: string;
+  /**
    * MCP servers this stage cannot do its job without, by config name.
    *
    * The CLI connects `--mcp-config` servers before the first turn and reports the

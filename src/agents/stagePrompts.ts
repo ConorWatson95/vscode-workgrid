@@ -96,7 +96,7 @@ export interface StageContext {
    * Per-task rather than per-stage, so it sits in the cached prefix beside the
    * brief and the route outline: twenty-two sessions pay for it once.
    */
-  references?: { path: string; note?: string }[];
+  references?: { path: string; note?: string; origin?: "operator" | "discovered" }[];
 }
 
 /**

@@ -470,6 +470,11 @@ export interface TaskStage {
    */
   planFile?: string;
   /**
+   * Plan document this stage writes, relative to the worktree; see the route
+   * definition. Held to having no unresolved questions before the stage settles.
+   */
+  planOutput?: string;
+  /**
    * Every numbered step of `planFile`, and what this stage said about each.
    *
    * Held on the stage rather than the pipeline because the steps belong to the run:

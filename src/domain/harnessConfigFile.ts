@@ -339,6 +339,7 @@ function parseStage(
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
+    ...(str(raw.planOutput) ? { planOutput: str(raw.planOutput) } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
     ...(requiredMcpServers && requiredMcpServers.length > 0 ? { requiredMcpServers } : {}),
   };

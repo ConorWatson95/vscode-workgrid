@@ -54,6 +54,7 @@ const REFRESHABLE = [
   "model",
   "verify",
   "planFile",
+  "planOutput",
   "requiresPullRequest",
 ] as const;
 
@@ -813,6 +814,7 @@ function findDefinition(
       handoff?: boolean;
       verify?: string;
       planFile?: string;
+      planOutput?: string;
       requiresPullRequest?: boolean;
       requiredMcpServers?: readonly string[];
       // Only a route stage declares these; a rule stage has neither, and `undefined`

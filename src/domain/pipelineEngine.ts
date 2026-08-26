@@ -159,6 +159,7 @@ function createStage(
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     ...(definition.verify ? { verify: definition.verify } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
+    ...(definition.planOutput ? { planOutput: definition.planOutput } : {}),
     ...(definition.checklistScope
       ? { checklistScope: definition.checklistScope }
       : {}),

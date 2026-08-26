@@ -80,6 +80,9 @@ import {
   subtaskPrompt,
 } from "../agents/stagePrompts";
 import { PlanStep, parsePlanSteps } from "../domain/planSteps";
+import { parsePlanQuestions, planQuestionsReason } from "../domain/planQuestions";
+import { discoveredDocuments, discoveredNote } from "../domain/discoveredDocuments";
+import { addDiscoveredReferences } from "../domain/taskReferences";
 import {
   describeStaleSubtask,
   StaleSubtask,
@@ -606,6 +609,10 @@ export class PipelineRunner {
       references: task.references?.map((reference) => ({
         path: reference.path,
         note: reference.note,
+        // Carried through so the prompt can keep the two tiers apart: an operator
+        // entry decides the work, a discovered one only saves a stage the twenty-odd
+        // commands an earlier stage spent finding it.
+        origin: reference.origin,
       })),
       // Every later stage sees an approval note: guidance given at a gate is about the
       // work that follows, so expiring it at the next stage boundary would waste it.
@@ -1864,6 +1871,82 @@ export class PipelineRunner {
             `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
               "no files. Holding rather than passing: read what it did before approving.",
           );
+        }
+      }
+    }
+
+    // Documents this subtask went and found, so the stages behind it are told where
+    // they are instead of each spending the twenty-odd commands `rc-plan` spent
+    // downloading and parsing a ticket attachment -- or, far more often, not
+    // bothering and using a neighbouring feature as the template. Recorded on the
+    // task rather than the pipeline: a document belongs to the work, not to one run
+    // of one stage, and it must survive a revert that discards the stage that found
+    // it. Never overwrites an operator entry -- see `addDiscoveredReferences`.
+    if (reply.ok) {
+      const ran = pipeline.stages
+        .find((s) => s.id === stage.id)
+        ?.subtasks.find((s) => s.id === subtask.id);
+      const found = ran?.activity ? discoveredDocuments(ran.activity) : [];
+      if (found.length > 0) {
+        const next = addDiscoveredReferences(
+          task.references,
+          found.map((document) => ({
+            path: document.path,
+            note: discoveredNote(document, stage.name),
+          })),
+          new Date().toISOString(),
+        );
+        // Length is the honest test for "anything new": the adder returns a copy
+        // either way, so comparing identity would save the state file on every
+        // subtask that reads a document it has already recorded.
+        const added = next.length - (task.references?.length ?? 0);
+        if (added > 0) {
+          task = { ...task, references: next };
+          this.logger.info(
+            `Harness [${task.name}] ${stage.name} found ${added} new document(s); ` +
+              "recorded on the task so later stages are told where they are rather " +
+              "than each going to look.",
+          );
+        }
+      }
+    }
+
+    // A plan that says it is not finished, in prose nobody reads. The mirror of the
+    // `planSteps` hold below: that one catches a stage skipping a step of somebody
+    // else's plan, this catches the author of a plan leaving questions in it. On
+    // NMGB-2814 eleven of them settled `passed`, and each was answered by a guess in
+    // eight later sessions -- including one that predicted the performance problem
+    // the report shipped with.
+    if (reply.ok && stage.planOutput && this.readWorktreeFile) {
+      const settled = pipeline.stages.find((s) => s.id === stage.id);
+      const running = settled?.subtasks.some(
+        (s) => s.status === "pending" || s.status === "active",
+      );
+      if (settled && !running) {
+        const { command: planPath } = substitutePlaceholders(stage.planOutput, {
+          taskName: task.name,
+          branch: task.branchName,
+          baseBranch: task.baseBranch,
+          worktreePath: task.worktreePath,
+          repoRoot: task.repositoryRoot,
+          ticket: taskTicket(task),
+        });
+        // A missing plan is not held here. `changedNothing` and the stage's own
+        // report already speak to a planning stage that produced nothing, and
+        // holding twice for one fact gives the operator two stops to clear.
+        const document = await this.readWorktreeFile(task.worktreePath, planPath);
+        const questions = document ? parsePlanQuestions(document) : [];
+        if (questions.length > 0) {
+          const reason = planQuestionsReason(planPath, questions);
+          pipeline = recordStageBlocked(pipeline, stage.id, reason);
+          const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+          if (held.ok) {
+            pipeline = held.value;
+            steps.push(
+              `"${stage.name}" left ${questions.length} question(s) in its plan — held for you.`,
+            );
+            this.logger.warn(`Harness [${task.name}] ${stage.name}: ${reason}`);
+          }
         }
       }
     }

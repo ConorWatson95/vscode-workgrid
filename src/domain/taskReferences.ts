@@ -45,6 +45,24 @@ export interface TaskReference {
   note?: string;
   /** When it was added, so the record says when the operator made the claim. */
   at: string;
+  /**
+   * Who put it here.
+   *
+   * Absent means `"operator"`, so nothing persisted before this field existed
+   * changes meaning — the rule every other optional declaration in this domain
+   * follows.
+   *
+   * `"discovered"` marks a document a stage actually opened, recorded by
+   * `discoveredDocuments` so the stages behind it do not each go and find it
+   * again. It is held apart from an operator entry rather than merged into the
+   * same list because the two make different claims: the operator's says *this
+   * document governs the work*, which is a judgement only they can make, and a
+   * discovered one says only *this stage read this*. Presenting the second with
+   * the authority of the first is the failure the "named, never inferred" rule
+   * above exists to prevent, and marking it is what keeps that rule intact while
+   * still not throwing the fact away.
+   */
+  origin?: "operator" | "discovered";
 }
 
 /**
@@ -80,6 +98,45 @@ export function addReference(
   return [...rest, entry];
 }
 
+/**
+ * Adds documents a stage found, leaving everything already recorded alone.
+ *
+ * Three rules, each load-bearing:
+ *
+ * - **An existing entry is never replaced**, unlike `addReference`. The operator's
+ *   note is the part carrying the real information ("tab 3 of the wireframe"), and
+ *   a bare discovered path cannot reproduce it — so overwriting would trade the
+ *   only thing this cannot supply for a fact already held. It also means a stage
+ *   re-reading a document on every run cannot churn the list.
+ * - **Nothing is added when the path is already present under either origin**, so
+ *   the same attachment read by eight stages is one entry.
+ * - **Returns the input array unchanged when there is nothing new**, so a caller
+ *   can tell whether a save is needed rather than writing the state file on every
+ *   subtask.
+ */
+export function addDiscoveredReferences(
+  existing: readonly TaskReference[] | undefined,
+  documents: readonly { path: string; note?: string }[],
+  at: string,
+): TaskReference[] {
+  const current = existing ?? [];
+  const known = new Set(current.map((entry) => referenceKey(entry.path)));
+  const fresh = documents
+    .filter((document) => {
+      const key = referenceKey(document.path);
+      if (!key || known.has(key)) return false;
+      known.add(key);
+      return true;
+    })
+    .map((document) => ({
+      path: document.path.trim(),
+      at,
+      origin: "discovered" as const,
+      ...(document.note?.trim() ? { note: document.note.trim() } : {}),
+    }));
+  return fresh.length > 0 ? [...current, ...fresh] : [...current];
+}
+
 /** Drops a reference by path, leaving the rest in order. */
 export function removeReference(
   existing: readonly TaskReference[] | undefined,
@@ -107,9 +164,21 @@ export function normaliseReferences(value: unknown): TaskReference[] | undefined
       path: typeof entry.path === "string" ? entry.path.trim() : "",
       note: typeof entry.note === "string" && entry.note.trim() ? entry.note.trim() : undefined,
       at: typeof entry.at === "string" ? entry.at : "",
+      // Anything unrecognised reads as the operator's, which is the safe direction
+      // here and the opposite of `checklistAudience`'s: defaulting there would have
+      // hidden a delegated task, where defaulting here only states a document more
+      // strongly than it was meant. A discovered entry demoted to operator is a
+      // document a stage really did read; an operator entry demoted the other way
+      // would quietly lose the authority they gave it.
+      origin: entry.origin === "discovered" ? ("discovered" as const) : undefined,
     }))
     .filter((entry) => entry.path.length > 0)
-    .map((entry) => ({ path: entry.path, at: entry.at, ...(entry.note ? { note: entry.note } : {}) }));
+    .map((entry) => ({
+      path: entry.path,
+      at: entry.at,
+      ...(entry.note ? { note: entry.note } : {}),
+      ...(entry.origin ? { origin: entry.origin } : {}),
+    }));
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -136,18 +205,44 @@ export function normaliseReferences(value: unknown): TaskReference[] | undefined
  */
 export function referenceGuidance(references: readonly TaskReference[] | undefined): string[] {
   if (!references || references.length === 0) return [];
-  return [
-    "",
-    "These documents govern this task. Read the relevant parts before you start, and",
-    "before you use any existing feature in the code as a template:",
-    ...references.map((reference) =>
-      reference.note ? `- ${reference.path} — ${reference.note}` : `- ${reference.path}`,
-    ),
-    "",
-    "Where one of these and an existing implementation disagree, the document decides",
-    "behaviour, layout and naming; the code is a guide to style and structure only.",
-    "Where one of these and the brief disagree, follow the document and say so in your",
-    "report. If one is missing, or you cannot open it, ask — do not proceed from a",
-    "similar feature instead.",
-  ];
+  const line = (reference: TaskReference) =>
+    reference.note ? `- ${reference.path} — ${reference.note}` : `- ${reference.path}`;
+  const governing = references.filter((reference) => reference.origin !== "discovered");
+  const found = references.filter((reference) => reference.origin === "discovered");
+
+  // Two headings rather than one list, because the precedence between them is the
+  // whole reason the origins are kept apart. A discovered document is offered as a
+  // saving — the path an earlier stage established, so this one need not spend
+  // twenty commands finding it again — and explicitly not as an authority, since
+  // nobody has said it governs anything. Stating that is what keeps this from
+  // becoming the guessed reference `taskReferences` refuses to produce.
+  const lines: string[] = [];
+  if (governing.length > 0) {
+    lines.push(
+      "",
+      "These documents govern this task. Read the relevant parts before you start, and",
+      "before you use any existing feature in the code as a template:",
+      ...governing.map(line),
+      "",
+      "Where one of these and an existing implementation disagree, the document decides",
+      "behaviour, layout and naming; the code is a guide to style and structure only.",
+      "Where one of these and the brief disagree, follow the document and say so in your",
+      "report. If one is missing, or you cannot open it, ask — do not proceed from a",
+      "similar feature instead.",
+    );
+  }
+  if (found.length > 0) {
+    lines.push(
+      "",
+      "An earlier stage on this task found and read these. Nobody has said they govern",
+      "the work, so treat them as available rather than authoritative — but the paths",
+      "are established, so do not go looking for them again:",
+      ...found.map(line),
+      "",
+      "If one of these turns out to decide something the brief does not settle, say so in",
+      "your report, so it can be recorded as a governing document rather than rediscovered",
+      "by the stage after you.",
+    );
+  }
+  return lines;
 }
