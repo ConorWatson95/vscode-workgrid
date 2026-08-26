@@ -964,6 +964,101 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### A plan that said it was not finished
+
+`domain/planQuestions.ts` + `RouteStageDefinition.planOutput`, 26 Aug 2026. The
+twelfth instance of the reply-claims-an-outcome-the-parser-cannot-check disease, and
+the most expensive: the other eleven stop one stage, this one poisons every stage
+behind it.
+
+On NMGB-2814 `rc-plan` did everything its intent asked and more — read the ticket
+over MCP, ran the repository's own `Get-JiraAttachment.ps1 -Download`, unzipped the
+workbook, **wrote its own xlsx parser** because none existed, pulled the pyramid box
+labels out of `xl/drawings/drawing3.xml` by regex, read four mock-ups, and produced a
+429-line plan naming the report it was matching. It then closed with eleven items
+under `## Open questions / risks` and said in its own report that they *"need a human
+answer before stage 3/4 proceed"*.
+
+The stage settled `passed`. `rc-implement-sql` started eleven minutes later and each
+question was answered by a guess; eighteen corrections and amendments followed. One
+of the unanswered items — *"a candidate for the same DAR/consistency style
+pre-aggregation … rather than a live ad hoc query"* — **is the performance problem
+the report shipped with**, predicted in writing two days earlier and discarded.
+
+Worth separating from a model-quality question, because that is what it looked like
+first. The planning stages are declared `model: sonnet` in that project's routes (90
+of 169 stages are), so the obvious reading was that the cheap model wrote a weak
+plan. It did not: Sonnet found the ambiguity, stated it precisely, and was ignored.
+Reaching for a bigger model would have paid more for the same discard. **A stage
+correctly identifying what it does not know is worth nothing if nothing reads it.**
+
+- **The mirror of `planFile`.** That holds a stage to a plan somebody else wrote;
+  this holds the author to having finished it. Same worktree read, same placeholder
+  substitution — the path carries the branch.
+- **Declared, never inferred** from the stage kind or from `pathsWritten`. A planning
+  stage does not necessarily produce a document a later stage reads, and inference
+  from written paths was unavailable anyway: `rc-plan` wrote its plan with a shell
+  heredoc, so `SubtaskActivity.pathsWritten` was **empty**. A check that silently
+  does not fire is the failure the unquoted hook command taught this codebase to fear.
+- **Deliberately looser than `parseReviewFindings`.** Every other check in the domain
+  is narrow because a false stop teaches the operator to click past the stop that
+  matters. The cost is different in kind at a planning gate: the operator is standing
+  there with the plan open anyway, so a false positive costs one click where a missed
+  question costs a stage per guess. That asymmetry is what licenses matching an inline
+  phrase and not only a heading — three of that plan's questions were raised mid-step,
+  which is better writing and would otherwise be invisible.
+- **A missing plan is not held here**, since `changedNothing` and the stage's own
+  report already speak to a planning stage that produced nothing, and holding twice
+  for one fact gives the operator two stops to clear.
+- Guarded on `isNothingReported` (its fourth caller), plus the **negated head noun** —
+  "No open questions" is a count of none, which `isNothingReported` reads as a subject.
+  Guarded locally rather than by widening it, because `parseDeferrals` and
+  `parseReviewFindings` depend on it and a change there to settle a plan would change
+  what stops a deployment.
+
+### Documents a stage went and found
+
+`domain/discoveredDocuments.ts` + `TaskReference.origin`, the same day and the same
+failure seen from the other end. **Twenty-two of that stage's fifty-four commands
+were spent getting hold of documents, and none of it survived the session.**
+`references` was empty, so the eight stages behind it were told about no documents at
+all — each a cold session facing the same twenty-two commands, or, far more often,
+not bothering and using a neighbouring feature as the template. Which is precisely
+what `taskReferences` was built to prevent, arriving through the one door it left
+open: the operator had not named the document, and the stage that found it had
+nowhere to put it.
+
+Recording it passes `StageContext`'s own test — *eliminate deterministic facts that
+are expensive or risky to rediscover*. Where an attachment landed on disk is
+deterministic, cost real commands to establish once, and no cold session can derive it.
+
+- **Two tiers, because authority is not availability.** `taskReferences` says a
+  reference is "named, never inferred", since a guessed one is stated to every stage
+  with the authority of one the operator chose. That rule survives intact: nothing
+  scans, every path is one a stage actually **opened**, and `referenceGuidance` states
+  a discovered entry as *available rather than authoritative* under its own heading.
+- **An operator entry is never overwritten.** Their `note` is the part carrying the
+  real information — "tab 3 of the wireframe" — and a bare discovered path cannot
+  reproduce it, so overwriting would trade the one thing this cannot supply for a fact
+  already held. It also stops a stage re-reading a document from churning the list.
+- **Keyed on extension, not location.** The attachments landed in the **main
+  repository root**, not the worktree and not a documents folder, so any rule keyed on
+  where a file sits would have missed every one of them. No source file here carries
+  those extensions. `.md` and `.json` are excluded deliberately: a repository is full
+  of both, and a reference list nobody trusts is one nobody reads.
+- **Read from `pathsRead`, not from the commands.** A document is established as
+  relevant by having been opened, not downloaded — a stage that fetched five
+  attachments and read one has said which mattered. The commands supply only the
+  ticket key, which is what makes the note useful.
+- **Recorded on the task, not the pipeline**, so it survives a revert that discards
+  the stage that found it. A document belongs to the work, not to one run.
+
+**Not fixed, and adjacent:** the attachments were downloaded into the *main repository
+root* rather than a scratch directory, and `rc-plan` wrote its plan with a heredoc so
+the harness recorded no `pathsWritten` for it at all — which is also why
+`changedNothing` could never have caught this. Both are project-tooling questions, not
+runtime ones.
+
 ### The stage that did nothing, and said so only in prose
 
 Every defence above depends on the model emitting a marker: `BLOCKED`, `DEFERRED`,
