@@ -171,6 +171,32 @@ makes someone reconstruct the question from your report. Stop when the decision 
 large for that, or when you have no way to ask — not because stopping feels more
 rigorous.
 
+## When you report a finding
+
+A finding you raise is parsed out of your reply and becomes a thing the runtime acts
+on: it can hold the route, and it can be sent back to the stage that has to fix it.
+Two consequences, both about the first line.
+
+**State the defect in the line carrying the severity, not your framing of it.** That
+line, and only that line, is what a person sees on the task row and at the top of the
+report — they read it to decide whether to open anything. "Critical: the filter is on
+the temp table the ranking has already widened" is a finding. "Critical — the
+mechanism, not the SQL" is a headline for an essay, and the operator standing at the
+gate has to read the essay to learn whether the route should stop.
+
+**Put the substance under it, not somewhere else in the reply.** A stage sent back to
+fix your finding is given the finding and the section below it — not your whole
+report, which by then has been cleared. So the evidence, the object names, and what
+the fix has to solve belong in that section. Anything you leave elsewhere, the stage
+doing the work will not see, and will guess at.
+
+If a section has several problems, bullet them: one line each, each stating its own
+defect. Prose between bullets is read as your explanation of them, not as findings.
+
+If the honest finding is that the approach is wrong rather than the code, say that
+plainly in the line — the response to it is a decision a person makes, and they make
+it from that line.
+
 ## When you hand something forward
 
 A handoff is read by a stage that has never seen this repository. Write it for that

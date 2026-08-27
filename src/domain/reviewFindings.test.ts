@@ -258,8 +258,16 @@ describe("a heading that carries its finding", () => {
   it("reads the finding out of the heading that states it", () => {
     const findings = parseReviewFindings(REPLY);
     expect(findings).toEqual([
-      { severity: "critical", text: "the change is against the wrong stored procedure" },
-      { severity: "important", text: "column position is not controlled by the SELECT list" },
+      {
+        severity: "critical",
+        text: "the change is against the wrong stored procedure",
+        detail: "RU-547 has an attachment the earlier stages did not read.",
+      },
+      {
+        severity: "important",
+        text: "column position is not controlled by the SELECT list",
+        detail: "FieldName is matched by name; order comes from Weight.",
+      },
     ]);
   });
 
@@ -284,6 +292,96 @@ describe("a heading that carries its finding", () => {
     expect(findings).toEqual([
       { severity: "critical", text: "the migration drops a column" },
     ]);
+  });
+
+  /**
+   * The body of such a section belongs to no finding at all, which is invisible in a
+   * report shown beside the verbatim reply and load-bearing in a send-back note.
+   *
+   * The review that prompted it headed its blocker "Critical — the mechanism, not the
+   * SQL" and put the rejected design, the operator's own words and what the rework had
+   * to solve in the paragraphs below. Four words reached the finding; a correction
+   * given that note would have had to guess the rest.
+   */
+  describe("and the section body under it", () => {
+    it("is carried on the finding, so a send-back note states the problem", () => {
+      const findings = parseReviewFindings(
+        [
+          "### Critical — the mechanism, not the SQL",
+          "",
+          "The three procs each gained `@LocalOnly BIT = 0`. As SQL it is competent.",
+          "",
+          "But the scorecard already has a data-driven view mechanism.",
+        ].join("\n"),
+      );
+      expect(findings).toEqual([
+        {
+          severity: "critical",
+          text: "the mechanism, not the SQL",
+          detail: [
+            "The three procs each gained `@LocalOnly BIT = 0`. As SQL it is competent.",
+            "But the scorecard already has a data-driven view mechanism.",
+          ].join("\n"),
+        },
+      ]);
+      expect(formatFindings(findings)).toBe(
+        [
+          "**Critical**",
+          "- the mechanism, not the SQL",
+          "  The three procs each gained `@LocalOnly BIT = 0`. As SQL it is competent.",
+          "  But the scorecard already has a data-driven view mechanism.",
+        ].join("\n"),
+      );
+    });
+
+    it("keeps the evidence a fenced block holds", () => {
+      // Skipped as *findings* — that is the seven-criticals over-count — but it is the
+      // evidence a fixing session needs, and the reply it could read is cleared by then.
+      const findings = parseReviewFindings(
+        [
+          "### Critical: the filter is on the wrong temp table",
+          "",
+          "`#Dealers` is already narrowed:",
+          "```sql",
+          "WHERE @LocalOnly = 0",
+          "```",
+        ].join("\n"),
+      );
+      expect(findings).toHaveLength(1);
+      expect(findings[0].detail).toBe(
+        ["`#Dealers` is already narrowed:", "```sql", "WHERE @LocalOnly = 0", "```"].join(
+          "\n",
+        ),
+      );
+    });
+
+    it("is not attached where the section bullets its findings", () => {
+      // Those items are the findings; the prose between them restates what they say.
+      const findings = parseReviewFindings(
+        [
+          "### Critical: two problems with the migration",
+          "",
+          "Both were found by running it against DEV.",
+          "",
+          "- the rollback is not paired",
+          "- the USE statement is missing",
+        ].join("\n"),
+      );
+      expect(findings.map((finding) => finding.detail)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    });
+
+    it("is absent on a bare section heading, which carries no finding", () => {
+      const findings = parseReviewFindings(
+        ["### Critical", "", "- the join double-counts purchases"].join("\n"),
+      );
+      expect(findings).toEqual([
+        { severity: "critical", text: "the join double-counts purchases" },
+      ]);
+    });
   });
 
   it("still treats a severity word in a heading as a section, not a finding", () => {

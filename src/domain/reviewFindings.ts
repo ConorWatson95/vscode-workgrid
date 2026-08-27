@@ -22,6 +22,15 @@ export interface ReviewFinding {
   severity: FindingSeverity;
   /** The finding itself, with its severity marker and list punctuation removed. */
   text: string;
+  /**
+   * The section body, where the heading was the whole finding — see `closeSection`.
+   *
+   * Present only when it would otherwise be attached to nothing, so a consumer can
+   * render it unconditionally. Never shown where a finding gets one line: the
+   * severity summary and the tree row are counts and a headline, the same division
+   * `deferralHeadline` makes.
+   */
+  detail?: string;
 }
 
 /** Severity order for display: worst first, which is the order they get acted on. */
@@ -61,6 +70,17 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
   let inSection = 0;
   /** Unbulleted lines seen in the current section, in case it produces nothing else. */
   let plain: string[] = [];
+  /** The finding a heading carried, so this section's body can be attached to it. */
+  let headingFinding: ReviewFinding | undefined;
+  /**
+   * Every line of the current section, code fences included, for that detail.
+   *
+   * A second buffer rather than reusing `plain`, which is the fallback's source and
+   * yields one finding per line — putting a snippet in there is the seven-criticals
+   * over-count that the fence skip exists to prevent. This one is read by a human or
+   * handed to a fixing session as prose, so the snippet is the evidence it needs.
+   */
+  let body: string[] = [];
 
   /**
    * Closes a severity section, falling back to its unbulleted lines if it gave
@@ -95,8 +115,28 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
         }
       }
     }
+    // A heading that carried the whole finding, with nothing bulleted under it, is the
+    // one shape where the section body belongs to no finding at all: `inSection` is 1
+    // because of the heading, so the fallback above is suppressed, and every line
+    // explaining the problem is dropped. That is invisible while a report shows the
+    // reply verbatim beside the findings, and load-bearing the moment one is *sent
+    // back* — `formatFindings` is the only channel to the fixing stage, since the
+    // reviewing stage's own output has been cleared by the time the fix runs. A real
+    // review headed its blocker "Critical — the mechanism, not the SQL" and put the
+    // rejected design, the operator's own words and the reasoning in the paragraphs
+    // below, so the note a correction would have received was those four words.
+    //
+    // Bounded to that shape deliberately. Where the section has bulleted items they
+    // *are* the findings and the prose between them is preamble, so attaching it there
+    // would pad every note with restatement of what the items already say.
+    if (headingFinding && inSection === 1) {
+      const detail = body.join("\n").trim();
+      if (detail) headingFinding.detail = detail;
+    }
     inSection = 0;
     plain = [];
+    headingFinding = undefined;
+    body = [];
   };
 
   /** Whether we are inside a fenced code block. */
@@ -122,9 +162,13 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     // for it. Same trade `deferralHeadline` makes.
     if (/^(?:`{3,}|~{3,})/.test(line)) {
       fenced = !fenced;
+      if (headingFinding) body.push(line);
       continue;
     }
-    if (fenced) continue;
+    if (fenced) {
+      if (headingFinding) body.push(line);
+      continue;
+    }
 
     // A heading may carry the finding with it: "### Critical: the change is against
     // the wrong stored procedure" is one line that is both the section and the
@@ -143,7 +187,8 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       // Same guard as the list path below: "**Important**: none" is a section
       // answered, not a problem found.
       if (summary && !isNothingReported(summary)) {
-        findings.push({ severity: heading, text: summary });
+        headingFinding = { severity: heading, text: summary };
+        findings.push(headingFinding);
         // A heading that carries its own finding has produced one, so the lines
         // underneath it are that finding's explanation rather than more findings.
         inSection += 1;
@@ -173,6 +218,24 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
         plain.push(line);
         continue;
       }
+      // Inside a section whose *heading* was the finding, such a line is part of the
+      // explanation — "`#Dealers` is already narrowed:" is short, has no full stop and
+      // no comma, so it satisfies `looksLikeHeading` exactly. Closing here truncated
+      // the body to nothing, which is the whole loss this detail exists to repair.
+      //
+      // Bounded to the section's *first* line, which cannot be the next section's
+      // heading — there is nothing between it and the heading above. Allowing it
+      // anywhere in the body read a following unmarked section and the `VERDICT` line
+      // into the detail of the finding before them, which in a send-back note is a
+      // correction told about work that is not its own.
+      //
+      // The severity is cleared either way, which is the part that must not slip:
+      // leaving it in force is how one blocker became fourteen.
+      if (headingFinding && body.length === 0 && !isMarkedHeading(line)) {
+        body.push(line);
+        heading = undefined;
+        continue;
+      }
       closeSection();
       heading = undefined;
       continue;
@@ -184,6 +247,7 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       // items at all. Only under a severity heading: a plain line elsewhere is prose,
       // and there is no severity to give it.
       if (heading) plain.push(line);
+      if (headingFinding) body.push(line);
       continue;
     }
 
@@ -362,10 +426,27 @@ export function formatFindings(findings: readonly ReviewFinding[]): string {
       const matching = findings.filter((finding) => finding.severity === severity);
       return [
         `**${HEADINGS[severity]}**`,
-        ...matching.map((finding) => `- ${finding.text}`),
+        ...matching.map((finding) => formatFinding(finding)),
       ].join("\n");
     })
     .join("\n\n");
+}
+
+/**
+ * One finding as a list item, with its body indented underneath where it has one.
+ *
+ * Indented rather than run on: two spaces keeps the block inside the item in
+ * markdown, so a heading finding reads as a headline with its explanation under it
+ * in both places this goes — a stage report and a send-back note.
+ */
+function formatFinding(finding: ReviewFinding): string {
+  const item = `- ${finding.text}`;
+  if (!finding.detail) return item;
+  const indented = finding.detail
+    .split("\n")
+    .map((line) => (line.trim() ? `  ${line}` : ""))
+    .join("\n");
+  return `${item}\n${indented}`;
 }
 
 /** Fixed, so a section heading does not change shape with the count under it. */
