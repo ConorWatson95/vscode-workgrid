@@ -415,20 +415,30 @@ export function formatStageReport(
   // is inside without opening it, which is what makes folding it honest.
   const rounds = stageRounds(stage);
   const runRounds = rounds.filter((round) => round.kind === "run").length;
-  // `awaiting-approval` folds too, and it is the status that matters most. The rule was
-  // "settled only", on the reasoning that somebody reading a held stage is watching a
-  // repair rather than reading a conclusion. That is true of a stage still working and
-  // false of one at a gate: a stage awaiting approval has finished, and the reader is
-  // there to decide whether to accept it. Held open, a review corrected and amended nine
-  // times rendered ten full accounts of itself — around 30,000 characters of
-  // near-identical text — at the one moment a person has to find the finding that is
-  // still outstanding. `active`, `failed` and `pending` still show everything, which is
-  // the case the original rule was written for.
-  const foldRepairs =
-    (stage.status === "passed" ||
-      stage.status === "skipped" ||
-      stage.status === "awaiting-approval") &&
-    rounds.filter((round) => round.kind !== "run").length > 1;
+  // Superseded rounds fold whatever the stage's status is, because being superseded is
+  // a property of the ROUND and never of the stage — and the `!round.latest` guard below
+  // is what actually protects the account somebody is reading.
+  //
+  // This was keyed on status through two widenings and both were wrong in the same way.
+  // It began as "settled only", reasoning that a reader of an unsettled stage is watching
+  // a repair rather than reading a conclusion. Then `awaiting-approval` was added, after
+  // a review corrected and amended nine times rendered ten full accounts of itself at the
+  // one moment a person has to find the finding still outstanding. `active` and `pending`
+  // then produced exactly the same failure: measured 27 Aug 2026 on NMGB-2814,
+  // `rc-implement-sql` at `active` with five rounds rendered **59,858 characters** — the
+  // reader saw it truncated at 50,000, which is to say the end of the report, where the
+  // round that stands lives — and `rc-implement-app` at `pending` with six rendered
+  // 60,237.
+  //
+  // The reader of a stage mid-repair wants the round in flight, which is `latest` and is
+  // never folded. The four dead rounds behind it are dead in every status.
+  //
+  // Nor is there a threshold: it required more than one repair, and one superseded round
+  // is superseded for exactly the reasons four are. `r-sql-object-review` had a single
+  // amendment and rendered 34,078 characters; folding its one dead round leaves 3,635.
+  // The guard that genuinely matters is `runRounds === 1` below, which protects a split
+  // stage whose parallel units each hold a different part of the answer.
+  const foldRepairs = rounds.some((round) => round.kind !== "run");
   for (const round of rounds) {
     const heading = roundHeading(round, rounds.length > 1);
     const body = formatSubtaskReply(round.subtask, heading !== undefined);

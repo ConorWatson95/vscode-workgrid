@@ -592,15 +592,24 @@ describe("a stage that was corrected", () => {
     expect(report).toContain("Correction 1 — asked to fix: the total column is a string");
   });
 
-  it("folds a superseded correction away once the stage has settled, but never the round that stands", () => {
+  it("folds a superseded correction away, but never the round that stands", () => {
     const settled = formatStageReport("Scorecard", repaired("passed"), undefined);
     expect(settled).toContain("<details><summary>Correction 1");
     expect(settled).not.toContain("<details><summary>Correction 2");
+  });
 
-    // While it is still being worked on, everything is open: the reader is watching a
-    // repair rather than reading a conclusion.
-    const live = formatStageReport("Scorecard", repaired("running"), undefined);
-    expect(live).not.toContain("<details><summary>Correction 1");
+  it("folds whatever the stage's status is, because superseded is a property of the round", () => {
+    // This test previously asserted the opposite for a stage still working, on the
+    // reasoning that its reader is watching a repair rather than reading a conclusion.
+    // True, and an argument for keeping the round IN FLIGHT open — which `latest` already
+    // does — not for keeping the dead ones open behind it. Measured on NMGB-2814:
+    // rc-implement-sql at `active` with five rounds rendered 59,858 characters and the
+    // reader saw it truncated at 50,000, losing the end of the standing round.
+    for (const status of ["running", "pending", "failed"] as const) {
+      const report = formatStageReport("Scorecard", repaired(status), undefined);
+      expect(report, status).toContain("<details><summary>Correction 1");
+      expect(report, status).not.toContain("<details><summary>Correction 2");
+    }
   });
 
   it("does not repeat 'What the agent reported' once per round", () => {

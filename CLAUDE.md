@@ -964,6 +964,38 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### Folding a superseded round was keyed on the wrong thing, three times
+
+`foldRepairs`, 27 Aug 2026. Superseded rounds fold behind a `<summary>` carrying their
+finding, and the condition for folding was the **stage's status**. That was wrong from
+the start and was widened twice before the key itself was questioned:
+
+1. *settled only* — reasoning that a reader of an unsettled stage is watching a repair
+   rather than reading a conclusion.
+2. *plus `awaiting-approval`* — after a review corrected and amended nine times rendered
+   ten full accounts of itself, ~30,000 characters, at the one moment a person has to
+   find the finding still outstanding.
+3. *status-independent* — because `active` and `pending` then produced the same failure.
+   Measured on NMGB-2814: `rc-implement-sql` at `active` with five rounds rendered
+   **59,858 characters**, and the reader saw it truncated at 50,000 — which is to say the
+   *end* of the report, where the round that stands lives. `rc-implement-app` at
+   `pending` with six rendered 60,237. Folding takes them to 9,696 and 7,024.
+
+**Being superseded is a property of the round, never of the stage**, and the guard that
+was doing the real work all along is `!round.latest` — the round in flight is never
+folded. So the original reasoning was sound and pointed at the wrong lever: a reader
+mid-repair wants the *current* round, which is exactly what stays open.
+
+**The count threshold went with it.** Folding required more than one repair, and one
+superseded round is superseded for the same reasons four are: `r-sql-object-review` had
+a single amendment and rendered 34,078 characters, 3,635 folded. What remains is
+`runRounds === 1`, which is the guard that genuinely matters — a split stage's parallel
+units are all `run` rounds and each holds a different part of the answer.
+
+The general lesson is the one the `checklistScope` and label refreshes also teach: when
+a rule has been widened twice by adding another status to a list, the list is not the
+key.
+
 ### An instruction that told a review not to check
 
 `carryForwardRule`, corrected 27 Aug 2026. The rule exists because a review's revision
