@@ -964,6 +964,50 @@ The declaration is doing the work the extra stage was added for. On the run afte
 reported it — which is the outcome the merge gate was standing in for, arrived at by
 holding the stage that owed it rather than by adding a stage to notice afterwards.
 
+### An instruction that told a review not to check
+
+`carryForwardRule`, corrected 27 Aug 2026. The rule exists because a review's revision
+*replaces* its previous findings, so a finding left out is read as one that no longer
+stands. It obliged the revision to list every finding with its current status — and
+then said, verbatim:
+
+> *Restating a finding is not re-deriving it: do not go and re-check the ones the
+> repair does not reach, just carry them forward as they were.*
+
+That clause was written to stop a review re-deriving its whole report on every
+amendment. It produced the opposite of a saving, because **"the ones the repair does
+not reach" is a judgement a review cannot make**: it is given an amendment note
+describing an upstream change, not a diff, so the exemption gets applied to findings
+the repair *did* reach.
+
+Measured on NMGB-2814. `r-sql-object-review` re-emitted
+*"_DataPeriods costs 816 ms — OUTSTANDING, unchanged"* at 08:28, quoting measurements
+from its first round the previous afternoon. The procedure had been rewritten at 08:06
+to read `MinDataPeriodId`/`MaxDataPeriodId` from `RefreshControl` — 2,000 ms to 38 ms —
+and both that and the `DISTINCT` finding were fixed on disk *and* deployed. The
+correction it triggered at 08:29 read the files, found nothing to do, wrote no files
+and said so, which left the operator with two stages flatly contradicting each other
+and no way to tell which to believe without checking by hand.
+
+The fix is three statuses rather than two, and the third is the load-bearing one:
+
+- **OUTSTANDING** — a claim about the code *as it now stands*. It is the label that
+  stops the route and pays for another repair, so it obliges re-reading the file the
+  finding names and re-running any measurement the finding quotes.
+- **RESOLVED** — you looked, and it is fixed.
+- **CARRIED FORWARD, NOT RE-CHECKED** — you did not look this time. Explicitly
+  acceptable, and better than either of the others when the work has not been done.
+
+**The cost asymmetry is the argument**, and the old clause had it backwards: re-reading
+a file is cheap, while a false *outstanding* costs a repair session, the stages behind
+it, and an operator arbitrating between two stages. The original instruction optimised
+the small number.
+
+Same family as the markers, one level up: *outstanding* was a status the parser cannot
+check, asserted about code nobody had looked at. Nothing here makes the parser check it
+— that is not possible for a prose finding — but naming the honest third option removes
+the reason to fake the other two.
+
 ### A send-back offered to the stage that had written nothing
 
 `sendBackTargets`, 26 Aug 2026. The list is ordered nearest-first because "the stage

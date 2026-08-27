@@ -1099,6 +1099,29 @@ describe("what a correction is allowed to change", () => {
     expect(prompt).toContain("do not do that stage's work here");
   });
 
+  it("obliges a review revision to re-check what it calls outstanding", () => {
+    // The failure this replaces was written into the instruction itself. It used to say
+    // "do not go and re-check the ones the repair does not reach, just carry them
+    // forward as they were" -- and "does not reach" is a judgement a review cannot make,
+    // because it sees an amendment note describing an upstream change, not a diff. On
+    // NMGB-2814 r-sql-object-review re-emitted "816 ms -- OUTSTANDING, unchanged" for a
+    // procedure that had been fixed and deployed two hours earlier (2,000 ms to 38 ms),
+    // and the correction it triggered wrote no files and said so.
+    for (const kind of ["codeReview", "domainReview"] as const) {
+      const prompt = correctionPrompt(CONTEXT, stage({ kind }), "x", PREVIOUS);
+      expect(prompt, kind).toContain("OUTSTANDING");
+      expect(prompt, kind).toContain("CARRIED FORWARD, NOT RE-CHECKED");
+      // The cost argument, because the old instruction was a cost saving on the wrong side.
+      expect(prompt, kind).toContain("Re-reading a file is cheap");
+      expect(prompt, kind).not.toContain("carry them forward as they were");
+    }
+  });
+
+  it("leaves stages that raise no findings alone", () => {
+    const prompt = correctionPrompt(CONTEXT, stage({ kind: "implementation" }), "x", PREVIOUS);
+    expect(prompt).not.toContain("CARRIED FORWARD, NOT RE-CHECKED");
+  });
+
   it("gives every stage kind a medium", () => {
     const kinds = [
       "planning",
