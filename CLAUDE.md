@@ -2667,6 +2667,169 @@ Two lessons, and the second corrects an assumption worth not repeating:
   a smaller prefix or a warm cache, which means scanning once per session rather than
   repeatedly.
 
+### Three experiments, and the two ideas they killed
+
+28 Aug 2026. An exploration asked whether the runtime had accidentally exposed concepts
+more fundamental than the ones it implements: the runtime as a **compiler**, **Owner**
+replacing Stage, **Owner Memory** holding role judgement, and **Route** as a compiled
+artefact of policy rather than declared config. Rather than settle it by argument, three
+cheap experiments were run against the live `qubeautoapp` state file and `harness.json`.
+Two proposals died, one strengthened, and the negative results are recorded here because
+a negative result is the kind that gets re-litigated.
+
+**The metaphor is a build system, not a compiler.** A compiler's defining property is a
+semantics-preserving translation to a target that then executes deterministically; the
+target here is stochastic, which is why the parser, the gates and `stageEvidence` exist at
+all. Every analogy that has actually paid — `correctStage` handing a session its own
+previous output, `upstreamAmendment` responding to change without rebuilding, the cached
+prefix, `refreshPendingStages` propagating config to what has not run — is incremental
+rebuild, dependency invalidation and source-versus-generated. Keep "compilation" for the
+prompt-assembly step; do not let it name the runtime, or the next round of effort goes at
+an IR and a grammar instead of at finer-grained invalidation, which is where the money
+demonstrably is.
+
+**Experiment 3 — responsibility aggregation.** 17 pipelines, 528 settled runs, 353 discard
+entries, 7–28 Aug, measurement coverage effectively complete (1 run of 528 has no activity
+record). Every existing metric rolled up by `StageKind`, with no schema change:
+
+| kind | stg | runs | live$ | disc$ | disc% | corr | amend |
+|---|---|---|---|---|---|---|---|
+| implementation | 58 | 153 | 192 | 263 | 58% | 41 | 61 |
+| domainReview | 35 | 83 | 79 | 88 | 53% | 0 | 49 |
+| deployment | 73 | 57 | 44 | 77 | 64% | 3 | 16 |
+| codeReview | 17 | 47 | 29 | 54 | 65% | 0 | 32 |
+| planning | 62 | 66 | 41 | 28 | 41% | 17 | 12 |
+| test | 33 | 56 | 26 | 40 | 61% | 0 | 28 |
+| humanVerification | 89 | 42 | 9 | 11 | 55% | 0 | 8 |
+| behaviourReview | 17 | 19 | 6 | 8 | 58% | 0 | 6 |
+| **total** | | | **431** | **570** | **57%** | | |
+
+Three readings, and the first is the one that killed the proposal:
+
+- **Discard rate is invariant across responsibilities** — 53% to 65% for everything that
+  runs in volume, planning (41%) and assessment (15%, n=5) aside. Waste is a property of
+  the *task*, not of who did the work, so responsibility explains none of the number the
+  harness most wants to reduce.
+- **Within-kind coherence is poor.** Inside `implementation` the top stage id is 34% of the
+  kind's cost and the members behave oppositely: `rc-implement-sql` takes 19 corrections
+  and writes 2.6 files a run, `rc-nav-permissions` takes 1 correction, absorbs 22
+  amendments and writes **0.0**. "Implementer" averages animals with nothing in common.
+  `deployment` is worse — 18 ids, top share 20%, spanning `rc-commit` at 0.1 files/run and
+  `ec-live-publish` at 5.0. Every useful insight arrived at the **stage id**, which is a
+  named position in a route, which is what a Stage already is.
+- **One bit does separate by kind, and the runtime already uses it.** 58 of 61 corrections
+  land on implementation or planning; reviews, tests, deployments and gates are essentially
+  never corrected, only amended. Some responsibilities **author** and the rest **react**,
+  which is exactly what `sendBackTo: ["kind:implementation"]` encodes. Responsibility is
+  real, carries one bit, and already has an identity.
+
+**Found on the way, and worth acting on independently:** `rc-nav-permissions` has run 31
+times across 8 task instances, written **zero files**, absorbed 22 amendments and cost $22.
+It is the stage `sendBackTargets` was recommending as a correction target on NMGB-2814
+before that was patched. The patch worked; the stage is still there, still paid for on
+every upstream correction.
+
+**Experiment 1/2 — intent decomposition and obligation extraction.** 160 stage definitions,
+44,134 words of `intent` (mean 276), 10 routes. 27 stages sampled stratified across all
+seven kinds and classified by hand; duplication measured mechanically across all 160.
+
+```
+sentences (>4 words) 1,851 | distinct 794 | repeated across >1 stage 215
+duplicated words (copies beyond the first) 25,075 of 44,134 = 57%
+of that, confined to a single kind: 202 of 215 blocks, 22,171 words
+planning 9,393 · implementation 5,097 · deployment 4,873 · humanVerification 1,802 · test 952
+```
+
+Approximate composition of the sample: project knowledge 30%, owner behaviour 25%, task
+instruction 15%, artifact contract 15%, evidence contract 10%, residue 5%.
+
+**Role-scoped guidance is real, large, and already hand-written** — the finding that both
+confirms and defangs Owner Memory. 22,171 words of it are maintained by copying prose into
+as many as 28 stage definitions across 10 routes. Nobody needed reflection to produce any
+of it. So the content belongs in **role-scoped skills**, which need no new entity, no
+reflection loop and no curation mechanism; a model writing durable guidance that shapes its
+own future runs fails the rule that a constraint's value must not be authored by the party
+it constrains, and there is now no evidence it would buy anything.
+
+**The 200-word ASK block repeated across all 28 planning stages is protocol the shipped
+skill already teaches** — `ask_user` versus `NEEDS-INFO`, why a filed question is read by
+nobody. ~5,600 words of the corpus re-teaching what `protocolSkill.ts` ships, which is the
+"protocol reassembled per stage" failure the skill layer exists to end. Either it is not
+reaching stage sessions or the route author did not trust it to; extracting it tests which.
+The same shape appears again with `StageContext.routeStages` — "a later stage owns those",
+"those are rc-signoff's job" — a runtime-supplied fact re-authored in prose.
+
+**The obligations collapse to six checker kinds, five of which exist.** This is the result
+the primitive hypothesis needed, and it is a closed set:
+
+| checker kind | subject | status |
+|---|---|---|
+| process exits 0 | external process | `verify` |
+| file exists at a declared path | worktree | `planOutput` |
+| file content satisfies a property | worktree | `planOutput` open questions |
+| reply contains at least one artefact reference of a shape | reply text | `requiresPullRequest` |
+| some file was written | recorded activity | `stageProductivity` |
+| **reply contains the output of a named command** | activity + reply | **missing** |
+| **written paths confined to a declared scope** | recorded activity | **missing** |
+
+Both missing kinds are the most-repeated prose demands in the corpus and both read from
+data already persisted. `rc-implement-sql` asks for evidence-in-report three times and says
+why in as many words — *"Do not assert agreement — a stage saying the figures match, with
+nothing to show, is exactly what this criterion replaces"* — and separately documents that
+its own declared check is weaker than its real obligation: *"This stage's verify runs the
+same script with `-ListOnly`, so a missing or single-case smoke script fails the stage —
+but only executing it proves the object works."* That is the primitive being hand-written
+by someone who had hit the failure. Path-scope is the same story: *"Write no C#, no view,
+no resource string — a later stage owns those, and touching them here means a review of one
+sends back the other"*, checkable against `pathsWritten` today.
+
+**Residue — three candidates, and the largest is a concept nothing has a home for.** Every
+route carries an incident log inside its instructions: *"Measured on NMGB-2814"*, *"this
+has shipped twice"*, *"cost four corrections and a cascade"*, *"the manufacturer tree was
+UTF-16LE until 6 Aug 2026, because git treats UTF-16 as binary"*. It is not knowledge,
+behaviour, instruction or contract — it is the *evidence that a rule is real*, written into
+prose because there is nowhere else to put it. Deliberately not solved here; one audit is
+not enough to name a concept, and inventing one is the failure this exercise was run to
+avoid. It is also the strongest argument against generated routes: compilation discards
+exactly this. The second candidate is **check interpretation** — *"the check … will fail
+while that pull request is still open, which means UNMERGED, not unpromoted — do not read
+its exit code as the promotion having gone wrong"* — the language can declare a check and
+cannot say what its failure means, which is the RU-550 misattribution one level up.
+
+**The standing anomaly: 57% of all agent spend is discarded, and it has not moved.** $570
+of $1,001 across three weeks and five routes, against the 68%-of-execution-time figure
+measured on 14 Aug — despite `correctStage`, `upstreamAmendment` and amendment coalescing
+all shipping *inside* the measurement window. Flat discard across kinds says the driver is
+task-level, not stage-level, which points at requirements churn, route length or send-back
+policy — three causes with entirely different fixes. `TaskPipeline.discarded` records a
+`reason` on all 353 entries, so attributing them is the next experiment, and it comes
+**before** building the two missing checkers: if the waste is requirements churn, better
+obligations are worth much less than they look.
+
+**Shelved for want of evidence, not for want of argument:** promoting Owner to a
+first-class concept, generating routes from policy, and reflection-derived owner memory.
+Revisit each only when a runtime decision starts going wrong for want of it.
+
+**And the admission test the exercise produced.** Before a concept becomes part of the
+language, ask — which runtime decision is currently approximated by heuristics; is the
+concept independently falsifiable; can it be observed from persisted state; does
+introducing it eliminate prose rather than create more; does it make an existing decision
+objectively better. Four lifecycle gates go with it, each with a scar above: **absence must
+mean unchanged** (and must be distinguishable from a measured zero); **the refresh tier is
+declared at introduction** — never-after-start, until-resolved, or always, learned three
+times as `refreshPendingStages`, `refreshGateDeclarations` and `refreshStageLabels`; **the
+value cannot be authored by the party it constrains**; and **it is classifiable as context
+or certification under invalidation**, or it will keep certifying work that has moved.
+State what a false positive and a false negative each cost and derive the disposition from
+the ratio — that is what decides narrowness, and narrowness is what decides whether
+operators click past the stop.
+
+The general lesson, and the reason this section is long: several days of discussion
+produced four confident abstractions, and three cheap experiments rejected two of them
+outright while strengthening the one nobody had argued for. **The language grows by
+eliminating uncertainty, not by accumulating abstractions** — which is the heuristic the
+harness already applies to stages, applied to itself.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`
