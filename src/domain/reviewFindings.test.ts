@@ -735,3 +735,71 @@ describe("findingsOfSubtasks", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("a revision's carried-forward statuses", () => {
+  it("does not count a finding the revision marked resolved", () => {
+    // `carryForwardRule` asks for exactly this shape and nothing read it, so a
+    // review that had cleared everything held its gate reporting eight criticals.
+    expect(
+      parseReviewFindings(
+        [
+          "## Critical",
+          "",
+          "- summary proc shows a rank for a suppressed dealer — RESOLVED",
+          "- the join double-counts purchases — OUTSTANDING",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { severity: "critical", text: "the join double-counts purchases — OUTSTANDING" },
+    ]);
+  });
+
+  it("reads a status on the heading that carries the finding", () => {
+    expect(
+      parseReviewFindings(
+        "## Critical: summary proc shows a rank for a suppressed dealer — RESOLVED\n\nRe-read this round.",
+      ),
+    ).toEqual([]);
+  });
+
+  it("takes the unmarked lines of a status section as evidence, not findings", () => {
+    // Six of the eight criticals were the working under one resolved finding:
+    // "Per row, not scalar —", "View-aware —", "Artefacts —". Reading the status
+    // alone would only have taken the count to six.
+    expect(
+      parseReviewFindings(
+        [
+          "## Critical",
+          "",
+          "summary proc shows a rank for a suppressed dealer — RESOLVED",
+          "- Per row, not scalar — ISNULL projected in #AllDealers (58).",
+          "- View-aware — IIF(@View = 2, CONVERT(BIT, 0)) at 176.",
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not count a finding nobody re-checked as outstanding", () => {
+    expect(
+      parseReviewFindings(
+        "## Critical\n\n- _DataPeriods costs 816 ms — CARRIED FORWARD, NOT RE-CHECKED",
+      ),
+    ).toEqual([]);
+  });
+
+  it("leaves a review that states no statuses exactly as it was", () => {
+    // The suppression cannot start until a line spells a status out, so nothing
+    // that has not opted in changes — the rule the scope declarations follow.
+    expect(
+      parseReviewFindings(
+        "## Critical\n\n- p_Foo cursors over 40k rows.\n- Bar is double counted.",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("does not read prose about a resolved issue as a status", () => {
+    expect(
+      parseReviewFindings("## Critical\n\n- the resolved path is never taken when Value is null"),
+    ).toHaveLength(1);
+  });
+});

@@ -1040,6 +1040,47 @@ check, asserted about code nobody had looked at. Nothing here makes the parser c
 — that is not possible for a prose finding — but naming the honest third option removes
 the reason to fake the other two.
 
+### A status the prompt asked for and nothing read
+
+`carriedStatus` in `reviewFindings.ts`, 28 Aug 2026. `carryForwardRule` shipped the day
+before and obliges a review's revision to restate every finding with its current status
+— `RESOLVED`, `OUTSTANDING`, `CARRIED FORWARD, NOT RE-CHECKED`. Nothing read the status.
+
+`isNothingReported` knows a settled word only at the *start* of a line ("resolved in the
+migration"), and the rule puts it at the end, so `summary proc still shows a rank for a
+suppressed dealer — RESOLVED` is an ordinary sentence to the parser. On NMGB-2814 a SQL
+review that had cleared everything and closed with *"No blocking findings remain"* held
+its gate reporting **8 critical**, and the report disagreed with itself top to bottom:
+the summary counting findings the body marked resolved.
+
+Same family as the markers and the same lesson one turn on — *a prompt that asks for a
+fact the parser does not read is a fact nobody has* — but the **direction is inverted**,
+which is why it is recorded separately. The eleven before it let a route walk past a real
+problem; this stops a route that had none, and a stop that means nothing is exactly what
+teaches an operator to click past the stop that matters.
+
+**Reading the status alone would only have taken 8 to 6.** Six of the eight were the
+*working* under one resolved finding — "Per row, not scalar —", "View-aware —",
+"Artefacts —" — each read as a critical of its own. So the second half is the
+load-bearing one: once a section spells out a status, **only status-carrying lines are
+findings and everything else in it is their evidence**, which is what the format means.
+
+Four rules:
+
+- **Narrow, and narrow in the *keeping* direction for once.** Upper case, following a
+  separator, because that is precisely what the rule asks for. Prose about a resolved
+  issue is not a status, and anything unrecognised is no status at all — the finding is
+  then counted exactly as it was.
+- **The suppression cannot start until a line spells one out**, so a review that does not
+  use statuses parses as it always did — the rule the scope declarations follow.
+- **`OUTSTANDING` still counts**, at its section's severity. The status is read to tell
+  the two apart, never to soften a finding that stands.
+- **Set on the `looksLikeHeading` fallback path too.** A restated finding is short and has
+  no full stop, which is `looksLikeHeading` exactly, so it arrives there rather than
+  through the list path. Missing it there left the evidence counted while the finding
+  itself was correctly dropped — the worst of the three outcomes, and caught only by
+  running the real reply's two shapes through the parser.
+
 ### A send-back offered to the stage that had written nothing
 
 `sendBackTargets`, 26 Aug 2026. The list is ordered nearest-first because "the stage

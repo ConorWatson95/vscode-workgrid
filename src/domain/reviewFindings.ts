@@ -81,6 +81,21 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
    * handed to a fixing session as prose, so the snippet is the evidence it needs.
    */
   let body: string[] = [];
+  /**
+   * Whether this section restates findings with their status, per `carryForwardRule`.
+   *
+   * Set by the first line carrying one. From then on only status-carrying lines are
+   * findings and everything else in the section is their working — which is what the
+   * format means, and the half that makes reading the status worth anything. The
+   * eight criticals were not eight restated findings; they were the six bullets of
+   * evidence under one resolved finding, plus two more sections' worth, each read as
+   * a critical of its own. Reading the status alone would have taken eight to six.
+   *
+   * Per section and never assumed, so a review that does not use statuses parses
+   * exactly as it did before: the suppression cannot start until a line has spelled
+   * one out.
+   */
+  let statusFormat = false;
 
   /**
    * Closes a severity section, falling back to its unbulleted lines if it gave
@@ -107,6 +122,10 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
   const closeSection = () => {
     if (heading && inSection === 0) {
       for (const text of plain) {
+        // In a section written with statuses, a line without one is the evidence for
+        // the finding above it rather than a finding of its own — see `statusFormat`.
+        const status = carriedStatus(text);
+        if (statusFormat && status !== "outstanding") continue;
         if (!isNothingReported(text)) {
           findings.push({
             severity: statedNonBlocking(text) ? "suggestion" : heading,
@@ -134,6 +153,7 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       if (detail) headingFinding.detail = detail;
     }
     inSection = 0;
+    statusFormat = false;
     plain = [];
     headingFinding = undefined;
     body = [];
@@ -184,9 +204,12 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       closeSection();
       heading = asHeading.severity;
       const summary = asHeading.rest.trim();
+      const headingStatus = carriedStatus(summary);
+      if (headingStatus) statusFormat = true;
       // Same guard as the list path below: "**Important**: none" is a section
-      // answered, not a problem found.
-      if (summary && !isNothingReported(summary)) {
+      // answered, not a problem found — and a heading the revision marked RESOLVED
+      // says the same thing about the section it heads.
+      if (summary && headingStatus !== "settled" && !isNothingReported(summary)) {
         headingFinding = { severity: heading, text: summary };
         findings.push(headingFinding);
         // A heading that carries its own finding has produced one, so the lines
@@ -216,6 +239,11 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       // `**bold**`) is unambiguous and still closes the section.
       if (heading && inSection === 0 && !isMarkedHeading(line)) {
         plain.push(line);
+        // The finding this fallback exists to rescue is also where a revision puts
+        // its status, and it arrives here rather than through the list path: a
+        // restated finding is short and has no full stop, which is `looksLikeHeading`
+        // exactly. Missing it here left the section's evidence bullets counted.
+        if (carriedStatus(line)) statusFormat = true;
         continue;
       }
       // Inside a section whose *heading* was the finding, such a line is part of the
@@ -246,7 +274,10 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
       // Kept rather than dropped, in case this section turns out to have no bulleted
       // items at all. Only under a severity heading: a plain line elsewhere is prose,
       // and there is no severity to give it.
-      if (heading) plain.push(line);
+      if (heading) {
+        plain.push(line);
+        if (carriedStatus(line)) statusFormat = true;
+      }
       if (headingFinding) body.push(line);
       continue;
     }
@@ -263,6 +294,11 @@ export function parseReviewFindings(reply: string | undefined): ReviewFinding[] 
     // has nothing outstanding at that severity. Counted, it became one important
     // finding, and an important finding holds the route — so a clean review blocked
     // itself. See `isNothingReported` for why the guard is as narrow as it is.
+    const status = carriedStatus(text);
+    if (status) statusFormat = true;
+    // A restated finding the revision marked resolved is not outstanding, and in a
+    // section written that way the unmarked lines are its evidence.
+    if (status === "settled" || (statusFormat && !status)) continue;
     if (text && !isNothingReported(text)) {
       findings.push({ severity: statedNonBlocking(text) ? "suggestion" : severity, text });
       // Counted only when the item belongs to the section: an inline "(minor)" under
@@ -703,4 +739,39 @@ function inlineSeverity(
   if (label.length > 40) return undefined;
   const found = severityInLabel(label);
   return found ? { severity: found, rest: match[2] } : undefined;
+}
+
+/**
+ * The status a revision put on a finding it restated.
+ *
+ * `carryForwardRule` asks a review revising itself to list every finding it raised
+ * with its current status — RESOLVED, OUTSTANDING, or CARRIED FORWARD, NOT
+ * RE-CHECKED — so the reader can tell a finding that still stands from one the
+ * repair reached. It asked for a status and nothing read it: a line ending
+ * `— RESOLVED` is an ordinary sentence to `isNothingReported`, which only knows a
+ * settled word at the *start* of a line ("resolved in the migration"). So a review
+ * that had cleared everything reported eight criticals at the gate, and the report
+ * disagreed with itself top to bottom — the summary counting findings the body
+ * marked resolved.
+ *
+ * Same family as the markers, and the same lesson one turn further on: a prompt that
+ * asks for a fact the parser does not read is a fact nobody has. The direction is the
+ * opposite of the others, which is what makes it worth its own note — those let a
+ * route walk past a real problem, this one stops a route that had none, and a stop
+ * that means nothing is what teaches people to click past the stop that matters.
+ *
+ * Deliberately narrow, and narrow in the *keeping* direction for once. The token must
+ * be upper case and follow a separator, because that is exactly what the rule asks
+ * for and prose about a resolved issue must not be read as a status; anything
+ * unrecognised is no status at all and the finding is counted as it always was.
+ */
+type CarriedStatus = "settled" | "outstanding";
+
+const CARRIED_STATUS =
+  /[—–:(]\s*\*{0,2}\s*(RESOLVED|OUTSTANDING|CARRIED[ -]FORWARD)|\s-\s\*{0,2}(RESOLVED|OUTSTANDING|CARRIED[ -]FORWARD)/;
+
+function carriedStatus(text: string): CarriedStatus | undefined {
+  const match = CARRIED_STATUS.exec(text);
+  if (!match) return undefined;
+  return (match[1] ?? match[2]).startsWith("OUTSTANDING") ? "outstanding" : "settled";
 }
