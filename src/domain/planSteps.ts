@@ -1,3 +1,5 @@
+import { markerLine, markerText } from "./replyMarkers";
+
 /**
  * Per-step accounting for a stage that executes a written plan.
  *
@@ -131,13 +133,16 @@ export const STEP_MARKER = "STEP";
  */
 export function parseStepAccounts(reply: string): StepAccount[] {
   const byNumber = new Map<number, StepAccount>();
-  const pattern = /^[ \t]*STEP[ \t]+(\d{1,3})[ \t]*:[ \t]*([^\n—–-]*)(?:[—–-][ \t]*(.*))?$/gim;
+  const pattern = new RegExp(
+    markerLine("STEP[ \\t]+(\\d{1,3})[ \\t]*:", "[ \\t]*([^\\n—–-]*)(?:[—–-][ \\t]*(.*))?$"),
+    "gim",
+  );
 
   for (const match of reply.matchAll(pattern)) {
     const number = Number(match[1]);
     if (!Number.isFinite(number)) continue;
-    const word = (match[2] ?? "").trim().toLowerCase();
-    const note = (match[3] ?? "").trim();
+    const word = markerText(match[2], match[0]).toLowerCase();
+    const note = markerText(match[3], match[0]);
     const state: StepAccountState = /^done\b/.test(word) ? "done" : "not-done";
     byNumber.set(number, {
       number,
@@ -154,7 +159,7 @@ export function parseStepAccounts(reply: string): StepAccount[] {
 /** The reply without its step lines, which are protocol rather than report. */
 export function stripStepAccounts(reply: string): string {
   return reply
-    .replace(/^[ \t]*STEP[ \t]+\d{1,3}[ \t]*:[ \t]*.*$/gim, "")
+    .replace(new RegExp(markerLine("STEP[ \\t]+\\d{1,3}[ \\t]*:", "[ \\t]*.*$"), "gim"), "")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 }

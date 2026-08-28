@@ -12,6 +12,7 @@ import { invariantProtocolBlock } from "./claudeAdapter";
 import { isNothingReported } from "../domain/nothingReported";
 import { splitScopeTag } from "../domain/checklistScope";
 import { referenceGuidance } from "../domain/taskReferences";
+import { markerLine, markerText } from "../domain/replyMarkers";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -129,7 +130,9 @@ export type ReviewVerdict = "pass" | "block";
 export function parseVerdict(reply: string): ReviewVerdict | undefined {
   // Last occurrence wins: the marker is asked for as a final line, and a review
   // that quotes the instruction earlier should not be read as its own verdict.
-  const matches = [...reply.matchAll(/^\s*VERDICT:\s*(pass|block)\b/gim)];
+  const matches = [
+    ...reply.matchAll(new RegExp(markerLine("VERDICT:", "\\s*(pass|block)\\b"), "gim")),
+  ];
   const last = matches[matches.length - 1];
   return last ? (last[1].toLowerCase() as ReviewVerdict) : undefined;
 }
@@ -144,7 +147,7 @@ export function parseVerdict(reply: string): ReviewVerdict | undefined {
  */
 export function stripVerdict(reply: string): string {
   return reply
-    .replace(/^[ \t]*VERDICT:[ \t]*(?:pass|block)\b.*$/gim, "")
+    .replace(new RegExp(markerLine("VERDICT:", "[ \\t]*(?:pass|block)\\b.*$"), "gim"), "")
     // A removed line in the middle would otherwise leave a gap wide enough to read
     // as a section break.
     .replace(/\n{3,}/g, "\n\n")
@@ -390,8 +393,8 @@ export const ACTION_MARKER = "ACTION:";
  */
 export function parseActions(reply: string): string[] {
   const items: string[] = [];
-  for (const match of reply.matchAll(/^[ \t]*ACTION:[ \t]*(.+)$/gim)) {
-    const text = match[1].trim();
+  for (const match of reply.matchAll(new RegExp(markerLine("ACTION:"), "gim"))) {
+    const text = markerText(match[1], match[0]);
     if (text) items.push(text);
   }
   return items;
@@ -400,7 +403,7 @@ export function parseActions(reply: string): string[] {
 /** The reply without its action lines. See `stripBlocked` on the newline collapse. */
 export function stripActions(reply: string): string {
   return reply
-    .replace(/^[ \t]*ACTION:[ \t]*.*$/gim, "")
+    .replace(new RegExp(markerLine("ACTION:", "[ \\t]*.*$"), "gim"), "")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 }
@@ -554,8 +557,8 @@ export function readStageReply(text: string): StageReply {
  * mention as a second refusal would double-count one event.
  */
 export function parseBlocked(reply: string): string | undefined {
-  const match = /^[ \t]*BLOCKED:[ \t]*(.+)$/im.exec(reply);
-  const text = match?.[1]?.trim();
+  const match = new RegExp(markerLine("BLOCKED:"), "im").exec(reply);
+  const text = markerText(match?.[1], match?.[0]);
   return text ? text : undefined;
 }
 
@@ -569,7 +572,7 @@ export function parseBlocked(reply: string): string | undefined {
  */
 export function stripBlocked(reply: string): string {
   return reply
-    .replace(/^[ \t]*BLOCKED:[ \t]*.*$/gim, "")
+    .replace(new RegExp(markerLine("BLOCKED:", "[ \\t]*.*$"), "gim"), "")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 }
@@ -618,8 +621,8 @@ Never use this line to report work you did complete.`;
  */
 export function parseDeferrals(reply: string): string[] {
   const items: string[] = [];
-  for (const match of reply.matchAll(/^[ \t]*DEFERRED:[ \t]*(.+)$/gim)) {
-    const text = match[1].trim();
+  for (const match of reply.matchAll(new RegExp(markerLine("DEFERRED:"), "gim"))) {
+    const text = markerText(match[1], match[0]);
     // A stage answering the question rather than omitting the line. Recorded as
     // written it became an outstanding item, and an outstanding item holds the route
     // in front of the next deployment — so a stage saying "nothing" stopped a deploy
@@ -640,7 +643,7 @@ export function parseDeferrals(reply: string): string[] {
  */
 export function stripDeferrals(reply: string): string {
   return reply
-    .replace(/^[ \t]*DEFERRED:[ \t]*.+$/gim, "")
+    .replace(new RegExp(markerLine("DEFERRED:", "[ \\t]*.+$"), "gim"), "")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 }
@@ -704,7 +707,7 @@ export function splitStageHandoff(reply: string): {
   report: string;
   handoff?: string;
 } {
-  const matches = [...reply.matchAll(/^[ \t]*HANDOFF:[ \t]*$/gim)];
+  const matches = [...reply.matchAll(new RegExp(markerLine("HANDOFF:", "[ \\t]*$"), "gim"))];
   const last = matches[matches.length - 1];
   if (!last || last.index === undefined) return { report: reply };
 
@@ -849,15 +852,15 @@ export const CORRECTION_DECLINED_MARKER = "CORRECTION-DECLINED:";
  * itself rather than declining twice.
  */
 export function parseCorrectionDeclined(reply: string): string | undefined {
-  const match = /^[ \t]*CORRECTION-DECLINED:[ \t]*(.+)$/im.exec(reply);
-  const text = match?.[1]?.trim();
+  const match = new RegExp(markerLine("CORRECTION-DECLINED:"), "im").exec(reply);
+  const text = markerText(match?.[1], match?.[0]);
   return text ? text : undefined;
 }
 
 /** The reply without its decline line. See `stripBlocked` on the newline collapse. */
 export function stripCorrectionDeclined(reply: string): string {
   return reply
-    .replace(/^[ \t]*CORRECTION-DECLINED:[ \t]*.*$/gim, "")
+    .replace(new RegExp(markerLine("CORRECTION-DECLINED:", "[ \\t]*.*$"), "gim"), "")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 }

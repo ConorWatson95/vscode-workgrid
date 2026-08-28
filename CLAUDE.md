@@ -1081,6 +1081,56 @@ Four rules:
   itself was correctly dropped — the worst of the three outcomes, and caught only by
   running the real reply's two shapes through the parser.
 
+### The marker was there and the heading hid it
+
+`domain/replyMarkers.ts`, 28 Aug 2026. Every marker parser anchored on `^[ 	]*`, which
+is the whole of what a reply was allowed to put in front of one. A reply is **markdown**,
+and on NMGB-2533 a promote stage asked for a line beginning `BLOCKED:` wrote:
+
+> `### BLOCKED: the load could not be run on UAT, because Navigator has no FTPControl…`
+
+because it was writing a section of a report and that is what a section looks like. The
+anchor rejected it, so `parseBlocked` returned nothing, `recordStageBlocked` never ran,
+the subtask settled `done` and the stage `passed`. The route then advanced to
+`ec-uat-acceptance`, which wrote a checklist asking a human to *"confirm the QubeFTPService
+FTPControl record (migration 005) is correctly filled in on UAT"* — a gate asking for
+evidence about the exact thing the previous stage had just said in writing it could not do.
+
+**Not the reply-claims-an-outcome-the-parser-cannot-check disease**, and the distinction is
+why this has its own section rather than being the fourteenth instance of that one. There
+the model asserts something no parser can verify. Here the model **complied exactly**, the
+parser was looking for precisely the right fact, and the *presentation* defeated the match.
+No amount of instructing the model harder would have closed it; the marker was already
+written.
+
+**All six markers shared the anchor**, plus `STEP <n>` in `planSteps`, so a heading, a
+block quote or a bold run defeated every one. The lead-in now admits what markdown puts
+before a line's first word and nothing else, and the marker still owns the start of its
+own line, so prose cannot reach it.
+
+Four rules:
+
+- **Built, never written out per site** (`markerLine`). Thirteen regexes carried the same
+  anchor and the fix had to reach all of them; a seventh marker added with a stricter
+  anchor of its own is exactly how this recurs, one marker at a time.
+- **In the domain, not the adapter.** `planSteps` reads `STEP <n>` and `stagePrompts`
+  reads the other six, and a lead-in that differed between them would be two contracts
+  wearing one name. The reply contract is the harness's; only its *wording* belongs to an
+  engine adapter.
+- **A closing bold run is stripped only when the marker opened one.** The first version
+  stripped a trailing `**` unconditionally and turned a real reason ending `***REDACTED***`
+  into `***REDACTED*`. A reason is the operator's only account of what stopped the route,
+  so the tie breaks towards leaving the text exactly as written.
+- **Widened in the lead-in, never in the anchor.** Dropping `^` would match the word in
+  prose — "the migration is BLOCKED: or so the ticket claims" — which is the false stop
+  every other rule in this area is narrow to avoid.
+
+Found only by running the **live reply** through the fixed parser, which is also what
+caught the `***REDACTED***` clipping that every synthetic test passed. The general lesson
+is one the unquoted hook command and the backslashed spawn path already teach from the
+other side: **a check that silently does not fire is indistinguishable from the feature
+being absent** — and here it had not fired since the marker was introduced.
+
 ### A send-back offered to the stage that had written nothing
 
 `sendBackTargets`, 26 Aug 2026. The list is ordered nearest-first because "the stage

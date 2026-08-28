@@ -1205,3 +1205,51 @@ describe("a correction declining to be a correction", () => {
     expect(parseCorrectionDeclined("BLOCKED: nothing committed")).toBeUndefined();
   });
 });
+
+describe("markers written as markdown", () => {
+  // The NMGB-2533 failure: a promote stage emitted its refusal as a report section,
+  // `### BLOCKED: ...`, and the anchor rejected it. The stage settled `passed` and the
+  // route ran on to a gate asking a human to confirm the thing it could not do.
+  it("reads a BLOCKED written as a heading", () => {
+    const reply = "## Promote to UAT\n\nDEV is clean.\n\n### BLOCKED: no FTPControl exists on UAT.\n";
+    expect(parseBlocked(reply)).toBe("no FTPControl exists on UAT.");
+    expect(stripBlocked(reply)).not.toContain("BLOCKED");
+  });
+
+  it("reads a marker written in bold, without keeping the emphasis", () => {
+    expect(parseBlocked("**BLOCKED:** the load host is unreachable")).toBe(
+      "the load host is unreachable",
+    );
+    expect(parseBlocked("**BLOCKED: the load host is unreachable**")).toBe(
+      "the load host is unreachable",
+    );
+  });
+
+  // A reason may legitimately end in asterisks. The first real reply this ran against
+  // ended "***REDACTED***", and an unconditional strip ate two of the three.
+  it("keeps trailing asterisks when the marker opened no bold run", () => {
+    expect(parseBlocked("BLOCKED: the tooling has no path ***REDACTED***")).toBe(
+      "the tooling has no path ***REDACTED***",
+    );
+  });
+
+  it("reads the other markers the same way", () => {
+    expect(parseVerdict("### VERDICT: block")).toBe("block");
+    expect(parseDeferrals("- point\n\n## DEFERRED: nobody owns the monitor")).toEqual([
+      "nobody owns the monitor",
+    ]);
+    expect(parseActions("> ACTION: merge the pull request")).toEqual([
+      "merge the pull request",
+    ]);
+    expect(parseCorrectionDeclined("#### CORRECTION-DECLINED: needs a new approach")).toBe(
+      "needs a new approach",
+    );
+  });
+
+  // The anchor still has to do its job: the point of a line start is that prose
+  // mentioning the word is not protocol.
+  it("still ignores the word in prose", () => {
+    expect(parseBlocked("The migration is BLOCKED: or so the ticket claims")).toBeUndefined();
+    expect(parseVerdict("we reached no VERDICT: pass was never stated")).toBeUndefined();
+  });
+});
