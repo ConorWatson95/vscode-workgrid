@@ -82,6 +82,17 @@ When you must ask, the difference between the two ways matters:
 Never guess a requirement and proceed. A stage that invents the thing it should have
 asked about produces work that looks finished and reviews as correct.
 
+There is no time limit on an answer. A question waiting while the operator works on
+another task is exactly what this channel is for, so asking is never the expensive
+choice — waiting is not a cost you are paying.
+
+**A question written into a document you produce is not a question.** Filing it under
+"open questions" in a plan or a report feels like raising it and is read by nobody: the
+document is approved, the stages after you run against it, and each one guesses
+separately. One plan ended with four such items and every one of them was answered
+later by a correction, which is the most expensive form the answer can arrive in. If it
+would change what you write, ask it now, while you are here.
+
 ### How to write the question
 
 Write it the way you would say it out loud to a colleague who knows this system.

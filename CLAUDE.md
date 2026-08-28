@@ -2871,6 +2871,105 @@ outright while strengthening the one nobody had argued for. **The language grows
 eliminating uncertainty, not by accumulating abstractions** — which is the heuristic the
 harness already applies to stages, applied to itself.
 
+### The declaration existed and the prose compensated
+
+28 Aug 2026, found while extracting the duplicated protocol above, and a larger result than
+the duplication it came out of. `planFile` — the field that makes an approved plan
+authoritative and obliges `STEP <n>` accounting — is declared **zero times** across
+`qubeautoapp`'s 160 stages. Thirty of those stages state its semantics in prose instead:
+
+> *Read `docs/plans/<branch>/rc-plan.md` FIRST and follow it. It is the plan a human
+> approved for this task, so it outranks your own judgement about what to do; if it is
+> missing or contradicts what you find in the code, say so and ask rather than substituting
+> a plan of your own.*
+
+`planOutput`, its mirror, is declared 28 times — so the project adopted the **writing** half
+of the plan mechanism and never the reading half. Two protections were therefore dormant
+across all ten routes: a stage whose plan is missing is **not refused**, though
+`pipelineRunner` exists to refuse it precisely because improvising from the brief and
+reporting done is the state that check prevents; and **no plan-step accounting happens
+anywhere**, so a numbered step skipped in silence is indistinguishable from one completed —
+the failure that put a scorecard on production reading 0.0%. The prose fallback is strictly
+weaker in the way this codebase has now learned thirteen times: it asks the reply to report
+a fact the parser is not looking for.
+
+**Why the author restated it is answerable from git, and the answer was not the obvious
+one.** The plan-precedence prose first appears **4 Aug 2026**; `planFile` was introduced
+**6 Aug**. The prose is two days older than the field, and on the very day the field landed
+more prose was added rather than the field adopted. This is **drift** — nobody went back —
+not an author who distrusted the declaration. The ASK block is the exact opposite case: it
+was propagated to all 28 planning stages on **25 Aug**, eighteen days after
+`protocolSkill.ts` shipped teaching the same thing, with a commit message announcing the
+propagation. Same smell, opposite cause.
+
+So the reusable rule, and the reason it is worth more than `planFile` itself — it turns
+"what declaration should we invent?" into "why did the author feel the need to restate
+this?", which is answerable mechanically:
+
+> **When route prose restates the semantics of an existing declaration, the cause is one of
+> four. Check the dates and the field census before concluding anything.**
+>
+> - **Drift** — the prose predates the declaration and nobody revisited. The remedy is a
+>   config validator that notices, never a language change.
+> - **Reach** — the declaration existed and postdates the prose, so the author had it and
+>   wrote prose anyway. Find out whether it reaches the model at all before assuming it
+>   needs more authority.
+> - **Side-effect avoidance** — declaring it would impose an obligation beyond the one the
+>   prose states, so the author took the prose and left the field. Separate the obligations,
+>   or accept the prose.
+> - **Expressiveness** — the declaration genuinely cannot say what the prose says. Extend
+>   the language. **The rarest of the four, and the only one that justifies a new primitive.**
+
+The question is what makes this reusable, and it is worth stating in the form that has now
+produced results twice: rather than *"what declaration should we invent?"*, ask **"when route
+prose restates an existing declaration, why wasn't the declaration sufficient?"** That
+question has so far yielded one simplification worth 15.6% of the intent corpus and one
+dormant feature, without inventing anything — which is a better rate than any amount of
+argument about abstractions managed.
+
+The diagnostic is three lookups: does the declaration exist and is it used elsewhere in the
+same file; is the prose older than the field; does declaring it add an obligation the prose
+does not ask for. Getting this wrong is expensive in one direction specifically — reading
+drift as an expressiveness gap invents a primitive to solve a problem a validator would
+have caught.
+
+**The fourth cause is live on this very field**, which is why activation is staged as an
+experiment and not applied as a refactor. `planFile` does not only make the plan
+authoritative; it brings step accounting with it, and a step nobody mentions holds the
+stage. An author who wanted precedence without accounting would rationally take the prose.
+The prediction for the first activated route is therefore that stages hold on unaccounted
+steps.
+
+**If they do, that is a discovery about coupling and not a verdict on the field**, and the
+distinction decides what gets built next. Holds would say `planFile` bundles two
+independent capabilities — plan **precedence** and **step accounting** — not that the
+declaration is too strong; weakening it would switch off the accounting this codebase added
+after a post-deploy rebuild reached production as a scorecard reading 0.0%. So resist
+weakening until it has been observed, and ask instead whether the two responsibilities
+belong together.
+
+Most of that is answerable now, from the six-checker table above. Precedence is **prompt
+composition** — the plan is handed to the session and ranked above the brief, nothing
+checks it, and there is no disposition. Accounting is a **checker kind** — read from the
+reply by `planSteps`, held, settled by a deferral that requires a sentence. Opposite sides
+of the line the audit drew, so two primitives rather than one field doing two jobs.
+
+But the dependency is **one-directional**, and that is what stops this being a clean split
+into peers: accounting is only fair *because* precedence made the plan authoritative —
+holding a stage for not accounting for steps in a document it was never obliged to follow
+is exactly the false stop that teaches operators to click past the real ones. Precedence
+needs nothing from accounting. So the shape to build, if the holds appear, is a precedence
+declaration plus an accounting obligation that **requires** it, never two independent
+fields. The experiment's real test is therefore *which* stages hold: if they are stages
+whose plans were correctly followed, the coupling is confirmed and the dependency is the
+right shape.
+
+**Activated one route at a time, starting with `sql-quick`**, because the two effects arrive
+on live work: `refreshPendingStages` carries `planFile`, so pending stages on tasks already
+in flight pick it up at the next advance, and any whose plan document was never written to
+the expected path will stop. That is the mechanism working and will read as breakage, which
+is the whole reason to see it happen on one short route first.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`
