@@ -2,6 +2,21 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.115.1
+
+- **A gate declared after a task started reached nothing.** `requiresApproval` is derived
+  from a route's `gate` when the pipeline is created, and no refresh pass carried it — so
+  declaring a gate, or `authority: "evidence"` which is inert without one, changed only
+  tasks created afterwards. Found on a live task that had correctly picked up
+  `authority: "evidence"` and kept `requiresApproval: false`: the declaration parsed,
+  refreshed, and could never fire. The silent no-op an unquoted hook command already
+  taught this codebase to fear.
+
+  One-directional, and the asymmetry is deliberate. A gate **added** in config now reaches
+  a task in flight; one **removed** does not. Adding a stop to work somebody is part-way
+  through supervising is safe, where silently dropping a checkpoint from every running
+  task is the assurance-removal this whole area is built to refuse.
+
 ## 0.115.0
 
 Adaptive execution: the route can now continue, repair itself and re-run a stale stage

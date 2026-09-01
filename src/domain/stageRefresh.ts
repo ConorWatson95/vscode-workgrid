@@ -392,6 +392,26 @@ export function refreshGateDeclarations(
         (updates as Record<string, unknown>)[field] = next;
       }
     }
+
+    // A gate *added* in config reaches a task already running; one removed does not.
+    //
+    // `requiresApproval` is derived from `gate` at creation and was refreshed by
+    // nothing, so declaring a gate — or `authority`, which is inert without one —
+    // changed only tasks created afterwards. Found on a live task that had picked up
+    // `authority: "evidence"` and kept `requiresApproval: false`, so the declaration
+    // parsed, refreshed, and could never fire: the silent no-op this codebase keeps
+    // relearning.
+    //
+    // One-directional, unlike the fields above, and the asymmetry is the risk
+    // asymmetry the whole mutation vocabulary is built on. Adding a stop to work in
+    // flight is safe. Removing one would un-gate a pending stage on a task somebody is
+    // part-way through supervising, and the operator who edited a route would have
+    // silently dropped a checkpoint from every task already running against it —
+    // which they can still do deliberately, by re-running the stage.
+    if (definition.gate === "approval" && !stage.requiresApproval) {
+      updates.requiresApproval = true;
+    }
+
     if (Object.keys(updates).length === 0) return stage;
 
     changed.push(stage.id);
@@ -935,6 +955,7 @@ function findDefinition(
       authority?: StageAuthority;
       autoRepair?: boolean;
       mayMutateRoute?: boolean;
+      gate?: string;
     }
   | undefined {
   if (stage.addedByRule) {

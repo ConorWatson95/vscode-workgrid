@@ -1508,3 +1508,58 @@ describe("sendBackTargets prefers a stage that produced something", () => {
     expect(sendBackTargets(pipeline, "review").map((t) => t.id)).toEqual(["nav", "plan"]);
   });
 });
+
+describe("refreshGateDeclarations and a gate added after the task started", () => {
+  const routeStage = (over: Record<string, unknown> = {}) => ({
+    id: "review",
+    label: "Code review",
+    kind: "codeReview" as const,
+    intent: "Review it.",
+    gate: "approval" as const,
+    ...over,
+  });
+  const source = (over: Record<string, unknown> = {}) => ({
+    routes: [{ id: "r", label: "R", stages: [routeStage(over)] }],
+    rules: [],
+  });
+  const pipelineWith = (requiresApproval: boolean, status: TaskStage["status"] = "pending") =>
+    ({
+      routeId: "r",
+      routeLabel: "R",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      stages: [
+        {
+          id: "review",
+          name: "Code review",
+          kind: "codeReview",
+          status,
+          intent: "Review it.",
+          splittable: false,
+          requiresApproval,
+          subtasks: [],
+        },
+      ],
+    }) as unknown as TaskPipeline;
+
+  // The live failure: a task picked up `authority: "evidence"` and kept
+  // `requiresApproval: false`, so the gate never stopped and certification was never
+  // consulted. The declaration parsed, refreshed, and could not fire.
+  it("adds a gate declared after the task started", () => {
+    const { pipeline, changed } = refreshGateDeclarations(pipelineWith(false), source() as never);
+    expect(changed).toEqual(["review"]);
+    expect(pipeline.stages[0].requiresApproval).toBe(true);
+  });
+
+  it("never removes one, so a config edit cannot un-gate work in flight", () => {
+    const { pipeline } = refreshGateDeclarations(
+      pipelineWith(true),
+      source({ gate: "auto" }) as never,
+    );
+    expect(pipeline.stages[0].requiresApproval).toBe(true);
+  });
+
+  it("leaves a resolved stage alone", () => {
+    const { changed } = refreshGateDeclarations(pipelineWith(false, "passed"), source() as never);
+    expect(changed).toEqual([]);
+  });
+});
