@@ -233,6 +233,23 @@ export interface RouteStageDefinition {
    * See `domain/repairProposal.ts` for what makes a proposal legal.
    */
   autoRepair?: boolean;
+
+  /**
+   * This stage may propose `REVERIFY:` and `INSERT-STAGE:` mutations to the live route.
+   *
+   * Absent means it may not, and the route is exactly what config declared — the
+   * absence-means-unchanged rule, and the one that keeps a declared route the
+   * inspectable, diffable artefact it is. A live route that mutates is still a route
+   * whose *baseline* a human wrote and reviewed.
+   *
+   * Separate from `autoRepair` because they authorise different things: `autoRepair`
+   * lets a review route findings to a stage that got its work wrong, while this lets a
+   * stage say the route itself is out of step with reality. A project may reasonably
+   * want the first without the second.
+   *
+   * Both only ever add work. See `domain/routeMutation.ts`.
+   */
+  mayMutateRoute?: boolean;
   /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *

@@ -347,6 +347,11 @@ function parseStage(
     return undefined;
   }
 
+  if (raw.mayMutateRoute !== undefined && typeof raw.mayMutateRoute !== "boolean") {
+    problems.push(`Route "${routeId}" stage "${id}": "mayMutateRoute" must be true or false.`);
+    return undefined;
+  }
+
   if (raw.requiresPullRequest !== undefined && typeof raw.requiresPullRequest !== "boolean") {
     problems.push(
       `Route "${routeId}" stage "${id}": "requiresPullRequest" must be true or false.`,
@@ -368,6 +373,7 @@ function parseStage(
     ...(raw.requiresPullRequest === true ? { requiresPullRequest: true } : {}),
     ...(authority ? { authority: authority as StageAuthority } : {}),
     ...(raw.autoRepair === true ? { autoRepair: true } : {}),
+    ...(raw.mayMutateRoute === true ? { mayMutateRoute: true } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),

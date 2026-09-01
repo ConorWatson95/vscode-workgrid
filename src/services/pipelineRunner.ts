@@ -1,5 +1,11 @@
 import { certifyStage } from "../domain/stageAuthority";
 import { adjudicateRepair, parseRepairProposals } from "../domain/repairProposal";
+import {
+  adjudicateInsert,
+  adjudicateReverify,
+  parseInsertProposals,
+  parseReverifyProposals,
+} from "../domain/routeMutation";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { Subtask, SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import {
@@ -14,6 +20,8 @@ import {
   nextAction,
   approveStage,
   correctStage,
+  insertStage,
+  ruleInsertionIndex,
   planStage,
   recordAssessments,
   recordChecklist,
@@ -1808,6 +1816,71 @@ export class PipelineRunner {
     // Recorded whatever the outcome, unlike the handoff. A stage that declined
     // work and then failed still saw the gap, and that observation is the only
     // warning anyone gets before a deployment runs without it.
+    // Route mutations the stage proposed. Applied before deferrals are recorded, so a
+    // stage that both proposed a reverify and declined the same work does not leave an
+    // item behind describing work the harness has just scheduled.
+    //
+    // Both are opt-in per stage (`mayMutateRoute`), and both only ever *add* work. See
+    // `domain/routeMutation.ts` for the evidence: 15 of 138 deferrals were an earlier
+    // stage's output going stale, 11 of them the same artefact on one task, every one
+    // answered "Later" because no operation could express it.
+    if (reply.ok && stage.mayMutateRoute) {
+      for (const proposal of parseReverifyProposals(reply.text)) {
+        const ruling = adjudicateReverify(pipeline, stage.id, proposal);
+        if (!ruling.admissible) {
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} proposed re-running ` +
+              `"${proposal.target}": ${ruling.reason}.`,
+          );
+          continue;
+        }
+        // Through `correctStage` with an upstream attribution, so it is recorded as an
+        // amendment rather than a correction: the stage was right when it ran and had
+        // the ground moved under it, and the ledger has to say which.
+        const applied = correctStage(pipeline, ruling.stage.id, {
+          finding: ruling.reason,
+          at: new Date().toISOString(),
+          upstream: { stageId: stage.id, stageName: stage.name },
+        });
+        if (!applied.ok) {
+          this.logger.warn(
+            `Harness [${task.name}] could not re-run "${ruling.stage.name}": ` +
+              applied.error.message,
+          );
+          continue;
+        }
+        pipeline = applied.value;
+        steps.push(
+          `"${stage.name}" found "${ruling.stage.name}" stale — re-running it.`,
+        );
+      }
+
+      for (const proposal of parseInsertProposals(reply.text)) {
+        const ruling = adjudicateInsert(pipeline, stage.id, proposal, ruleInsertionIndex);
+        if (!ruling.admissible) {
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} proposed inserting ` +
+              `"${proposal.name}": ${ruling.reason}.`,
+          );
+          continue;
+        }
+        const spliced = insertStage(pipeline, ruling.stage, ruling.index);
+        if (!spliced.ok) {
+          this.logger.warn(
+            `Harness [${task.name}] could not insert "${proposal.name}": ` +
+              spliced.error.message,
+          );
+          continue;
+        }
+        pipeline = spliced.value;
+        // Announced with the stage that asked for it, because a stage in a route that
+        // nobody declared and nothing accounts for is unreadable afterwards.
+        steps.push(
+          `"${stage.name}" added "${ruling.stage.name}" to the route: ${proposal.intent}`,
+        );
+      }
+    }
+
     if (deferred.length > 0) {
       pipeline = recordDeferrals(pipeline, stage.id, deferred, new Date().toISOString());
       this.logger.info(

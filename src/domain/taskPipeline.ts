@@ -443,8 +443,28 @@ export interface TaskStage {
    * See `RouteStageDefinition.autoRepair` and `domain/repairProposal.ts`.
    */
   autoRepair?: boolean;
+  /**
+   * This stage may propose route mutations, copied from the route so a persisted
+   * pipeline stays self-describing. Absent means it may not.
+   *
+   * See `RouteStageDefinition.mayMutateRoute` and `domain/routeMutation.ts`.
+   */
+  mayMutateRoute?: boolean;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
+  /**
+   * Why this stage exists, when a *stage* proposed it rather than a route or a rule.
+   *
+   * The provenance an adaptive mutation owes: which stage asked for it, and what it
+   * said the work was. Kept apart from `addedByRule` because the two answer different
+   * questions — a rule stage is explained by config anybody can read, and this one is
+   * explained only by something that happened during a run. A stage in a route that
+   * nobody declared and nothing accounts for is the failure `stageHistory` was built
+   * to prevent, one level up.
+   *
+   * See `domain/routeMutation.ts`.
+   */
+  insertedBecause?: { stageId: string; stageName: string; reason: string };
   /**
    * What the rule that added this stage matched on, copied from the rule so a
    * persisted pipeline stays self-describing.

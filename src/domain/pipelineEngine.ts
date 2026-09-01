@@ -154,6 +154,7 @@ function createStage(
     requiresApproval: definition.gate === "approval",
     ...(definition.authority ? { authority: definition.authority } : {}),
     ...(definition.autoRepair ? { autoRepair: true } : {}),
+    ...(definition.mayMutateRoute ? { mayMutateRoute: true } : {}),
     ...(definition.sendBackTo && definition.sendBackTo.length > 0
       ? { sendBackTo: [...definition.sendBackTo] }
       : {}),
@@ -909,10 +910,65 @@ function withdrawAmendments(
   return { later, discarded };
 }
 
+/**
+ * Splices a stage a running stage proposed, at an index the harness derived.
+ *
+ * Adds work and nothing else: no stage is re-opened, no settlement cleared, no evidence
+ * invalidated. That is what makes it the cheapest of the mutations to admit — a wrongly
+ * inserted stage costs a session and a click, where a wrongly *removed* one costs the
+ * assurance it carried, which is why there is no removal counterpart and never will be.
+ *
+ * Refuses to land in front of a stage that has already settled. `ruleInsertionIndex`
+ * floors at the frontier for exactly this reason, and the check is repeated here rather
+ * than trusted, because an index arriving from a caller is not the same fact as an
+ * index this module computed.
+ */
+export function insertStage(
+  pipeline: TaskPipeline,
+  stage: TaskStage,
+  index: number,
+): Result<TaskPipeline, PipelineError> {
+  if (index < 0 || index > pipeline.stages.length) {
+    return err({ kind: "notCorrectable", message: "That is not a position in this route." });
+  }
+  if (pipeline.stages.some((s) => s.id === stage.id)) {
+    return err({ kind: "notCorrectable", message: `Stage "${stage.id}" is already in this route.` });
+  }
+  const settledAfter = pipeline.stages
+    .slice(index)
+    .find((s) => s.status === "passed" || s.status === "skipped");
+  if (settledAfter) {
+    return err({
+      kind: "notCorrectable",
+      message:
+        `"${stage.name}" cannot go in front of "${settledAfter.name}", which has already ` +
+        "settled.",
+    });
+  }
+
+  const stages = [...pipeline.stages.slice(0, index), stage, ...pipeline.stages.slice(index)];
+  return ok({ ...pipeline, stages });
+}
+
 export function correctStage(
   pipeline: TaskPipeline,
   stageId: string,
-  correction: { finding: string; at: string; title?: string },
+  correction: {
+    finding: string;
+    at: string;
+    title?: string;
+    /**
+     * Set when this repair is a *reverify* — an earlier stage whose output a later one
+     * found stale — rather than a correction of the stage's own work.
+     *
+     * Recorded as an amendment for the reason `Subtask.correction.upstream` exists: a
+     * preview that previewed the scripts as they stood was correct when it ran, and a
+     * ledger calling that a correction points the next investigation at the stage that
+     * did nothing wrong. Named after the stage that *discovered* the staleness, which
+     * is what makes it withdrawable alongside that stage's own repair.
+     */
+    upstream?: { stageId: string; stageName: string };
+  },
 ): Result<TaskPipeline, PipelineError> {
   const index = pipeline.stages.findIndex((s) => s.id === stageId);
   if (index === -1) return err(unknownStage(stageId));
@@ -939,7 +995,11 @@ export function correctStage(
     id: `${stage.id}-fix-${corrections + 1}`,
     // Numbered, because a stage corrected twice is a signal in its own right: the
     // second attempt at the same finding usually means the finding was misread.
-    title: correction.title?.trim() || `Correction ${corrections + 1}`,
+    title:
+      correction.title?.trim() ||
+      (correction.upstream
+        ? `Reverify for ${correction.upstream.stageName}`
+        : `Correction ${corrections + 1}`),
     prompt: finding,
     status: "pending",
     // Marks this as a repair rather than part of the stage's original plan, so a
@@ -947,6 +1007,9 @@ export function correctStage(
     correction: {
       finding,
       at: correction.at,
+      ...(correction.upstream
+        ? { upstream: { ...correction.upstream, findings: [finding] } }
+        : {}),
       // What this correction is about to clear off the stage. A finding can be
       // wrong — a comment acted on before it was investigated — and withdrawing
       // one is only cheap if the stage's own conclusion comes back with it.
@@ -964,7 +1027,9 @@ export function correctStage(
     pipeline,
     index,
     correction.at,
-    `re-opened by a correction to ${stage.name}`,
+    correction.upstream
+      ? `re-opened by a reverify of ${stage.name}`
+      : `re-opened by a correction to ${stage.name}`,
     // Amended rather than rebuilt. They still run — they were built on output that
     // just changed — but they start from what they already worked out.
     { stageId: stage.id, stageName: stage.name, finding },

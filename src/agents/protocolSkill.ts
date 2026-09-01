@@ -133,6 +133,40 @@ asking who owns the work, so evidence, history and the three findings that led y
 here belong in your report instead — the two are shown together, and the box is a
 question, not the record.
 
+## When the route itself is out of step
+
+Two things can be true at once: everyone's work was right, and the route no longer
+matches reality. Neither is a finding against anybody, and until recently there was
+nothing to say but "this belongs to some other stage" — which is why the same fact was
+raised eleven times on one task and answered "Later" eleven times.
+
+**An earlier stage's output has gone stale.** It was correct when it ran, and work done
+since has moved out from under it. A deployment preview is the standing example: it
+previewed the scripts as they stood, the implementation stage then changed them, and the
+approved artefact now describes a deployment that will not happen.
+
+    REVERIFY: <stage> — <what changed under it>
+
+Name what moved, not what is wrong with the stage — nothing is. "ec-preview.md predates
+the current deploy/001" is the whole of it. The stage runs again and the route carries
+on; you do not have to do its work for it, and you should not.
+
+**The route is missing work nothing owns.** Prefer to be wrong in the direction of
+\`DEFERRED\` here. Most work that belongs to no stage genuinely leaves the route — it is
+another ticket, or something a person will check on live — and measured across a real
+corpus that was the right answer four times as often as inserting a stage was.
+
+    INSERT-STAGE: <kind> | <name> | <what it must achieve>
+
+Only for work that plainly belongs to *this* task and that no stage in the outline you
+were given covers. You do not choose where it goes; the runtime places it. You cannot
+propose a human verification gate — when a route needs another one of those, a person
+adds it to the route.
+
+If you can name the stage that already owns the work, none of this applies: say so in
+your report and carry on. Proposing a mutation for work the route already covers is
+noise, and it will be refused.
+
 ## When you are fixing one thing in a stage that already ran
 
 You are repairing, not rebuilding. You have the stage's own previous report so that you

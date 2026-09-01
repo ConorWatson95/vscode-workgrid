@@ -3103,6 +3103,92 @@ picks the wrong stage re-opens correct work, and refusing costs a click.
 support in this data. The vocabulary is two operations because two is what the evidence
 carried — the rule the language-growth exercise above arrived at, applied again.
 
+### Eleven repetitions of one fact is what a missing operation looks like
+
+`domain/routeMutation.ts`, 1 Sep 2026, correcting the section above on the same day.
+That analysis derived its vocabulary from approvals and send-backs and concluded there
+was "no support in this data" for inserting or re-running stages. It had not looked at
+the **138 deferrals**, which are by definition work no existing stage owns — the exact
+place evidence for a route mutation would be. Two operations were hiding there.
+
+**`REVERIFY` — 15 items, 11 of them the same artefact.** A stage's output can be
+invalidated by work that happens *after* it. `ec-preview.md` is a DEV deployment
+preview; the implementation stage then changed the scripts it previewed, so the approved
+artefact no longer described what would be deployed. The reviewing stages noticed
+correctly, eleven separate times — *"stale again, since the previewed artifact changed"*,
+*"predates the current deploy/001"*, *"must be regenerated"* — and every one was filed as
+a deferral and answered "Later", because a deferral was the only thing a stage could say
+and settling one is a sentence rather than an act. The work was never done and the route
+deployed from a preview nobody had regenerated. **A fact re-raised eleven times is a
+missing primitive announcing itself**; the repetition is the signal, not the volume.
+
+**`INSERT-STAGE` — 4 items, and the ratio is the finding.** Of 33 ownerless items the
+operator said do-it-now on four and pushed **17** out of the route (*"I'll check this"*,
+*"Later"*, *"Leave for now"*). So work belonging to no stage is usually work that
+correctly *leaves* — which is why `DEFERRED` is unchanged and insertion is a narrower
+opt-in path beside it, never a replacement. A mechanism that made leaving harder would be
+worse than none.
+
+**`replan` needed nothing.** It is `repair` with a planning target, which is precisely
+what the 7 systematic misses in the `sendBackTargets` measurement were: the operator
+choosing planning over proximity's implementation. Already expressible.
+
+**Reverify is an amendment, not a correction**, and that is the load-bearing choice.
+`Subtask.correction.upstream` exists to keep three corrections — a stage that got its own
+work wrong three times — apart from three amendments, a stage that was right each time
+and had the ground moved under it. A preview that previewed the scripts as they stood was
+correct when it ran, so recording a reverify as a correction would point the next
+investigation at the stage that did nothing wrong. `correctStage` takes an optional
+`upstream`; everything else — the undo snapshot, the downstream cascade,
+`withdrawAmendments` — is reused untouched. The only novelty is **direction**: amendments
+have always flowed from a correction downstream, and this one flows backward from a later
+stage's discovery.
+
+Rules, each load-bearing:
+
+- **Reverify needs no `sendBackTo`, and repair does.** A repair says an earlier stage was
+  wrong, and the route decides who may say that. A reverify says an artefact went stale,
+  which is a checkable fact about a file, and the remedy is that stage doing its own job
+  again. Requiring the repair authority here would have left the eleven-times case
+  exactly where it was.
+- **A target that has not run is refused.** It will read the current state anyway, so the
+  proposal is a no-op costing a session to discover.
+- **An inserted stage's position is derived, never proposed** (`ruleInsertionIndex`).
+  Letting a stage choose its index is the generic graph language this runtime has no
+  evidence it needs, and it is the one degree of freedom that could put a stage in front
+  of a gate that has already passed. `insertStage` re-checks the frontier rather than
+  trusting the index, because an index arriving from a caller is not the same fact as one
+  this module computed.
+- **An inserted stage is always gated, and can never be an evidence gate.** It is the only
+  stage in a route nobody declared, so it is the last that should pass unlooked-at — and
+  `authority: "evidence"` is a statement the project made about a stage it wrote, which
+  cannot carry to one it has never seen.
+- **A stage may not propose a `humanVerification` gate or an `assessment`.** A gate is how
+  human authority enters a route, so a stage proposing one is a stage deciding when it
+  needs supervising; and `approveStage` applies an assessment's conclusions by *skipping*
+  stages, so a stage that could propose one could propose skipping the rest of the route.
+  Both are the removal-of-assurance case wearing an addition's clothes.
+- **`mayMutateRoute` is separate from `autoRepair`, which is separate from `authority`.**
+  Three declarations because they authorise three different things, and a project may
+  reasonably want the cheap one alone. Absence means unchanged in every case, so a
+  declared route is exactly what config says until somebody opts in.
+- **Provenance is a field, not a log line** (`TaskStage.insertedBecause`). A stage in a
+  route that nobody declared and nothing accounts for is unreadable afterwards — the
+  failure `stageHistory` was built to prevent, one level up. Kept apart from
+  `addedByRule` because a rule stage is explained by config anybody can read, and this
+  one only by something that happened during a run.
+
+**The protocol went in the skill, not the preamble** — the three-layer split holding. The
+markers are parsed and belong to the contract, but *when* to propose a reverify rather
+than name an owner, and why `DEFERRED` is the safer default, is engine-specific
+behavioural guidance. The skill states the four-to-one ratio outright, because a model
+told only that it *may* insert stages will insert stages.
+
+The general lesson is the one the `foldRepairs` key and the `checklistScope` tier already
+teach from other directions: **when the same observation keeps arriving and keeps being
+dismissed, the dismissal is the defect.** Eleven "Later"s were not eleven judgements; they
+were one missing verb.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`

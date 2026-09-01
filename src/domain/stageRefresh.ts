@@ -236,7 +236,7 @@ function hasBegun(stage: TaskStage): boolean {
  * whether the *next* pass of this gate needs a person — and a task already parked at
  * one is precisely the task that should stop waiting when config says it need not.
  */
-const GATE_DECLARATIONS = ["checklistScope", "checklistAudience", "authority", "autoRepair"] as const;
+const GATE_DECLARATIONS = ["checklistScope", "checklistAudience", "authority", "autoRepair", "mayMutateRoute"] as const;
 
 /**
  * Whether gate scopes can be brought into line without moving an existing item.
@@ -934,6 +934,7 @@ function findDefinition(
       checklistAudience?: ChecklistAudience;
       authority?: StageAuthority;
       autoRepair?: boolean;
+      mayMutateRoute?: boolean;
     }
   | undefined {
   if (stage.addedByRule) {
