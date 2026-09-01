@@ -8,6 +8,7 @@ import {
   RouteDefinition,
   RouteStageDefinition,
   sendBackEntryKind,
+  StageAuthority,
   StageGate,
   StageKind,
 } from "./taskRoute";
@@ -310,12 +311,42 @@ function parseStage(
     return undefined;
   }
 
+  // Rejected rather than defaulted, and this one is the sharpest case of the rule: an
+  // unrecognised `authority` misread as absent means "human", which is safe — but
+  // misread as "evidence" it would pass a gate with nobody present. It is only ever
+  // read on a gate, so declaring it anywhere else is a mistake worth naming rather
+  // than silently ignoring, since the author plainly meant a gate to pass itself.
+  const authority = str(raw.authority);
+  if (authority !== undefined && authority !== "human" && authority !== "evidence") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "authority" must be "human" or "evidence", ` +
+        `not "${authority}".`,
+    );
+    return undefined;
+  }
+  if (authority !== undefined && gate !== "approval") {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "authority" only applies to a stage with ` +
+        `"gate": "approval", and this one is "${gate}".`,
+    );
+    return undefined;
+  }
+
   // Rejected rather than coerced, unlike `handoff` and `mayChangeBranch` above, and the
   // asymmetry is deliberate: those read a non-boolean as absent, which merely turns an
   // enhancement off. A `requiresPullRequest` misread as absent turns off the check that
   // a promotion stage actually opened the pull request it was told to — and the whole
   // reason that check exists is that its absence is invisible until a human is asked to
   // merge something nobody created.
+  // Rejected rather than coerced, for `requiresPullRequest`'s reason inverted: a
+  // non-boolean read as absent would turn an automatic repair *off*, which is safe —
+  // but read as true it would apply a review's proposals with nobody watching. The
+  // author of a typo gets told either way.
+  if (raw.autoRepair !== undefined && typeof raw.autoRepair !== "boolean") {
+    problems.push(`Route "${routeId}" stage "${id}": "autoRepair" must be true or false.`);
+    return undefined;
+  }
+
   if (raw.requiresPullRequest !== undefined && typeof raw.requiresPullRequest !== "boolean") {
     problems.push(
       `Route "${routeId}" stage "${id}": "requiresPullRequest" must be true or false.`,
@@ -335,6 +366,8 @@ function parseStage(
     ...(checklistScope ? { checklistScope } : {}),
     ...(checklistAudience ? { checklistAudience: checklistAudience as ChecklistAudience } : {}),
     ...(raw.requiresPullRequest === true ? { requiresPullRequest: true } : {}),
+    ...(authority ? { authority: authority as StageAuthority } : {}),
+    ...(raw.autoRepair === true ? { autoRepair: true } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),

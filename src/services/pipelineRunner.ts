@@ -1,3 +1,5 @@
+import { certifyStage } from "../domain/stageAuthority";
+import { adjudicateRepair, parseRepairProposals } from "../domain/repairProposal";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { Subtask, SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import {
@@ -10,6 +12,8 @@ import {
   finishSubtask,
   narrowAmendments,
   nextAction,
+  approveStage,
+  correctStage,
   planStage,
   recordAssessments,
   recordChecklist,
@@ -29,7 +33,7 @@ import {
   revertSubtask,
   startSubtask,
 } from "../domain/pipelineEngine";
-import { guidanceFor } from "../domain/stageRefresh";
+import { formatSendBackNote, guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
 import { declaredScopes } from "../domain/checklistScope";
 import {
@@ -931,8 +935,52 @@ export class PipelineRunner {
         case "done":
           return { outcome: { kind: "done" }, steps };
 
-        case "awaitApproval":
-          steps.push(`Stopped for approval at "${action.stage.name}".`);
+        case "awaitApproval": {
+          // A gate the route declares an evidence gate, whose evidence is clean, is
+          // passed by the harness rather than waited on. Measured across 17 pipelines:
+          // 271 of 320 approvals sat on stages that were not authority boundaries, and
+          // only 16 approvals in the whole corpus carried a note — so the common case
+          // here is a route stopped for a click that supplies nothing.
+          //
+          // Not the agent approving itself: `certifyStage` reads only what independent
+          // machinery recorded — a parsed verdict, parsed findings, a process exit code,
+          // deferrals recorded when they were raised. See `domain/stageAuthority.ts`.
+          const certified = certifyStage(pipeline, action.stage.id);
+          if (certified.admissible) {
+            // Through `approveStage`, deliberately, rather than by settling the stage
+            // here: it enforces the checklist, the operator's outstanding actions and
+            // plan-step accounting, and an automatic pass must clear exactly the same
+            // bar a person does. A refusal from it means the route stops as before.
+            const approved = approveStage(pipeline, action.stage.id, new Date().toISOString());
+            if (approved.ok) {
+              // No intervention recorded. `interventions` counts moments a human had to
+              // act, and this is precisely one that did not happen — the same rule the
+              // runner's own automatic reverts follow. Booking it would make the number
+              // the harness is judged on unable to show the improvement.
+              current = await this.save(current, approved.value);
+              // Announced, because a gate that passed with nobody present is otherwise
+              // indistinguishable from a gate that was never there. The rule a discarded
+              // file and truncated output both follow.
+              steps.push(
+                `Passed "${action.stage.name}" on evidence: ${certified.reason}.`,
+              );
+              this.logger.info(
+                `Harness [${current.name}] certified "${action.stage.name}" without ` +
+                  `approval: ${certified.reason}.`,
+              );
+              continue;
+            }
+            this.logger.warn(
+              `Harness [${current.name}] could not certify "${action.stage.name}": ` +
+                approved.error.message,
+            );
+          }
+
+          // The reason is carried into the step so the operator being stopped can see
+          // why this gate needed them, rather than inferring it from the stage report.
+          steps.push(
+            `Stopped for approval at "${action.stage.name}" — ${certified.reason}.`,
+          );
           return {
             outcome: {
               kind: "awaitingApproval",
@@ -941,6 +989,7 @@ export class PipelineRunner {
             },
             steps,
           };
+        }
 
         case "blocked":
           steps.push(`Blocked at "${action.stage.name}".`);
@@ -1684,15 +1733,71 @@ export class PipelineRunner {
       // back to the prose inference this exists to override.
       const blocking = verdict ? verdict === "block" : hasBlockingFindings(findings);
       if (blocking) {
-        const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
-        if (held.ok) {
-          pipeline = held.value;
-          const summary = summariseFindings(findings) ?? "findings";
-          steps.push(`"${stage.name}" found ${summary} — held for you.`);
-          this.logger.warn(
-            `Harness [${task.name}] ${stage.name} found ${summary}; holding the route. ` +
-              "Approve to accept them, or send the findings back to an earlier stage.",
+        // Before holding: a review that named the stage which should fix what it found
+        // can have that applied, where the route permits it and the target is one
+        // `sendBackTo` already allows. Measured across 17 pipelines, 19 of 68 guidance
+        // notes are the send-back text the harness composes itself — the operator's
+        // whole contribution to each was picking a target and clicking.
+        //
+        // The reviewer proposes and this adjudicates, rather than the harness deriving
+        // a target: run against those 19, ordering agreed with the operator 11 times
+        // and disagreed 7. See `domain/repairProposal.ts`.
+        const applied: string[] = [];
+        const refused: string[] = [];
+        if (stage.autoRepair) {
+          for (const proposal of parseRepairProposals(reply.text)) {
+            const ruling = adjudicateRepair(pipeline, stage.id, proposal);
+            if (!ruling.admissible) {
+              refused.push(`"${proposal.target}" (${ruling.reason})`);
+              continue;
+            }
+            // Through `correctStage`, so the repair keeps everything the target already
+            // produced and the stages behind it are amended rather than rebuilt. No new
+            // invalidation path: this decides a target and nothing else.
+            const corrected = correctStage(pipeline, ruling.stage.id, {
+              finding: formatSendBackNote(stage.name, ruling.finding),
+              at: new Date().toISOString(),
+            });
+            if (!corrected.ok) {
+              refused.push(`"${ruling.stage.name}" (${corrected.error.message})`);
+              continue;
+            }
+            pipeline = corrected.value;
+            applied.push(ruling.stage.name);
+          }
+        }
+
+        if (applied.length > 0) {
+          // Announced, and no intervention recorded: nothing a human did happened here.
+          // A repair that appears in the route with no account of why it exists is the
+          // failure `stageHistory` was built to fix, so the stage it came from is named.
+          steps.push(
+            `"${stage.name}" found ${summariseFindings(findings) ?? "findings"} and ` +
+              `sent them back to ${applied.map((n) => `"${n}"`).join(", ")}.`,
           );
+          this.logger.info(
+            `Harness [${task.name}] ${stage.name} repaired ${applied.join(", ")} ` +
+              "from its own findings.",
+          );
+        }
+
+        // Held anyway when nothing was applied. A refused proposal is still reported,
+        // because a named target the harness would not act on is a better starting
+        // point for the operator than the prose it used to be.
+        if (applied.length === 0) {
+          const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+          if (held.ok) {
+            pipeline = held.value;
+            const summary = summariseFindings(findings) ?? "findings";
+            steps.push(
+              `"${stage.name}" found ${summary} — held for you.` +
+                (refused.length > 0 ? ` It proposed ${refused.join("; ")}.` : ""),
+            );
+            this.logger.warn(
+              `Harness [${task.name}] ${stage.name} found ${summary}; holding the route. ` +
+                "Approve to accept them, or send the findings back to an earlier stage.",
+            );
+          }
         }
       }
     }

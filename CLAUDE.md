@@ -3020,6 +3020,89 @@ in flight pick it up at the next advance, and any whose plan document was never 
 the expected path will stop. That is the mechanism working and will read as breakage, which
 is the whole reason to see it happen on one short route first.
 
+### The operator was the scheduler, and the evidence was already recorded
+
+`domain/stageAuthority.ts` + `domain/repairProposal.ts`, 1 Sep 2026. Two halves of one
+change: a route should continue while the correct next action is derivable from its
+objective and evidence, and stop only where information or human authority is genuinely
+required. Measured first, against the live `qubeautoapp` state file — 17 pipelines, 534
+interventions, 353 discard entries.
+
+**Of 320 approvals, 49 sat on a `humanVerification` or `deployment` stage** — the two
+kinds that can carry a real authority boundary. The other 271 were on planning,
+implementation, test and review stages, and **only 16 approvals in the whole corpus
+carried a note**. The rest were clicks. Separately, **205 of 353 discard entries — $394
+of the $570 discarded — are "re-run by hand"**, against $176 for the correction cascade:
+the dominant waste is the operator driving the route, not invalidation doing its job.
+
+**`authority: "evidence"`** lets the harness pass a gate itself. What makes it
+certification rather than self-approval is that every input is recorded by something
+other than the stage's own claim: a parsed verdict, findings parsed by machinery the
+session does not control, a process exit code, deferrals recorded when raised. A stage
+closing with *"suggested approve to continue"* contributes nothing. It goes **through
+`approveStage`**, never round it, so an automatic pass clears the same checklist,
+operator-action and plan-step bar a person does.
+
+Four rules. **Declared, never inferred from the kind** — `report-change`'s commit stage
+ships nothing while its DEV merge is the irreversible act, so which acts need a human is
+a property only the project knows; absence means `"human"`. **Anything unproven is a
+human's**, every branch defaulting to refusing. **A declared check that did not run
+refuses the gate**, the distinction `stageEvidence` exists to keep. And **blocking
+findings refuse it even where a verdict passed** — the inverse of `pipelineRunner`'s
+hold, which lets a stated verdict outrank parsed severities so a route does not stop for
+nothing. That trade is right for holding and wrong here: holding costs a click, passing
+automatically over a critical costs what the review existed to prevent. Measured, 11
+stages sit settled `passed` carrying parsed criticals, one of them six.
+
+**No intervention is recorded.** `interventions` counts moments a human had to act, and
+this is one that did not — the rule the runner's own automatic reverts already follow.
+Booking it would leave the number the harness is judged on unable to show the
+improvement.
+
+**The deferral check is deliberately not `outstandingDeferrals`**, which counts only
+items whose raising stage has already passed — at certification time that is not yet
+true of this one, so it would report nothing right up until the approval that makes the
+items outstanding. The approval *command* settles them immediately after approving, by
+asking the operator a question per item. An unattended pass is the one path reaching
+that point with nobody to ask, and settling a deferral requires a sentence — the one
+thing here that cannot be derived — so a gate holding unsettled items is a human's.
+
+**And the harness must not derive a repair target.** The obvious second half was to
+route a blocking review's findings automatically, and `sendBackTargets` already orders
+candidates with the caller taking the first as its recommendation. Run against all 19
+historical send-backs it agreed with the operator **11 times and disagreed 7** — and the
+misses are systematic, the operator choosing *planning* where proximity chose
+implementation, which is precisely the move that re-opens everything after it. At 58% an
+automatic route mis-invalidates a pipeline about two times in five.
+
+So **the reviewer proposes the target by name and `adjudicateRepair` rules on it**,
+which is the division the runtime already rests on. Legality comes entirely from what
+the route declared: **`sendBackTo` is the authority**, unchanged, so a review declaring
+nothing may reach nothing; earlier stages only; and the target must have **produced
+something**, since `correctStage` works by handing a session its own previous output.
+The repair is `correctStage` itself — existing invalidation, existing amendment
+coalescing, existing withdrawal. This module chooses a target and nothing else.
+
+**It adds work and never removes assurance.** There is no vocabulary for skipping a
+review, passing a gate or dropping a stage, and the asymmetry is not close.
+`autoRepair` is a **separate declaration from `authority`** for the same reason: both
+say the harness may act on a stage's outcome, but a wrongly passed clean gate costs
+nothing while an automatic repair spends a session and re-opens everything behind its
+target, so a project must be able to adopt the cheap one without the expensive one.
+
+**The marker is asked for only where `autoRepair` is declared.** A marker a stage is
+told to write and nothing acts on is worse than none — it reads to the model as a
+channel that works.
+
+**Refusals are refusals to act, never to record.** A proposal the harness will not apply
+still reaches the operator naming a target, which is strictly better than the prose it
+used to be. Matching is by id then exact label and **never fuzzy**: a near-match that
+picks the wrong stage re-opens correct work, and refusing costs a click.
+
+**Not built, and deliberately.** `skip`, `replan`, `insert stage` and `reverify` have no
+support in this data. The vocabulary is two operations because two is what the evidence
+carried — the rule the language-growth exercise above arrived at, applied again.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`

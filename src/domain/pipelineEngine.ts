@@ -152,6 +152,8 @@ function createStage(
     model: definition.model,
     splittable: definition.splittable,
     requiresApproval: definition.gate === "approval",
+    ...(definition.authority ? { authority: definition.authority } : {}),
+    ...(definition.autoRepair ? { autoRepair: true } : {}),
     ...(definition.sendBackTo && definition.sendBackTo.length > 0
       ? { sendBackTo: [...definition.sendBackTo] }
       : {}),

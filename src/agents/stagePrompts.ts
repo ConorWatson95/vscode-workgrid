@@ -1,4 +1,5 @@
 import { Subtask, TaskStage } from "../domain/taskPipeline";
+import { REPAIR_MARKER } from "../domain/repairProposal";
 import { StageKind } from "../domain/taskRoute";
 import { SubtaskSpec } from "../domain/pipelineEngine";
 import {
@@ -331,7 +332,41 @@ something that should be fixed before the work goes any further; use "pass" when
 what you found is advisory — pre-existing, cosmetic, or a suggestion someone may
 reasonably decline. Judge only what this change did: a long-standing problem you
 noticed in passing is not a reason to block, and say so in that case rather than
-staying silent about it.`;
+staying silent about it.${repairInstruction(stage)}`;
+}
+
+/**
+ * How a review names the stage that should fix what it found.
+ *
+ * Asked for only where the route declares `autoRepair`, because a marker a stage is
+ * told to write and nothing acts on is worse than no marker: it reads to the model as
+ * a channel that works. The rest of the reply is unchanged either way — a review that
+ * writes no `REPAIR:` line holds for a person, exactly as every review did before.
+ *
+ * The target is asked for **by name** because deriving it was measured and rejected:
+ * ordering the candidates by proximity agreed with the operator 11 times in 19. The
+ * reviewer wrote the findings and knows which name a stored procedure and which name a
+ * layering decision, and that is the judgement no ordering reaches.
+ *
+ * One line per stage, not per finding, because `correctStage` appends one correction
+ * subtask and handing it a list is what makes the repair a single session rather than
+ * one per finding — the same argument amendment coalescing makes.
+ */
+function repairInstruction(stage: TaskStage): string {
+  if (!stage.autoRepair) return "";
+  const targets = stage.sendBackTo ?? [];
+  if (targets.length === 0) return "";
+  return `
+
+When you block, also name the stage that should fix it, as a line
+"${REPAIR_MARKER}: <stage> — <what to fix>" — one line per stage, listing every
+finding that stage owns. Use the stage's name exactly as the route outline gives
+it; a name that matches nothing is refused and the route stops for a human
+instead. Only a stage earlier than this one, and only one that could actually
+change the thing you found: the stage that wrote the file is the target, not the
+one that happens to sit nearest. If the fix needs a different approach rather
+than an edit, do not propose a repair — block and say so, because that is a
+decision for a person.`;
 }
 
 /**

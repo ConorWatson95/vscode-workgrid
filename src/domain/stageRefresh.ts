@@ -1,5 +1,6 @@
 import { ReviewRule } from "./reviewRules";
 import {
+  StageAuthority,
   ChecklistAudience,
   RouteDefinition,
   sendBackEntryKind,
@@ -229,8 +230,13 @@ function hasBegun(stage: TaskStage): boolean {
  *   "Needs you" because their persisted stage had no audience to read.
  *
  * A **resolved** stage is left alone. Once a gate has passed, who answered it is history.
+ *
+ * `authority` joins them for the same reason and needs no backfill guard: it routes
+ * nothing, so declaring it cannot move an item the way a scope can. It decides only
+ * whether the *next* pass of this gate needs a person — and a task already parked at
+ * one is precisely the task that should stop waiting when config says it need not.
  */
-const GATE_DECLARATIONS = ["checklistScope", "checklistAudience"] as const;
+const GATE_DECLARATIONS = ["checklistScope", "checklistAudience", "authority", "autoRepair"] as const;
 
 /**
  * Whether gate scopes can be brought into line without moving an existing item.
@@ -926,6 +932,8 @@ function findDefinition(
       // from a rule is the right answer rather than a missing property.
       checklistScope?: string;
       checklistAudience?: ChecklistAudience;
+      authority?: StageAuthority;
+      autoRepair?: boolean;
     }
   | undefined {
   if (stage.addedByRule) {

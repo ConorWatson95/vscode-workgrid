@@ -134,6 +134,18 @@ export type ChecklistAudience =
   /** Somebody else — testers on DEV, an external party accepting UAT. */
   | "others";
 
+/**
+ * Who may pass a stage that carries an approval gate.
+ *
+ * `"human"` — a person must approve. Absent means this, so a route that has not opted
+ * in behaves exactly as it did before this existed.
+ *
+ * `"evidence"` — the harness may pass the gate itself when the stage's evidence is
+ * clean. Not the agent approving its own work: nothing the session *says* is read,
+ * only what independent machinery recorded about it. See `domain/stageAuthority.ts`.
+ */
+export type StageAuthority = "human" | "evidence";
+
 export interface RouteStageDefinition {
   /** Stable within a route; persisted, so never renumber existing values. */
   id: string;
@@ -190,6 +202,37 @@ export interface RouteStageDefinition {
    * the failure this was built from.
    */
   requiresPullRequest?: boolean;
+
+  /**
+   * Who may pass this stage's approval gate: `"human"` or `"evidence"`.
+   *
+   * Only meaningful with `gate: "approval"`. Absent means `"human"`, which is what
+   * every gate did before this existed, so nothing that has not opted in changes.
+   *
+   * `"evidence"` lets the harness pass the gate itself when the stage's evidence is
+   * clean — no blocking findings, no held stage, a declared check that ran and exited
+   * 0, nothing declined and unsettled. Declare it on the gates that exist to give a
+   * person a look rather than to obtain their authority; leave it absent on the ones
+   * where a human is genuinely deciding. Measured on 17 pipelines, 271 of 320
+   * approvals were on stages of the first kind, and only 16 approvals in the whole
+   * corpus carried any note. See `domain/stageAuthority.ts` for the rules.
+   */
+  authority?: StageAuthority;
+
+  /**
+   * This review's `REPAIR:` proposals may be applied without asking, when the stage
+   * they name is one `sendBackTo` already permits.
+   *
+   * Absent means the route holds for a person, which is what every review did before
+   * this existed. Kept a separate declaration from `authority` deliberately, though
+   * both say "the harness may act on this stage's outcome": passing a clean gate costs
+   * nothing if it was wrong, while an automatic repair spends a session and re-opens
+   * every stage behind its target. A project should be able to adopt the cheap one
+   * without the expensive one.
+   *
+   * See `domain/repairProposal.ts` for what makes a proposal legal.
+   */
+  autoRepair?: boolean;
   /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *

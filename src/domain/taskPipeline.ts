@@ -7,7 +7,7 @@
  * untouched. All transitions live in ./pipelineEngine and are pure.
  */
 
-import { ChecklistAudience, StageKind } from "./taskRoute";
+import { ChecklistAudience, StageAuthority, StageKind } from "./taskRoute";
 import { InterventionRecord } from "./interventions";
 import { PipelineExperiment } from "./pipelineExperiment";
 
@@ -428,6 +428,21 @@ export interface TaskStage {
    * `domain/pullRequestEvidence.ts`.
    */
   requiresPullRequest?: boolean;
+  /**
+   * Who may pass this stage's approval gate, copied from the route so a persisted
+   * pipeline stays self-describing. Absent means `"human"` — a person approves, which
+   * is what every gate did before this existed.
+   *
+   * See `RouteStageDefinition.authority` and `domain/stageAuthority.ts`.
+   */
+  authority?: StageAuthority;
+  /**
+   * This review may apply its own `REPAIR:` proposals, copied from the route so a
+   * persisted pipeline stays self-describing. Absent means it holds for a person.
+   *
+   * See `RouteStageDefinition.autoRepair` and `domain/repairProposal.ts`.
+   */
+  autoRepair?: boolean;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**
