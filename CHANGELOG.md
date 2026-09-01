@@ -2,6 +2,40 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.116.0
+
+The other half of the autonomy model: stages that continue on a guess where they should
+have asked.
+
+- **The ask rule now triggers on uncertainty, not only on a thin brief.** The contract
+  keyed on *"if the brief does not tell you enough"* — a check a stage runs once, at the
+  start, and passes. The failure in the record is the other one: the brief looked fine,
+  the stage got underway, met something it could not decide, and settled it with the most
+  plausible reading. Nothing in its report distinguishes that from having known.
+
+  Measured across 17 pipelines: `ask_user` was called in **5%** of stage subtasks, and
+  the protocol skill — which carries the judgement half of when to ask — loaded in
+  **18%**. So in four sessions out of five the only guidance present was asking a
+  question the stage had already answered.
+
+  Two hypotheses tested and rejected on the way. Availability is not the blocker: the
+  tool is connected and called 34 times. And prompt length is not the lever — stages with
+  300+ word intents ask **more** than short ones, 14% against 6%.
+
+  It states specific tells rather than a principle: you are about to copy a neighbouring
+  feature because nothing says what this one should do; a governing document is one you
+  cannot open; two readings of the requirement give different output and nothing decides
+  between them. Each is drawn from a correction that actually happened.
+
+- **And the reverse, in the same breath.** Asking for permission to do work the objective
+  already implies is stated as equally a fault. Alone, the rule above buys one failure by
+  causing its opposite — and that one is measured too: of 320 approvals, 271 were on
+  stages that were not authority boundaries and only 16 carried a note.
+
+  In the invariant preamble rather than the skill, on the test this codebase already
+  applies to re-run awareness: the failure is silent *and* expensive. Costs about 170
+  tokens on a 16,695-token cached prefix.
+
 ## 0.115.4
 
 - **`discoveredDocuments` had captured nothing since it shipped, and could not have.**

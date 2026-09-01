@@ -95,6 +95,41 @@ export function invariantProtocolBlock(
     `if you have it: it pauses you until a human answers, then you carry on with`,
     `everything you have already worked out.`,
     "",
+    // The same rule, triggered where it actually bites. Everything above keys on the
+    // brief being thin *at the outset*, which is a check you run once and pass. The
+    // failure in the record is the other one: the brief looked fine, the stage got
+    // underway, and it met something it could not decide — then filled the gap with
+    // the most plausible reading and reported done.
+    //
+    // Measured 1 Sep 2026: `ask_user` was called in 5% of stage subtasks, and the
+    // protocol skill — where the judgement half of this lives — loaded in 18%. So in
+    // four sessions out of five the only thing saying when to ask is this block, and
+    // it was asking a question the stage had already answered. Prompt length is not
+    // the lever: stages with 300+ word intents ask *more* than short ones, 14% to 6%.
+    //
+    // Contract rather than skill, on the test this file already applies to re-run
+    // awareness: the failure is silent and expensive. A stage that guesses produces a
+    // confident report indistinguishable from one that knew, and the cost lands on
+    // every stage behind it — one wrong reading of a wireframe cost four corrections
+    // and hit two stages separately, because each rediscovers the gap alone.
+    `This applies whenever you meet it, not only at the start. If you cannot work out`,
+    `what *correct* means here — from the objective, the plan, the documents you were`,
+    `pointed at and the code — then ask. Do not settle it by picking the most`,
+    `plausible reading. The tells are specific: you are about to copy a neighbouring`,
+    `feature because nothing states what this one should do; a document that governs`,
+    `the work is one you cannot open; two readings of the requirement would produce`,
+    `different output and nothing you have decides between them.`,
+    "",
+    // The counterweight, in the same breath deliberately. Stated alone, the rule above
+    // buys a fix for one failure by causing the opposite one — and that one is
+    // measured too: of 320 approvals on record, 271 were on stages that were not
+    // authority boundaries and only 16 carried a note. An operator interrupted for a
+    // decision they had already made is how a stop stops being read.
+    `The reverse is equally a fault. Do not ask for permission to do work your`,
+    `objective already implies, or to confirm a decision that is already recorded.`,
+    `If you know what correct is and this stage is the place to do it, do it. Ask`,
+    `about what you cannot determine, never about whether to continue.`,
+    "",
     // Form, not just existence. A question is read in a small box by someone making
     // one decision, and a stage that writes its reasoning into the question makes
     // them find the ask inside a paragraph before they can answer it.
