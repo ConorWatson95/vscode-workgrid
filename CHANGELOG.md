@@ -2,6 +2,26 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.115.3
+
+- **An evidence-certified gate booked itself as an operator approval.** `counted` records
+  an intervention whenever it is given a clock, and the runner has to give it one — so
+  the first gate the harness passed on its own was filed as a human having approved it.
+
+  That is the worst place this could be wrong. `interventions` is the measurement that
+  justified building the mechanism: 320 approvals, 271 of them on stages that were not
+  authority boundaries. Counting every automatic pass as an approval keeps the number
+  flat by construction, so the improvement would be invisible in exactly the analysis
+  anyone would run to check it — and the next audit of that data would conclude the
+  feature did nothing.
+
+  `approveStage` now takes an actor. `"harness"` records no intervention; everything else
+  about the transition is identical, because an automatic pass still has to clear the
+  checklist, the operator's outstanding actions and plan-step accounting.
+
+  Caught on the first live evidence gate, which passed correctly and then mis-booked
+  itself. One approval recorded before this fix is a false positive.
+
 ## 0.115.2
 
 - **A task with an agent working on it was filed under "Needs you."** `groupForTask`

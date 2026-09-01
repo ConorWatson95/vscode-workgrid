@@ -2235,6 +2235,19 @@ export function approveStage(
    * the engine runs nothing.
    */
   note?: string,
+  /**
+   * Who is passing the gate. `"harness"` is `stageAuthority` certifying it from
+   * evidence, and it records **no intervention**.
+   *
+   * `interventions` counts moments a human had to act, and an evidence-certified gate
+   * is precisely one that did not happen — the rule the runner's own automatic reverts
+   * already follow. Booking it as an approval would inflate the number this feature
+   * exists to reduce, so the improvement would be invisible in exactly the measurement
+   * that justified building it. Everything else about the transition is identical: the
+   * checklist, the operator's actions and plan-step accounting are all still enforced,
+   * because an automatic pass must clear the same bar a person does.
+   */
+  actor: "human" | "harness" = "human",
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
@@ -2331,7 +2344,7 @@ export function approveStage(
       { ...pipeline, stages: withAssessment },
       { ...stage, status: "passed", finishedAt: at },
     ),
-    ...counted(pipeline, { kind: "approval", stageId: stage.id }, at),
+    ...counted(pipeline, { kind: "approval", stageId: stage.id }, actor === "harness" ? undefined : at),
     currentStage: undefined,
     guidance,
   });

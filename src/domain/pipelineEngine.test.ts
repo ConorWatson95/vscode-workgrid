@@ -2826,3 +2826,44 @@ describe("undoCorrection", () => {
     expect(undoCorrection(mid, "implement", "t2").ok).toBe(false);
   });
 });
+
+describe("approveStage and who did the approving", () => {
+  // Found live, 1 Sep 2026: the first evidence-certified gate booked itself as an
+  // operator approval, because `counted` keys purely on a clock being supplied and the
+  // runner has to supply one. It inflates the exact number the mechanism exists to
+  // reduce, so the improvement would be invisible in the measurement that justified it.
+  const held = (): TaskPipeline =>
+    ({
+      routeId: "r",
+      routeLabel: "R",
+      updatedAt: "x",
+      stages: [
+        {
+          id: "review",
+          name: "Review",
+          kind: "codeReview",
+          status: "awaiting-approval",
+          intent: "i",
+          splittable: false,
+          requiresApproval: true,
+          subtasks: [{ id: "review-1", title: "Review", prompt: "p", status: "done" }],
+        },
+      ],
+    }) as unknown as TaskPipeline;
+
+  it("counts a person approving", () => {
+    const out = approveStage(held(), "review", "2026-09-01T00:00:00.000Z");
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.interventions ?? []).toHaveLength(1);
+  });
+
+  it("counts nothing when the harness certifies it from evidence", () => {
+    const out = approveStage(held(), "review", "2026-09-01T00:00:00.000Z", undefined, "harness");
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.interventions ?? []).toHaveLength(0);
+    // The transition itself is identical -- only the bookkeeping differs.
+    expect(out.value.stages[0].status).toBe("passed");
+  });
+});

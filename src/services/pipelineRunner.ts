@@ -960,7 +960,16 @@ export class PipelineRunner {
             // here: it enforces the checklist, the operator's outstanding actions and
             // plan-step accounting, and an automatic pass must clear exactly the same
             // bar a person does. A refusal from it means the route stops as before.
-            const approved = approveStage(pipeline, action.stage.id, new Date().toISOString());
+            const approved = approveStage(
+              pipeline,
+              action.stage.id,
+              new Date().toISOString(),
+              undefined,
+              // Recorded as the harness passing it, so no intervention is counted. See
+              // `approveStage`: booking this as an approval would inflate the number
+              // this whole mechanism exists to bring down.
+              "harness",
+            );
             if (approved.ok) {
               // No intervention recorded. `interventions` counts moments a human had to
               // act, and this is precisely one that did not happen — the same rule the
