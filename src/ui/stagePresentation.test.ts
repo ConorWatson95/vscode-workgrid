@@ -475,3 +475,53 @@ describe("stageBlock and activeStageLabel", () => {
     ).toBeUndefined();
   });
 });
+
+describe("a held stage is not a stage waiting for a signature", () => {
+  const held = (blocked: string | undefined, subtasks = 1): TaskStage =>
+    ({
+      id: "nav",
+      name: "Navigation and permissions",
+      kind: "implementation",
+      status: "awaiting-approval",
+      intent: "i",
+      splittable: false,
+      requiresApproval: false,
+      ...(blocked ? { blocked } : {}),
+      subtasks: Array.from({ length: subtasks }, (_, n) => ({
+        id: `nav-${n}`,
+        title: "t",
+        prompt: "p",
+        status: "done" as const,
+      })),
+    }) as unknown as TaskStage;
+
+  // Reported from a live task: the frontier stage was held for writing no files and a
+  // review two rows down was held for six criticals. Both rows said "awaiting
+  // approval", so the eye went to the one with a finding count while the route was
+  // actually stopped on the other.
+  it("says why it is held", () => {
+    const v = stagePresentation(held("this stage changed no files — if it was right that there was nothing to do, say so"));
+    expect(v.label).toBe("Held");
+    expect(v.description).toContain("changed no files");
+  });
+
+  it("still reads as awaiting approval when nothing holds it", () => {
+    const v = stagePresentation(held(undefined));
+    expect(v.label).toBe("Awaiting approval");
+    expect(v.description).toBe("awaiting approval");
+  });
+
+  // Approving is how an operator clears a hold, so every action keyed on this status
+  // has to stay available on the rows that most need it.
+  it("keeps the context value, so the same actions are offered", () => {
+    expect(stagePresentation(held("held for something")).contextValue).toContain(
+      "stage-awaiting-approval",
+    );
+  });
+
+  it("keeps the progress detail beside the reason", () => {
+    const v = stagePresentation(held("changed no files", 4));
+    expect(v.description).toContain("4/4");
+    expect(v.description).toContain("changed no files");
+  });
+});

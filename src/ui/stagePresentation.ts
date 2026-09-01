@@ -1,6 +1,7 @@
 import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { findingsOfSubtasks, summariseFindings } from "../domain/reviewFindings";
 import { isCorrectable, undoableCorrection } from "../domain/pipelineEngine";
+import { deferralHeadline } from "../domain/deferralText";
 
 /**
  * Presentation for pipeline stages in the tree. Pure, so the labelling rules are
@@ -81,6 +82,33 @@ function statusVisual(stage: TaskStage, outstandingInPipeline?: number): StageVi
         contextValue: "stage-active",
       };
     case "awaiting-approval":
+      // A stage *held* is not a stage waiting for a signature, and until this branch
+      // read `blocked` the two were the same row. Four different demands render at this
+      // status — an implementation stage that wrote no files, a review that found
+      // something, a promotion that opened no pull request, a correction that refused —
+      // and every one of them said "awaiting approval", so the operator could not tell
+      // what was being asked without opening the report.
+      //
+      // Reported from a live task where the frontier stage was held for writing nothing
+      // and a review two rows down was held for six criticals. Both read identically,
+      // so the eye went to the one with a finding count and the route was actually
+      // stopped on the other.
+      //
+      // The reason is the stage's own words, headlined for the same reason a deferral is:
+      // this is a tree row, not a report, and `blocked` runs to a sentence or more.
+      if (stage.blocked?.trim()) {
+        const reason = deferralHeadline(stage.blocked);
+        return {
+          iconId: "warning",
+          colorId: "charts.yellow",
+          label: "Held",
+          description: detail ? `held · ${reason} · ${detail}` : `held · ${reason}`,
+          // Unchanged, deliberately: every menu keyed on a stage at this status still
+          // applies — approving is how an operator clears a hold, and re-keying it
+          // would take the actions away from the rows that most need them.
+          contextValue: "stage-awaiting-approval",
+        };
+      }
       return {
         iconId: "comment-unresolved",
         colorId: "charts.yellow",

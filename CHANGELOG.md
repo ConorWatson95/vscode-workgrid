@@ -2,6 +2,23 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.116.1
+
+- **A held stage read as a stage waiting for a signature.** Four different demands settle
+  at `awaiting-approval` — an implementation stage that wrote no files, a review that
+  found something, a promotion that opened no pull request, a correction that refused —
+  and every one rendered as "awaiting approval". The row carried `blocked`, which says
+  exactly what is wanted, and nothing displayed it.
+
+  Reported from a live task where the frontier stage was held for writing no files while
+  a review two rows further down was held for six criticals. Both rows read identically,
+  so the eye went to the one with a finding count — and the route was stopped on the
+  other. A held stage now says why, labelled **Held**, with the progress detail kept
+  beside the reason.
+
+  The context value is deliberately unchanged, so every action keyed on this status stays
+  on the rows that most need it: approving is how an operator clears a hold.
+
 ## 0.116.0
 
 The other half of the autonomy model: stages that continue on a guess where they should
