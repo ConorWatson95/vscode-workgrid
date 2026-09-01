@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addMissingStages,
   guidanceFor,
+  refreshCheckDeclarations,
   refreshGateDeclarations,
   refreshPendingStages,
   refreshRulePaths,
@@ -1561,5 +1562,73 @@ describe("refreshGateDeclarations and a gate added after the task started", () =
   it("leaves a resolved stage alone", () => {
     const { changed } = refreshGateDeclarations(pipelineWith(false, "passed"), source() as never);
     expect(changed).toEqual([]);
+  });
+});
+
+describe("refreshCheckDeclarations", () => {
+  const routeStage = (over: Record<string, unknown> = {}) => ({
+    id: "plan",
+    label: "Plan",
+    kind: "planning" as const,
+    intent: "Plan it.",
+    gate: "auto" as const,
+    planOutput: "docs/plans/${branch}/rc-plan.md",
+    ...over,
+  });
+  const source = (over: Record<string, unknown> = {}) =>
+    ({ routes: [{ id: "r", label: "R", stages: [routeStage(over)] }], rules: [] }) as never;
+
+  const planStage = (over: Record<string, unknown>, subtasks: unknown[]) =>
+    ({
+      id: "plan",
+      name: "Plan",
+      kind: "planning",
+      status: "pending",
+      intent: "Plan it.",
+      splittable: false,
+      requiresApproval: false,
+      subtasks,
+      ...over,
+    }) as never;
+
+  const pipe = (stage: unknown) =>
+    ({ routeId: "r", routeLabel: "R", updatedAt: "x", stages: [stage] }) as never;
+
+  const done = { id: "plan-1", title: "Plan", prompt: "p", status: "done", reply: "ok" };
+  const fix = { id: "plan-fix-1", title: "Fix", prompt: "p", status: "pending" };
+
+  // The live failure, 1 Sep 2026: rc-plan gained planOutput on 26 Aug, the task's stage
+  // ran on 24 Aug, and correcting it would have re-run the plan with no open-questions
+  // check at all -- the very failure planOutput was created for.
+  it("reaches a stage re-opened by a correction", () => {
+    const { pipeline, changed } = refreshCheckDeclarations(pipe(planStage({}, [done, fix])), source());
+    expect(changed).toEqual(["plan"]);
+    expect(pipeline.stages[0].planOutput).toBe("docs/plans/${branch}/rc-plan.md");
+  });
+
+  it("leaves a settled stage alone, because its check is history", () => {
+    const { changed } = refreshCheckDeclarations(
+      pipe(planStage({ status: "passed" }, [done])),
+      source(),
+    );
+    expect(changed).toEqual([]);
+  });
+
+  // Its checks have already been applied to the output being read.
+  it("leaves a stage sitting at a gate with nothing left to run", () => {
+    const { changed } = refreshCheckDeclarations(
+      pipe(planStage({ status: "awaiting-approval" }, [done])),
+      source(),
+    );
+    expect(changed).toEqual([]);
+  });
+
+  it("removes a check the project has since dropped", () => {
+    const { pipeline, changed } = refreshCheckDeclarations(
+      pipe(planStage({ planOutput: "docs/old.md" }, [done, fix])),
+      source({ planOutput: undefined }),
+    );
+    expect(changed).toEqual(["plan"]);
+    expect(pipeline.stages[0].planOutput).toBeUndefined();
   });
 });

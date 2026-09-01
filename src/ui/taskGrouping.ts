@@ -226,7 +226,24 @@ export function groupForTask(input: GroupInput): TaskGroupId {
   // that status — and it is the reason this group exists.
   if (externalGateInPlay(input.pipeline)) return "waiting-others";
 
-  if (stages.some((stage) => stage.status === "awaiting-approval")) return "needs-you";
+  // A session in flight outranks a gate awaiting approval, and the order of these two
+  // checks is the whole of it: this one used to run first, so a task with an agent
+  // running on stage 2 was filed as needing you because stage 6 was still holding.
+  //
+  // The gate in that case is *ahead* of the frontier, not behind it -- `nextAction`
+  // returns the first unresolved stage, so a stage being `active` means the route is
+  // working and will reach that gate on its own. Nothing is being asked of anybody yet,
+  // and filing it as a decision both invents one and hides a running task from
+  // `Working`, where every other stage with that status appears.
+  //
+  // Third time this exact trade has been got wrong -- `externalGate` and the
+  // verification branch below each had to learn that `active` is neither yours nor
+  // theirs. The lesson `foldRepairs` teaches applies here too: when the same correction
+  // keeps being needed one branch at a time, the check is keyed on the wrong thing.
+  const running = stages.some((stage) => stage.status === "active");
+  if (!running && stages.some((stage) => stage.status === "awaiting-approval")) {
+    return "needs-you";
+  }
 
   const current = stages.find(
     (stage) => stage.status === "active" || stage.status === "pending",

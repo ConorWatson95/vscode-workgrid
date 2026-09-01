@@ -439,3 +439,51 @@ describe("a route that stopped rather than being parked", () => {
     expect(groupForTask(working as never)).toBe("working");
   });
 });
+
+describe("a running stage beside a gate that is still holding", () => {
+  // Reported from a live task, 1 Sep 2026. `rc-plan` was corrected, the amendment for
+  // `Implement the data` was running, and `SQL object review` further down the route
+  // was still awaiting approval from before -- so the task was filed as needing a
+  // decision while an agent was working on it, and was missing from `Working`.
+  const stage = (over: Record<string, unknown>) =>
+    ({
+      id: "s",
+      name: "S",
+      kind: "implementation",
+      status: "pending",
+      intent: "i",
+      splittable: false,
+      requiresApproval: false,
+      subtasks: [],
+      ...over,
+    }) as never;
+
+  const input = (stages: unknown[]) =>
+    ({
+      status: "ready",
+      heldCalls: 0,
+      pipeline: { routeId: "r", routeLabel: "R", updatedAt: "x", stages },
+    }) as never;
+
+  it("is working, not needing you", () => {
+    expect(
+      groupForTask(
+        input([
+          stage({ id: "implement", status: "active" }),
+          stage({ id: "review", kind: "domainReview", status: "awaiting-approval" }),
+        ]),
+      ),
+    ).toBe("working");
+  });
+
+  it("needs you once the running stage finishes", () => {
+    expect(
+      groupForTask(
+        input([
+          stage({ id: "implement", status: "passed" }),
+          stage({ id: "review", kind: "domainReview", status: "awaiting-approval" }),
+        ]),
+      ),
+    ).toBe("needs-you");
+  });
+});

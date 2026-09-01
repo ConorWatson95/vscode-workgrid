@@ -236,6 +236,9 @@ function hasBegun(stage: TaskStage): boolean {
  * whether the *next* pass of this gate needs a person — and a task already parked at
  * one is precisely the task that should stop waiting when config says it need not.
  */
+/** What a stage's next output will be judged by. See `refreshCheckDeclarations`. */
+const CHECK_DECLARATIONS = ["verify", "planFile", "planOutput", "requiresPullRequest"] as const;
+
 const GATE_DECLARATIONS = ["checklistScope", "checklistAudience", "authority", "autoRepair", "mayMutateRoute"] as const;
 
 /**
@@ -370,6 +373,70 @@ export function refreshStageLabels(
   });
 
   return changed.length > 0 ? { pipeline: { ...pipeline, stages }, changed } : { pipeline, changed };
+}
+
+/**
+ * The obligation a stage will be *judged* by, brought into line before it runs again.
+ *
+ * `refreshPendingStages` carries these onto a stage that has never started, and stops
+ * there because an `intent` is an instruction given to a run and a stage that ran must
+ * keep what it ran with. That rule is right for an instruction and wrong for a check:
+ * `verify`, `planFile`, `planOutput` and `requiresPullRequest` are not things a stage
+ * was told, they are the tests its *next* output has to pass. A stage re-opened by a
+ * correction keeps its finished subtasks — which is the entire saving — so it is
+ * excluded from the pending pass by construction, and was therefore judged by whatever
+ * config said on the day it first ran.
+ *
+ * Found on a live task, 1 Sep 2026. `rc-plan` gained
+ * `planOutput: docs/plans/${branch}/rc-plan.md` on 26 August; this task's `rc-plan` ran
+ * on 24 August, so the persisted stage carried none. Correcting it would have re-run the
+ * planning stage, produced an amended plan, and settled with **no open-questions check**
+ * — which is precisely the NMGB-2814 failure that made `planOutput` exist: a plan that
+ * said in writing it was not finished, passed, and had every question answered by a
+ * guess in the stages behind it. On the one stage where the operator had just said every
+ * question must surface.
+ *
+ * Its own pass, with its own status rule, for the reason the other three have theirs.
+ * A **resolved** stage is untouched: the check that certified it is history, and
+ * rewriting it would restate what happened. What this adds over the pending pass is the
+ * stage with work still to do — a correction, an amendment, a retry — which is about to
+ * produce output that the current check is the right one to judge.
+ *
+ * A check the project has since **removed** is removed here too, unlike the one-way gate
+ * refresh above. Withholding that would leave a stage held by an obligation its route no
+ * longer states, with nothing in config explaining why.
+ */
+export function refreshCheckDeclarations(
+  pipeline: TaskPipeline,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; changed: string[] } {
+  const changed: string[] = [];
+
+  const stages = pipeline.stages.map((stage) => {
+    if (hasResolved(stage)) return stage;
+    // Only a stage with work still queued. One that has never started is the pending
+    // pass's business, and this must not reach a stage sitting at a gate with nothing
+    // left to run: its checks have already been applied to the output being read.
+    if (!stage.subtasks.some((subtask) => subtask.status === "pending")) return stage;
+
+    const definition = findDefinition(source, pipeline.routeId, stage);
+    if (!definition) return stage;
+
+    const updates: Partial<TaskStage> = {};
+    for (const field of CHECK_DECLARATIONS) {
+      const next = normalize(definition[field]);
+      if (normalize(stage[field]) !== next) {
+        (updates as Record<string, unknown>)[field] = next;
+      }
+    }
+    if (Object.keys(updates).length === 0) return stage;
+
+    changed.push(stage.id);
+    return { ...stage, ...updates };
+  });
+
+  if (changed.length === 0) return { pipeline, changed: [] };
+  return { pipeline: { ...pipeline, stages }, changed };
 }
 
 export function refreshGateDeclarations(

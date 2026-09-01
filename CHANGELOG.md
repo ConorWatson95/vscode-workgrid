@@ -2,6 +2,35 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.115.2
+
+- **A task with an agent working on it was filed under "Needs you."** `groupForTask`
+  returned `needs-you` for any `awaiting-approval` stage anywhere in the route, and that
+  check ran *before* the `active` one — so a task whose plan had been corrected, with the
+  amendment for its implementation stage running, was filed as needing a decision because
+  a review further down the route was still holding from before. It was also missing from
+  **Working**, where every other stage with that status appears.
+
+  The gate in that case is *ahead* of the frontier: `nextAction` returns the first
+  unresolved stage, so a stage being `active` means the route is working and will reach
+  the gate on its own. Nothing is being asked of anybody yet. Third time this trade has
+  been got wrong one branch at a time — `externalGate` and the verification branch each
+  had to learn that `active` is neither yours nor theirs.
+
+- **A check declared after a stage first ran never reached a correction**
+  (`refreshCheckDeclarations`). `verify`, `planFile`, `planOutput` and
+  `requiresPullRequest` are not instructions given to a run — they are the tests the
+  stage's *next* output has to pass — but only `refreshPendingStages` carried them, and
+  it excludes any stage that has started. A stage re-opened by a correction keeps its
+  finished subtasks by design, so it was always judged by whatever config said the day
+  it first ran.
+
+  Found on a live task: `rc-plan` gained `planOutput` on 26 August and the task's stage
+  ran on 24 August, so correcting it would have re-run the planning stage and settled
+  with **no open-questions check** — the exact failure `planOutput` exists to prevent, on
+  the one stage where the operator had just said every question must surface. A resolved
+  stage is still left alone, and so is one sitting at a gate with nothing left to run.
+
 ## 0.115.1
 
 - **A gate declared after a task started reached nothing.** `requiresApproval` is derived

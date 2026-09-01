@@ -37,6 +37,7 @@ import { parsePorcelainChanges } from "./domain/worktreeDiscard";
 import { SuggestionScanService } from "./services/suggestionScanService";
 import {
   refreshGateDeclarations,
+  refreshCheckDeclarations,
   refreshRulePaths,
   refreshStageLabels,
 } from "./domain/stageRefresh";
@@ -1069,17 +1070,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const corrected: string[] = [];
       for (const task of tasks) {
         if (!task.pipeline) continue;
-        // Three passes, one save. `refreshRulePaths` reads the *rules* where the
+        // Four passes, one save. `refreshRulePaths` reads the *rules* where the
         // others read the route — see its own note — and a stage can need all three.
         // Each pass takes the previous one's pipeline, and the save must use the
         // LAST of them, or a pass computes its corrections and throws them away.
         const gates = refreshGateDeclarations(task.pipeline, source);
-        const paths = refreshRulePaths(gates.pipeline, source);
+        // A stage re-opened by a correction keeps its finished subtasks, so it is
+        // excluded from the pending pass by construction -- and was therefore judged by
+        // whatever config said the day it first ran. See `refreshCheckDeclarations`.
+        const checks = refreshCheckDeclarations(gates.pipeline, source);
+        const paths = refreshRulePaths(checks.pipeline, source);
         // A label decides nothing, so it refreshes on every stage including settled
         // ones -- a corrected stage name is needed most on the history somebody is
         // reading to work out what a stage did.
         const labels = refreshStageLabels(paths.pipeline, source);
-        const changed = [...new Set([...gates.changed, ...paths.changed, ...labels.changed])];
+        const changed = [
+          ...new Set([...gates.changed, ...checks.changed, ...paths.changed, ...labels.changed]),
+        ];
         if (changed.length === 0) continue;
         await repository.save({
           ...task,
