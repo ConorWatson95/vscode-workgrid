@@ -240,6 +240,10 @@ export class StageTreeItem extends vscode.TreeItem {
         "",
         stage.intent,
         stage.addedByRule ? `\n_Added by a review rule: ${stage.addedByRule}_` : "",
+        stage.insertedBecause
+          ? `\n_Added during the run by "${stage.insertedBecause.stageName}": ` +
+            `${stage.insertedBecause.reason}_`
+          : "",
         stage.subtasks.length > 0
           ? `\nSubtasks:\n${stage.subtasks
               .map((s) => `- ${s.title} (${s.status})`)

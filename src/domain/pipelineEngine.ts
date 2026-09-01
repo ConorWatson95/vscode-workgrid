@@ -1008,7 +1008,7 @@ export function correctStage(
       finding,
       at: correction.at,
       ...(correction.upstream
-        ? { upstream: { ...correction.upstream, findings: [finding] } }
+        ? { upstream: { ...correction.upstream, findings: [finding], reverify: true } }
         : {}),
       // What this correction is about to clear off the stage. A finding can be
       // wrong — a comment acted on before it was investigated — and withdrawing

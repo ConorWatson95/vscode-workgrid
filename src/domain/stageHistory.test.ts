@@ -97,3 +97,51 @@ describe("roundHeading", () => {
     expect(roundHeading(only, false)).toBeUndefined();
   });
 });
+
+describe("a reverify round", () => {
+  // A reverify uses the amendment machinery, so it must not inherit the amendment's
+  // wording: that says the stage named was corrected, and here it was not -- it found
+  // *this* stage stale, which is the opposite claim about both of them.
+  const reverified = {
+    id: "preview",
+    name: "Preview the DEV deployment",
+    kind: "test" as const,
+    status: "pending" as const,
+    intent: "Preview it.",
+    splittable: false,
+    requiresApproval: false,
+    subtasks: [
+      { id: "preview-1", title: "Preview", prompt: "p", status: "done" as const, reply: "ok" },
+      {
+        id: "preview-fix-1",
+        title: "Reverify for SQL object review",
+        prompt: "p",
+        status: "pending" as const,
+        correction: {
+          finding: "ec-preview.md predates the current deploy/001",
+          at: "2026-09-01T00:00:00.000Z",
+          upstream: {
+            stageId: "review",
+            stageName: "SQL object review",
+            findings: ["ec-preview.md predates the current deploy/001"],
+            reverify: true,
+          },
+        },
+      },
+    ],
+  };
+
+  it("says the output went stale, never that anything was corrected", () => {
+    const round = stageRounds(reverified)[1];
+    expect(round.kind).toBe("amendment");
+    const heading = roundHeading(round, true);
+    expect(heading).toContain("found its output stale");
+    expect(heading).not.toContain("was corrected");
+  });
+
+  it("counts as a re-run in the summary, not as an amendment", () => {
+    const summary = summariseStageHistory(reverified) ?? "";
+    expect(summary).toContain('1 re-run after "SQL object review" found it stale');
+    expect(summary).not.toContain("amendment");
+  });
+});

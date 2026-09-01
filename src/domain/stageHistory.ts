@@ -38,6 +38,11 @@ export interface StageRound {
   finding?: string;
   /** The stage whose correction caused this amendment. */
   upstreamStageName?: string;
+  /**
+   * This round re-ran the stage because a later one found its output stale, rather than
+   * bringing it into line after an upstream correction. See `Subtask.correction.upstream`.
+   */
+  reverify?: boolean;
   /** The newest round: the account that stands. False for every round of an uncorrected stage. */
   latest: boolean;
 }
@@ -67,6 +72,7 @@ export function stageRounds(stage: TaskStage): StageRound[] {
       finding:
         kind === "correction" ? deferralHeadline(subtask.correction!.finding) : undefined,
       upstreamStageName: subtask.correction?.upstream?.stageName,
+      reverify: subtask.correction?.upstream?.reverify,
       latest: repaired && index === stage.subtasks.length - 1,
     };
   });
@@ -87,16 +93,30 @@ export function summariseStageHistory(stage: TaskStage): string | undefined {
 
   const parts: string[] = ["the original run"];
   if (corrections > 0) parts.push(`${corrections} correction${corrections === 1 ? "" : "s"}`);
-  if (amendments.length > 0) {
+  // Counted apart from amendments, because "amendments after X changed" says the stage
+  // named there was corrected -- and for a reverify it was not. It found this stage
+  // stale, which is the opposite claim about both stages.
+  const reverifies = amendments.filter((round) => round.reverify);
+  const amended = amendments.filter((round) => !round.reverify);
+  if (reverifies.length > 0) {
+    const found = [...new Set(reverifies.map((round) => round.upstreamStageName).filter(Boolean))];
+    parts.push(
+      `${reverifies.length} re-run${reverifies.length === 1 ? "" : "s"}` +
+        (found.length > 0
+          ? ` after ${found.map((name) => `"${name}"`).join(" and ")} found it stale`
+          : ""),
+    );
+  }
+  if (amended.length > 0) {
     // Named, because "1 amendment" reads as this stage having gone wrong again when it
     // is a record of it having been right and something upstream having moved. The
     // distinct stages, not one per amendment: two amendments after the same correction
     // are one event as far as the reader's next question goes.
     const upstream = [
-      ...new Set(amendments.map((round) => round.upstreamStageName).filter(Boolean)),
+      ...new Set(amended.map((round) => round.upstreamStageName).filter(Boolean)),
     ];
     parts.push(
-      `${amendments.length} amendment${amendments.length === 1 ? "" : "s"}` +
+      `${amended.length} amendment${amended.length === 1 ? "" : "s"}` +
         (upstream.length > 0 ? ` after ${upstream.map((name) => `"${name}"`).join(" and ")} changed` : ""),
     );
   }
@@ -112,10 +132,14 @@ export function summariseStageHistory(stage: TaskStage): string | undefined {
 export function roundHeading(round: StageRound, named: boolean): string | undefined {
   if (round.kind === "run") return named ? round.subtask.title : undefined;
   if (round.kind === "amendment") {
-    return (
-      `${round.subtask.title} — brought into line after ` +
-      `${round.upstreamStageName ? `"${round.upstreamStageName}"` : "an earlier stage"} was corrected`
-    );
+    // A reverify and an amendment are opposite accounts of the same stage: one says it
+    // was corrected, the other that it was right and something moved under it. Saying
+    // the wrong one is a false history, which is what this module exists to prevent.
+    const by = round.upstreamStageName ? `"${round.upstreamStageName}"` : undefined;
+    return round.reverify
+      ? `${round.subtask.title} — re-run after ${by ?? "a later stage"} found its output stale`
+      : `${round.subtask.title} — brought into line after ` +
+        `${by ?? "an earlier stage"} was corrected`;
   }
   return round.finding
     ? `${round.subtask.title} — asked to fix: ${round.finding}`

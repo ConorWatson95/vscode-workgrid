@@ -83,7 +83,22 @@ export interface Subtask {
      * into the parts it was rendered from. Absent on amendments recorded before
      * coalescing existed, which is why every reader treats it as optional.
      */
-    upstream?: { stageId: string; stageName: string; findings?: string[] };
+    upstream?: {
+      stageId: string;
+      stageName: string;
+      findings?: string[];
+      /**
+       * Set when this round is a *reverify* — a later stage found this stage's output
+       * stale — rather than an amendment following that stage's correction.
+       *
+       * Persisted rather than inferred, because the two read as opposite accounts of
+       * the same stage: an amendment says the stage named here was corrected, and a
+       * reverify says it was right and noticed that something else had moved. A report
+       * that says "brought into line after X was corrected" about a stage nobody
+       * corrected is the kind of false history `stageHistory` exists to prevent.
+       */
+      reverify?: boolean;
+    };
   };
 }
 

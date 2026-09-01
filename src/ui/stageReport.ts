@@ -326,6 +326,15 @@ export function formatStageReport(
   ];
   if (stage.model) lines.push(`**Model:** ${stage.model}  `);
   if (stage.addedByRule) lines.push(`**Added by rule:** ${stage.addedByRule}  `);
+  // A stage nobody declared is the one whose presence a reader cannot account for.
+  // Named with the stage that asked for it, because "why is this here" and "who
+  // decided" are the same question for an inserted stage.
+  if (stage.insertedBecause) {
+    lines.push(
+      `**Added during the run** by "${stage.insertedBecause.stageName}": ` +
+        `${stage.insertedBecause.reason}  `,
+    );
+  }
   // Above everything the stage said, because it decides how the rest of the document
   // is read: a corrected stage carries several accounts of itself and only the last
   // one stands. Absent on a stage nothing has corrected, so the common case is
