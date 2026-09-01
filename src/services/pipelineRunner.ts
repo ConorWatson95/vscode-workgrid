@@ -954,6 +954,7 @@ export class PipelineRunner {
           // machinery recorded — a parsed verdict, parsed findings, a process exit code,
           // deferrals recorded when they were raised. See `domain/stageAuthority.ts`.
           const certified = certifyStage(pipeline, action.stage.id);
+          let stopReason = certified.reason;
           if (certified.admissible) {
             // Through `approveStage`, deliberately, rather than by settling the stage
             // here: it enforces the checklist, the operator's outstanding actions and
@@ -982,13 +983,15 @@ export class PipelineRunner {
               `Harness [${current.name}] could not certify "${action.stage.name}": ` +
                 approved.error.message,
             );
+            // Why the operator is being stopped is now `approveStage`'s complaint, not
+            // the evidence summary: the evidence *was* clean, and printing "stopped —
+            // build.ps1 exited 0" states the reason it did not stop.
+            stopReason = approved.error.message;
           }
 
           // The reason is carried into the step so the operator being stopped can see
           // why this gate needed them, rather than inferring it from the stage report.
-          steps.push(
-            `Stopped for approval at "${action.stage.name}" — ${certified.reason}.`,
-          );
+          steps.push(`Stopped for approval at "${action.stage.name}" — ${stopReason}.`);
           return {
             outcome: {
               kind: "awaitingApproval",

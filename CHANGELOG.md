@@ -2,6 +2,37 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.115.0
+
+Adaptive execution: the route can now continue, repair itself and re-run a stale stage
+without an operator driving it. **Nothing changes until a route opts in** — all four new
+declarations are absent everywhere, and absence is exactly the previous behaviour.
+
+Measured first, on 17 live pipelines: of 320 approvals only 49 were on a stage that
+could carry a real authority boundary, only 16 carried any note at all, and 205 of 353
+discard entries ($394 of $570) were the operator re-running a stage by hand.
+
+- **`authority: "evidence"`** on an approval gate lets the harness pass it when the
+  evidence is clean — no blocking findings, a declared check that ran and exited 0,
+  nothing held, nothing declined and unsettled. It goes through the same `approveStage`
+  a person does, so the checklist, operator actions and plan-step accounting are all
+  still enforced. Never permitted on a `humanVerification` or `assessment` stage, where
+  approving does more than let the route continue.
+- **`autoRepair`** on a review lets it name the stage that should fix what it found, as
+  `REPAIR: <stage> — <what>`. The reviewer proposes and the harness rules: legality
+  comes entirely from the existing `sendBackTo` declaration, the target must be earlier
+  and must have produced something, and the repair is the existing `correctStage`, so
+  invalidation is unchanged.
+- **`mayMutateRoute`** lets a stage propose two route changes. `REVERIFY: <stage> — <what
+  changed>` re-runs an earlier stage whose output went stale — recorded as an amendment,
+  because the stage was right when it ran. `INSERT-STAGE: <kind> | <name> | <objective>`
+  adds work nothing owns; its position is derived, it is always gated, and it can never
+  be a human gate or an assessment.
+- Both mutations are surfaced: an inserted stage names the stage that asked for it in
+  the tree and the report, and a re-run reads as "re-run after X found its output
+  stale" rather than borrowing the amendment's "was corrected".
+- The protocol went into the harness skill; only the markers are contract.
+
 ## 0.107.0
 
 - **A stage completed, was held for approval, and left no trace on disk.** `save` re-read

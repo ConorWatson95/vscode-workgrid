@@ -194,4 +194,24 @@ describe("certifyStage", () => {
   it("refuses an unknown stage rather than throwing", () => {
     expect(certifyStage(pipeline([stage()]), "nope").admissible).toBe(false);
   });
+
+  // The bug this was written from: `approveStage` applies an assessment's conclusions
+  // by marking stages *skipped*, so certifying one automatically would skip stages on
+  // an agent's reading of a diff with nobody having read the evidence.
+  it("never certifies an assessment, however the route declares it", () => {
+    const result = certifyStage(
+      pipeline([stage({ kind: "assessment", authority: "evidence" })]),
+      "review",
+    );
+    expect(result.admissible).toBe(false);
+    expect(result.reason).toContain("always a human's");
+  });
+
+  it("never certifies a human verification gate", () => {
+    const result = certifyStage(
+      pipeline([stage({ kind: "humanVerification", authority: "evidence" })]),
+      "review",
+    );
+    expect(result.admissible).toBe(false);
+  });
 });

@@ -79,6 +79,23 @@ export function certifyStage(pipeline: TaskPipeline, stageId: string): Certifica
     return refuse("this gate is declared a human authority boundary");
   }
 
+  // Two kinds may never be certified, whatever a route declares, and both are refused
+  // at parse time as well -- this is the backstop for a pipeline persisted before that
+  // rule existed. Neither is a judgement about which acts need a human, which is the
+  // thing `authority` exists so the harness does not have to guess: it is that
+  // approving these two does something *other* than let the route continue.
+  //
+  // `assessment` is the sharper of the two. `approveStage` applies its conclusions by
+  // marking stages **skipped**, so certifying one automatically would let the route
+  // skip stages on an agent's reading of a diff with nobody having read the evidence --
+  // which is the precise failure the assessment gate was built to prevent, arriving
+  // through the one door left open. `humanVerification` is a gate whose entire meaning
+  // is that a person confirmed a behaviour; an empty checklist there means the evidence
+  // has not arrived yet, not that there was none to give.
+  if (stage.kind === "assessment" || stage.kind === "humanVerification") {
+    return refuse(`a ${stage.kind} stage is always a human's, whatever the route declares`);
+  }
+
   // A stage held for findings, a refused correction, an unopened pull request or a
   // missing plan step carries `blocked`. Every one is a statement that the stage did
   // not do what it was asked, and the remedy for each is a human's.

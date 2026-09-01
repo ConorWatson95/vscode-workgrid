@@ -324,6 +324,16 @@ function parseStage(
     );
     return undefined;
   }
+  // Refused rather than ignored, so the author finds out. A declaration that parses
+  // and then never fires is indistinguishable from the feature being absent, which is
+  // the failure the unquoted hook command taught this codebase to fear.
+  if (authority === "evidence" && (kind === "assessment" || kind === "humanVerification")) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "authority": "evidence" cannot be declared on a ` +
+        `"${kind}" stage — approving one does more than let the route continue.`,
+    );
+    return undefined;
+  }
   if (authority !== undefined && gate !== "approval") {
     problems.push(
       `Route "${routeId}" stage "${id}": "authority" only applies to a stage with ` +
