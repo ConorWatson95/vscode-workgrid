@@ -2,6 +2,31 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.115.4
+
+- **`discoveredDocuments` had captured nothing since it shipped, and could not have.**
+  It read `pathsRead` on the reasoning that a document is established as relevant by
+  being *opened* rather than downloaded. Sound in principle, false in fact: a binary
+  cannot be opened with a file tool. A workbook is unzipped, parsed or converted, and
+  every one of those is a shell command.
+
+  Measured across 17 pipelines: `pathsRead` holds **855 entries** — `sql`, `md`, `cs`,
+  `ps1`, `png` — and **not one** is document-shaped, while **70 commands** name a
+  workbook or an attachment. Replayed through the fix, the same history yields **17
+  documents across 6 tasks**, including the wireframe whose absence cost four
+  corrections and hit `rc-plan` and `rc-implement-sql` separately.
+
+  The fetched-versus-used distinction is kept by other means: a path counts only when a
+  command *does something* with it, so a bare download still records nothing. A search
+  glob is rejected, and one document reached three ways — absolute, relative, and bare
+  after a `cd` — is recorded once, because a reference list nobody trusts is one nobody
+  reads.
+
+- **A rule stage could not read `autoRepair` or `mayMutateRoute`.** Both were parsed for
+  route stages only, and in a real project most reviews are rule-added — which is
+  exactly the stage a repair proposal comes from. Declared on a rule, the field looked
+  configured and did nothing.
+
 ## 0.115.3
 
 - **An evidence-certified gate booked itself as an operator approval.** `counted` records

@@ -70,3 +70,53 @@ describe("discoveredNote", () => {
     expect(discoveredNote({ path: "a.xlsx" }, "Plan")).toBe('read by "Plan"');
   });
 });
+
+describe("documents a stage reached through the shell", () => {
+  // The whole reason this module captured nothing for the first week it existed: it
+  // read `pathsRead`, and a workbook is never opened with a file tool. Measured across
+  // 17 pipelines -- 855 pathsRead entries, none document-shaped, against 70 commands
+  // naming a workbook.
+  it("reads a workbook out of the command that parsed it", () => {
+    const found = discoveredDocuments({
+      commands: [
+        `cd /tmp/nmgb2799 && python3 -c "import openpyxl; openpyxl.load_workbook('Purchases vs Sales Mock-up 20.03.26.xlsx')"`,
+      ],
+    });
+    expect(found.map((d) => d.path)).toEqual(["Purchases vs Sales Mock-up 20.03.26.xlsx"]);
+  });
+
+  it("reads one quoted because it contains spaces", () => {
+    const found = discoveredDocuments({
+      commands: [`unzip -o -q "../Purchases vs Sales Mock-up 20.03.26.xlsx"`],
+    });
+    expect(found).toHaveLength(1);
+    // The quote must not survive into the path, or the extension reads as `xlsx"` and
+    // every quoted workbook is silently dropped -- which is exactly what the first
+    // version of this fix did.
+    expect(found[0].path).not.toContain('"');
+  });
+
+  it("ignores a search pattern, which names no document", () => {
+    expect(discoveredDocuments({ commands: [`find . -iname "*purchases*sales*.xlsx"`] })).toEqual(
+      [],
+    );
+  });
+
+  it("records one document once, however many ways a stage spelled it", () => {
+    const found = discoveredDocuments({
+      commands: [
+        `unzip -q "/tmp/x/Mock-up.xlsx"`,
+        `unzip -q "../Mock-up.xlsx"`,
+        `python -c "openpyxl.load_workbook('Mock-up.xlsx')"`,
+      ],
+    });
+    expect(found).toHaveLength(1);
+  });
+
+  // A command that only fetches says nothing about which of five attachments governs.
+  it("ignores a download that nothing then opened", () => {
+    expect(
+      discoveredDocuments({ commands: [`curl -o report.xlsx https://example.test/report.xlsx`] }),
+    ).toEqual([]);
+  });
+});

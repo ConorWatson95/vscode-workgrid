@@ -257,6 +257,21 @@ function parseStage(
     sendBackTo = (raw.sendBackTo as string[]).map((entry) => entry.trim());
   }
 
+  // Read here as well as in `harnessConfigFile`, because most reviews in a real project
+  // are rule-added -- and a review is exactly the stage these two are for. Declared on a
+  // route stage and silently ignored on a rule stage, the field would look configured
+  // and do nothing, which is the failure the unquoted hook command taught this codebase.
+  //
+  // Rejected rather than coerced, for `requiresPullRequest`'s reason: read as absent, a
+  // typo turns an automatic repair off, which is safe; read as true it would apply a
+  // review's proposals with nobody watching.
+  for (const field of ["autoRepair", "mayMutateRoute"] as const) {
+    if (raw[field] !== undefined && typeof raw[field] !== "boolean") {
+      problems.push(`Rule "${ruleId}": stage "${field}" must be true or false.`);
+      return undefined;
+    }
+  }
+
   return {
     id,
     label,
@@ -267,6 +282,8 @@ function parseStage(
     splittable: typeof raw.splittable === "boolean" ? raw.splittable : undefined,
     gate: gate as "auto" | "approval" | undefined,
     ...(sendBackTo ? { sendBackTo } : {}),
+    ...(raw.autoRepair === true ? { autoRepair: true } : {}),
+    ...(raw.mayMutateRoute === true ? { mayMutateRoute: true } : {}),
   };
 }
 

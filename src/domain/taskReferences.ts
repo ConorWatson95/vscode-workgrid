@@ -77,6 +77,11 @@ function referenceKey(path: string): string {
   return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+/** A document's file name, for telling two spellings of one path apart. */
+function fileNameKey(path: string): string {
+  return referenceKey(path).split("/").pop() ?? "";
+}
+
 /**
  * Adds a reference, replacing any existing entry for the same document.
  *
@@ -121,11 +126,24 @@ export function addDiscoveredReferences(
 ): TaskReference[] {
   const current = existing ?? [];
   const known = new Set(current.map((entry) => referenceKey(entry.path)));
+  // Discovered entries are also keyed on the file name, which operator entries are
+  // deliberately not. One workbook is reached as an absolute path, as `../name.xlsx`
+  // from a scratch directory, and as a bare name after a `cd` — three spellings of one
+  // document, listed three times, which is the noise that stops a reference list being
+  // read at all. An operator naming two paths means two documents and must never be
+  // collapsed that way; a stage naming three means it changed directory.
+  //
+  // It also stops a discovered entry shadowing an operator's: they name the same
+  // document by different routes, and the operator's carries the note — "tab 3 of the
+  // wireframe" — which is the one thing a discovered path cannot supply.
+  const knownNames = new Set(current.map((entry) => fileNameKey(entry.path)));
   const fresh = documents
     .filter((document) => {
       const key = referenceKey(document.path);
-      if (!key || known.has(key)) return false;
+      const name = fileNameKey(document.path);
+      if (!key || known.has(key) || (name && knownNames.has(name))) return false;
       known.add(key);
+      if (name) knownNames.add(name);
       return true;
     })
     .map((document) => ({

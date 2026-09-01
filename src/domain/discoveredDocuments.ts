@@ -92,6 +92,38 @@ export interface DiscoveredDocument {
 }
 
 /** Matches the ticket key on an attachment-fetching command, so the note can say where it came from. */
+/**
+ * A command that *uses* a document rather than merely fetching one.
+ *
+ * Deliberately a verb list and not "any command naming a file". Downloading five
+ * attachments says nothing about which one governs the work, and recording all five is
+ * how a reference list becomes noise nobody reads — the failure `taskReferences` is
+ * careful to avoid by never scanning.
+ */
+const USES_DOCUMENT =
+  /\b(unzip|expand-archive|openpyxl|pandas|read_excel|pdftotext|libreoffice|soffice|iconv|cat|type|Get-Content|python|node)\b/i;
+
+/**
+ * Strips what a shell puts around a path.
+ *
+ * The bare alternative below matches a token including its opening quote, because a
+ * quote is not whitespace — so the extension read as `xlsx"` and every quoted workbook
+ * was silently dropped. That was the whole bug on the first attempt at this fix, and it
+ * only showed up when the real commands were replayed through it: the paths here are
+ * routinely quoted precisely *because* they contain spaces.
+ */
+function unwrap(candidate: string): string {
+  // Everything up to the *last* opening delimiter goes with it, not just a leading run
+  // of them. The bare alternative matches a whole whitespace-delimited token, so a path
+  // written inside a code string arrives as `openpyxl.load_workbook('Mock-up.xlsx` —
+  // which passes the extension check, then dedupes against nothing, and lists one
+  // workbook twice under two spellings.
+  return candidate.replace(/^.*[('"`=[]/, "").replace(/['"`),;\]]+$/, "");
+}
+
+/** A quoted or bare path in a command. Quoted first: these paths contain spaces. */
+const DOCUMENT_IN_COMMAND = /"([^"]+?\.[a-z0-9]{2,5})"|'([^']+?\.[a-z0-9]{2,5})'|(\S+\.[a-z0-9]{2,5})/gi;
+
 const ATTACHMENT_COMMAND = /-IssueKey\s+["']?([A-Z][A-Z0-9]+-\d+)/;
 
 function normalise(path: string): string {
@@ -107,27 +139,73 @@ function extensionOf(path: string): string {
 /**
  * Picks the documents worth remembering out of one subtask's activity.
  *
- * Read from `pathsRead` rather than from the commands, because a document is
- * established as relevant by having been *opened*, not by having been downloaded —
- * a stage that fetched five attachments and read one has told us which one mattered.
- * The commands are consulted only for the ticket key, which makes the note useful.
+ * ## Read from the commands, because a document is never opened with a file tool
+ *
+ * This was keyed on `pathsRead`, on the reasoning that a document is established as
+ * relevant by having been *opened* rather than downloaded — a stage that fetched five
+ * attachments and read one has said which mattered. Sound in principle and false in
+ * fact: **a binary cannot be opened with the Read tool.** A workbook is unzipped, run
+ * through a parser, or converted, and every one of those is a shell command.
+ *
+ * Measured across 17 pipelines, 1 Sep 2026: `pathsRead` holds **855 entries** — `sql`,
+ * `md`, `cs`, `cshtml`, `ps1`, `png` — and **not one** is document-shaped, while **70
+ * commands** name a workbook or an attachment. So the module had captured nothing since
+ * it shipped, and the discriminator it chose could never have fired. A check that
+ * silently does not fire is indistinguishable from the feature being absent, which is
+ * the failure the unquoted hook command already taught this codebase.
+ *
+ * The cost was real: a report's layout came from tab 3 of a wireframe nobody was
+ * pointed at, and `rc-plan` and `rc-implement-sql` were each corrected for it
+ * separately — the rediscovery-per-stage this exists to end.
+ *
+ * ## The fetched-versus-read distinction is kept, by a different means
+ *
+ * Dropping it would record every attachment a stage downloaded and never looked at,
+ * which is how a reference list stops being read. So a path counts only when a command
+ * *does something* with it: unzips it, parses it, converts it, reads it. A command whose
+ * only verb is a download does not qualify, and the ticket key is still taken from
+ * whichever command fetched it.
  */
 export function discoveredDocuments(activity: {
   pathsRead?: readonly string[];
   commands?: readonly string[];
 }): DiscoveredDocument[] {
-  const ticket = (activity.commands ?? [])
+  const commands = activity.commands ?? [];
+  const ticket = commands
     .map((command) => ATTACHMENT_COMMAND.exec(command)?.[1])
     .find((key): key is string => !!key);
 
+  // `pathsRead` first, so a document a file tool *did* manage to open still wins its
+  // place — a `.csv` or a `.txt` export is readable, and nothing here should get worse
+  // for the formats that already worked.
+  const candidates = [...(activity.pathsRead ?? [])];
+  for (const command of commands) {
+    if (!USES_DOCUMENT.test(command)) continue;
+    for (const match of command.matchAll(DOCUMENT_IN_COMMAND)) {
+      candidates.push(unwrap(match[1] ?? match[2] ?? match[0]));
+    }
+  }
+
   const seen = new Set<string>();
   const found: DiscoveredDocument[] = [];
-  for (const raw of activity.pathsRead ?? []) {
+  for (const raw of candidates) {
     const path = normalise(raw);
     if (!DOCUMENT_EXTENSIONS.has(extensionOf(path))) continue;
+    // A glob is a search, not a document. `find -iname "*purchases*sales*.xlsx"` names
+    // the shape of a file somebody was looking for, and recording it as a reference
+    // states to every later stage that a pattern governs the work.
+    if (/[*?]/.test(path)) continue;
     const lower = `/${path.toLowerCase()}`;
     if (NOISE.some((fragment) => lower.includes(fragment))) continue;
-    const key = path.toLowerCase();
+    // Keyed on the file name, not the path. One workbook is reached as an absolute
+    // path, as `../name.xlsx` from a scratch directory, and as a bare name after a
+    // `cd` -- three spellings of one document, and listing it three times is the noise
+    // that stops a reference list being read. The first spelling wins, and `pathsRead`
+    // is scanned first precisely so a real opened path outranks a fragment of a shell
+    // line. Deliberately looser than comparing whole paths, for the reason
+    // `claimEvidence` matches on the last segment: a document spelled differently by
+    // two stages is one document.
+    const key = (path.split("/").pop() ?? path).toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     found.push({ path, ...(ticket ? { ticket } : {}) });
