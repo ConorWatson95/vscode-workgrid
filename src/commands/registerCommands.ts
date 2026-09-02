@@ -1,4 +1,9 @@
 import * as vscode from "vscode";
+import {
+  declaredRepair,
+  formatCheckFailureNote,
+  isDeclaredRepair,
+} from "../domain/checkFailureRepair";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
@@ -170,6 +175,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
     register("taskWorkspaces.retryStage", (arg) => retryStageCommand(ctx, arg)),
     register("taskWorkspaces.correctStage", (arg) => correctStageCommand(ctx, arg)),
+    register("taskWorkspaces.repairFromCheckFailure", (arg) =>
+      repairFromCheckFailureCommand(ctx, arg),
+    ),
     register("taskWorkspaces.undoCorrection", (arg) => undoCorrectionCommand(ctx, arg)),
     register("taskWorkspaces.setExperimentArm", (arg) => setExperimentArmCommand(ctx, arg)),
     register("taskWorkspaces.compareRuns", (arg) => compareRunsCommand(ctx, arg)),
@@ -829,6 +837,112 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
   if (confirmed !== "Fix It & Advance") {
     void vscode.window.showInformationMessage(
       `"${stage.name}" will fix that on the next advance.`,
+    );
+    return;
+  }
+  await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+}
+
+/**
+ * Sends a failed check to the stage the route says owes the fix.
+ *
+ * The one action a failed check had no button for. The two offered on the row are both
+ * wrong for it — `retryStage` re-runs the failed subtask cold with its `failureReason`
+ * cleared, so it reaches the same exit code for the same reasons, and `revertToStage`
+ * demolishes the stage and everything after it. So acting on the strongest evidence the
+ * harness holds meant reading the output, working out which stage owed the fix, and
+ * typing the finding into Fix It by hand.
+ *
+ * Deliberately **one click, not automatic**, and that is the whole of this phase. What
+ * the operator does with the offer — takes the declared owner, or does something else —
+ * is the measurement that licenses doing it without asking, and it is a measurement this
+ * codebase has taken before: `sendBackTargets` agreed with the operator 11 times in 19,
+ * which is why nothing here derives a target on its own.
+ *
+ * No input box. A re-run asks for a reason because it is discarding a run whose account
+ * of itself goes with it; here the account is the check's own output, and asking the
+ * operator to summarise a thing the session is about to be handed verbatim is asking
+ * them to do the reading twice.
+ */
+async function repairFromCheckFailureCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await rowPipelineTask(ctx, arg, "repair this stage");
+  if (!task) return;
+
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop it before repairing a stage.`,
+    );
+    return;
+  }
+
+  // Re-derived from the saved pipeline rather than trusted from the row: the tree is
+  // throttled, so a row can be up to `MIN_RENDER_INTERVAL_MS` older than the state file.
+  const repair = declaredRepair(task.pipeline, arg.stage.id);
+  if (!isDeclaredRepair(repair)) {
+    void vscode.window.showWarningMessage(
+      repair === "not-declared"
+        ? `"${arg.stage.name}" declares no stage to repair when its check fails. Add ` +
+          '"onFailure" to it in the route, or use Fix It on the stage that owes the work.'
+        : repair === "nothing-to-correct"
+          ? `The stage named to repair this produced nothing to correct, so a fix ` +
+            "session would start from nothing. Re-run it instead."
+          : repair === "unknown-stage"
+            ? "The stage named to repair this is not an earlier stage of this route."
+            : `"${arg.stage.name}" has no failed check to repair.`,
+    );
+    return;
+  }
+
+  const later = task.pipeline.stages
+    .slice(task.pipeline.stages.findIndex((s) => s.id === repair.owner.id) + 1)
+    .filter((s) => s.status !== "pending").length;
+  const confirmed = await vscode.window.showWarningMessage(
+    `Fix this in "${repair.owner.name}"?`,
+    {
+      modal: true,
+      detail:
+        `The check on "${repair.failed.name}" failed, and the route names ` +
+        `"${repair.owner.name}" as the stage that owes the fix. It keeps everything it ` +
+        "already produced and gets one more session, handed the check's output as it " +
+        "was written.\n\n" +
+        (later > 0
+          ? `${later} later stage(s) will be re-opened, because they ran against output ` +
+            "that is about to change.\n\n"
+          : "No later stage has run yet, so nothing else is discarded.\n\n") +
+        repair.finding,
+    },
+    "Fix It & Advance",
+    "Fix It",
+  );
+  if (confirmed !== "Fix It" && confirmed !== "Fix It & Advance") return;
+
+  const corrected = correctStage(task.pipeline, repair.owner.id, {
+    finding: formatCheckFailureNote(repair),
+    at: new Date().toISOString(),
+  });
+  if (!corrected.ok) {
+    void vscode.window.showWarningMessage(corrected.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: corrected.value,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] "${repair.failed.name}" failed its check; repairing ` +
+      `"${repair.owner.name}".`,
+  );
+
+  if (confirmed !== "Fix It & Advance") {
+    void vscode.window.showInformationMessage(
+      `"${repair.owner.name}" will fix that on the next advance.`,
     );
     return;
   }

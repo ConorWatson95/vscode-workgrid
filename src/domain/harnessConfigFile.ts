@@ -9,6 +9,7 @@ import {
   RouteStageDefinition,
   sendBackEntryKind,
   StageAuthority,
+  StageFailureRepair,
   StageGate,
   StageKind,
 } from "./taskRoute";
@@ -215,6 +216,7 @@ function parseRoute(
   }
 
   if (!checkSendBackTargets(id, stages, problems)) return undefined;
+  if (!checkFailureRepairTargets(id, stages, problems)) return undefined;
 
   return {
     id,
@@ -362,9 +364,35 @@ function parseStage(
     return undefined;
   }
 
+  // Rejected rather than coerced: read as absent it merely leaves the check on, which is
+  // safe, but read as true it would switch off the one check standing between a stage
+  // that quietly did nothing and a route that carried on.
+  if (raw.conditional !== undefined && typeof raw.conditional !== "boolean") {
+    problems.push(`Route "${routeId}" stage "${id}": "conditional" must be true or false.`);
+    return undefined;
+  }
+
   if (raw.requiresPullRequest !== undefined && typeof raw.requiresPullRequest !== "boolean") {
     problems.push(
       `Route "${routeId}" stage "${id}": "requiresPullRequest" must be true or false.`,
+    );
+    return undefined;
+  }
+
+  // Rejected rather than coerced, for the reason above: read as absent, a malformed
+  // `onFailure` leaves the route looking as though it had declared a repair owner while
+  // a failed check goes on stopping dead for a person. The whole point of the field is
+  // that its absence is what the operator is trying to change.
+  const onFailure = failureRepair(routeId, id, raw.onFailure, problems);
+  if (onFailure === INVALID) return undefined;
+
+  // A repair owner for a check that does not exist can never fire, and config that
+  // silently does nothing is indistinguishable from the feature being absent — the
+  // lesson the unquoted hook command taught this codebase.
+  if (onFailure && !str(raw.verify)) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "onFailure" needs a "verify" command to fail. ` +
+        "Declare the check, or remove the repair owner.",
     );
     return undefined;
   }
@@ -384,11 +412,13 @@ function parseStage(
     ...(authority ? { authority: authority as StageAuthority } : {}),
     ...(raw.autoRepair === true ? { autoRepair: true } : {}),
     ...(raw.mayMutateRoute === true ? { mayMutateRoute: true } : {}),
+    ...(raw.conditional === true ? { conditional: true } : {}),
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(str(raw.planOutput) ? { planOutput: str(raw.planOutput) } : {}),
+    ...(onFailure ? { onFailure } : {}),
     ...(sendBackTo ? { sendBackTo } : {}),
     ...(requiredMcpServers && requiredMcpServers.length > 0 ? { requiredMcpServers } : {}),
   };
@@ -446,6 +476,80 @@ function checkSendBackTargets(
   return ok;
 }
 
+/**
+ * Distinguishes "no `onFailure` declared" from "one declared and malformed".
+ *
+ * Two absent-looking outcomes with opposite meanings, so they cannot share a return
+ * value: the first is every route that has not opted in, the second must stop the route
+ * loading. Absence must mean unchanged, and must be distinguishable from a mistake.
+ */
+const INVALID = Symbol("invalid");
+
+function failureRepair(
+  routeId: string,
+  stageId: string,
+  value: unknown,
+  problems: string[],
+): StageFailureRepair | undefined | typeof INVALID {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    problems.push(
+      `Route "${routeId}" stage "${stageId}": "onFailure" must be an object, ` +
+        'e.g. { "repair": "<earlier stage id>" }.',
+    );
+    return INVALID;
+  }
+  const repair = str((value as { repair?: unknown }).repair);
+  if (!repair) {
+    problems.push(
+      `Route "${routeId}" stage "${stageId}": "onFailure" must name the stage that owes ` +
+        'the fix, as { "repair": "<earlier stage id>" }.',
+    );
+    return INVALID;
+  }
+  return { repair };
+}
+
+/**
+ * Rejects an `onFailure` naming a stage that is missing, is itself, or comes later.
+ *
+ * The same three rules as `checkSendBackTargets` and for the same reason — a repair
+ * that reached forward, or reached itself, could loop a route indefinitely — but
+ * checked separately because the two fields grant different things and a shared message
+ * would name the wrong one. There is deliberately no kind entry here: `sendBackTo` takes
+ * one because a review does not know which earlier stage wrote the code it is reading,
+ * while a check's owner is a single named stage the route author already knows.
+ */
+function checkFailureRepairTargets(
+  routeId: string,
+  stages: readonly RouteStageDefinition[],
+  problems: string[],
+): boolean {
+  let ok = true;
+  stages.forEach((stage, index) => {
+    const target = stage.onFailure?.repair;
+    if (!target) return;
+    const targetIndex = stages.findIndex((s) => s.id === target);
+    if (targetIndex === -1) {
+      problems.push(
+        `Route "${routeId}" stage "${stage.id}": "onFailure" names "${target}", ` +
+          "which is not a stage of this route.",
+      );
+      ok = false;
+    } else if (targetIndex >= index) {
+      problems.push(
+        `Route "${routeId}" stage "${stage.id}": "onFailure" names "${target}", ` +
+          "which is not an earlier stage. Repairing forward, or itself, would let the " +
+          "route loop.",
+      );
+      ok = false;
+    }
+  });
+  return ok;
+}
+
+/**
+ * A list of non-empty strings, or undefined when the value is not one.
 /**
  * A list of non-empty strings, or undefined when the value is not one.
  *

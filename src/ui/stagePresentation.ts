@@ -29,6 +29,15 @@ export function stagePresentation(
    * `stage.checklist` alone left the gate showing no count while refusing to pass.
    */
   outstandingInPipeline?: number,
+  /**
+   * Whether this stage's failed check has a repair owner the route declared and the
+   * pipeline can still reach.
+   *
+   * Passed in for `outstandingInPipeline`'s reason: the answer depends on another
+   * stage — whether the owner exists, is earlier, and produced something to correct —
+   * and this function is given one. Derived by `declaredRepair`, never recomputed here.
+   */
+  repairAvailable?: boolean,
 ): StageVisual {
   const visual = statusVisual(stage, outstandingInPipeline);
   // A second token rather than a status of its own: "has output to correct" is
@@ -36,6 +45,10 @@ export function stagePresentation(
   // `pending` while still holding everything it produced.
   const tokens = [visual.contextValue];
   if (isCorrectable(stage)) tokens.push("correctable");
+  // Its own token rather than folded into `correctable`: this stage is the one that
+  // *failed*, and the stage the menu entry corrects is a different one. A row offering
+  // "fix the stage that owes this" is a different act from "fix this stage".
+  if (repairAvailable) tokens.push("check-repairable");
   // Separate token, and not implied by `correctable`: withdrawing a correction is
   // only offered on a stage that actually has one, and a stage can be correctable
   // without ever having been corrected.

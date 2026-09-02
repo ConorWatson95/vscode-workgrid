@@ -146,6 +146,36 @@ export type ChecklistAudience =
  */
 export type StageAuthority = "human" | "evidence";
 
+/**
+ * What the runtime may do when a stage's declared `verify` fails.
+ *
+ * The gap this closes: a failed check had exactly one disposition, and it was a
+ * person. `retryStage` re-opens the failed subtask cold and clears its
+ * `failureReason`, so the re-run reaches the same exit code for the same reasons, and
+ * `revertToStage` discards the stage and everything after it. So the only path from
+ * the strongest evidence the harness holds -- a process exit code, produced by
+ * something other than the agent -- to the repair primitive built for exactly this was
+ * the operator reading the output and typing the finding by hand.
+ *
+ * Measured on NMGB-2533: `Test-WorkPromoted.ps1` exited 2 because two of a SQL
+ * project's seventeen files were on no commit in `origin/UAT`, and the stage that owed
+ * them could not be reached -- the gate declares `sendBackTo: ["kind:implementation"]`
+ * and the promote stage is a `deployment`.
+ */
+export interface StageFailureRepair {
+  /**
+   * The id of the stage that owes the fix when this stage's check fails.
+   *
+   * Must be an earlier stage of the same route, checked at load. **Naming it here is
+   * the authority** -- no `sendBackTo` entry is required, for `REVERIFY`'s reason: a
+   * failed declared check is a checkable fact about the work rather than one stage
+   * judging another, and a route author naming the owner explicitly is a stronger
+   * grant than a kind filter. It is also why this is declared and never inferred from
+   * the stage kind -- which stage owed an artefact is knowledge only the route has.
+   */
+  repair: string;
+}
+
 export interface RouteStageDefinition {
   /** Stable within a route; persisted, so never renumber existing values. */
   id: string;
@@ -250,6 +280,22 @@ export interface RouteStageDefinition {
    * Both only ever add work. See `domain/routeMutation.ts`.
    */
   mayMutateRoute?: boolean;
+
+  /**
+   * This stage's work may not apply to a given change, so producing nothing is a
+   * legitimate outcome.
+   *
+   * Absent means the stage is expected to do something every time, which is what every
+   * stage meant before this existed. Declaring it stops `changedNothing` holding the
+   * stage for writing no files — and nothing else: every other check still applies, and
+   * the stage is still asked to say in one line that the work did not apply.
+   *
+   * Declare it on work that is conditional *by construction* — navigation and
+   * permissions for a brand-new report, a rework stage for findings UAT may not have
+   * raised. Do not declare it to quieten a stage that ought to be writing files, which
+   * is the case the check exists for. See `domain/stageProductivity.ts`.
+   */
+  conditional?: boolean;
   /**
    * Model for this stage's sessions, overriding the extension-wide setting.
    *
@@ -344,6 +390,26 @@ export interface RouteStageDefinition {
    * which is a different and more alarming claim than "this task has no ticket".
    */
   verify?: string;
+
+  /**
+   * Where a failure of this stage's `verify` is routed.
+   *
+   * Absent means what every failed check did before this existed: the stage fails and
+   * only a person can move it. Only meaningful alongside `verify`, and rejected at load
+   * without one -- a repair owner for a check that does not exist is dead config, and
+   * config that silently does nothing is indistinguishable from the feature being
+   * absent.
+   *
+   * What the runtime does with it is *route* the failure, never interpret it. The
+   * repair is `correctStage` with the check's **verbatim** output as the finding, so
+   * the session reads the exit code's own account and decides what is actionable. That
+   * distinction is load-bearing: `Test-WorkPromoted.ps1` exits 2 with three sections of
+   * which two say nothing is wrong, and a runtime that tried to read severity out of
+   * that would re-fire on RU-550, where the check failed only because the pull request
+   * it asked for was still open. The route can declare a check; saying what its failure
+   * *means* is the engine's job.
+   */
+  onFailure?: StageFailureRepair;
   /**
    * A plan document, relative to the worktree, whose numbered steps this stage must
    * account for one by one.

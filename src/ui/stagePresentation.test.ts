@@ -175,6 +175,19 @@ describe("stagePresentation", () => {
     expect(visual.iconId).toBe("loading~spin");
   });
 
+  // Its own token, because the stage this row offers to fix is a *different* stage
+  // from the one that failed. Keyed on the caller's derivation, since whether a repair
+  // is reachable is a fact about another stage.
+  it("marks a failed check as repairable only when a repair is available", () => {
+    const failed = stage({
+      status: "failed",
+      subtasks: [{ id: "s1", title: "One", prompt: "", status: "failed" }],
+    });
+    expect(stagePresentation(failed, 0, true).contextValue).toContain("check-repairable");
+    expect(stagePresentation(failed, 0, false).contextValue).not.toContain("check-repairable");
+    expect(stagePresentation(failed).contextValue).not.toContain("check-repairable");
+  });
+
   it("marks a stage with output as correctable, whatever its status", () => {
     const ran = { ...subtask("a", "done"), reply: "did it" };
     for (const status of ["passed", "failed", "awaiting-approval", "pending"] as const) {

@@ -1043,6 +1043,65 @@ describe("refreshGateDeclarations", () => {
       ...over,
     });
 
+  // The fourth repetition of the pattern: `sendBackTo` was refreshed by nothing, so a
+  // project widening a gate's send-back targets reached only tasks created afterwards —
+  // and the task needing it is by definition one already in flight. Found on NMGB-2533,
+  // where the stage that owed the missing files was a `deployment` the gate's
+  // `["kind:implementation"]` could not reach.
+  it("carries sendBackTo onto a gate already running", () => {
+    const route = gateRoute();
+    (route.routes[0].stages[0] as { sendBackTo?: string[] }).sendBackTo = [
+      "promote",
+      "kind:implementation",
+    ];
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "awaiting-approval" })]),
+      route as never,
+    );
+    expect(result.changed).toEqual(["signoff"]);
+    expect(result.pipeline.stages[0].sendBackTo).toEqual(["promote", "kind:implementation"]);
+  });
+
+  // `normalize` passes a non-string straight through, so comparing an array with `!==`
+  // is always unequal — which would report a change on every pass and save the pipeline
+  // for nothing.
+  it("reports no change when a list declaration already matches", () => {
+    const route = gateRoute();
+    (route.routes[0].stages[0] as { sendBackTo?: string[] }).sendBackTo = ["promote"];
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "awaiting-approval", sendBackTo: ["promote"] })]),
+      route as never,
+    );
+    expect(result.changed).toEqual([]);
+  });
+
+  // `onFailure` is read at the one moment the stage has already failed, with no subtask
+  // pending — the shape `refreshCheckDeclarations` excludes by design.
+  it("carries onFailure onto a stage whose check has already failed", () => {
+    const route = gateRoute();
+    (route.routes[0].stages[0] as { onFailure?: { repair: string } }).onFailure = {
+      repair: "promote",
+    };
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "failed" })]),
+      route as never,
+    );
+    expect(result.changed).toEqual(["signoff"]);
+    expect(result.pipeline.stages[0].onFailure).toEqual({ repair: "promote" });
+  });
+
+  it("reports no change when onFailure already matches", () => {
+    const route = gateRoute();
+    (route.routes[0].stages[0] as { onFailure?: { repair: string } }).onFailure = {
+      repair: "promote",
+    };
+    const result = refreshGateDeclarations(
+      pipeline([gate({ status: "failed", onFailure: { repair: "promote" } })]),
+      route as never,
+    );
+    expect(result.changed).toEqual([]);
+  });
+
   it("reaches a gate already standing at awaiting-approval", () => {
     // The whole point. A verification gate is awaiting-approval for its entire useful
     // life, so a repair that only touched stages which had not begun never reached one.

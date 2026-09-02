@@ -4,6 +4,7 @@ import {
   ChecklistAudience,
   RouteDefinition,
   sendBackEntryKind,
+  StageFailureRepair,
   StageKind,
 } from "./taskRoute";
 import {
@@ -237,9 +238,32 @@ function hasBegun(stage: TaskStage): boolean {
  * one is precisely the task that should stop waiting when config says it need not.
  */
 /** What a stage's next output will be judged by. See `refreshCheckDeclarations`. */
-const CHECK_DECLARATIONS = ["verify", "planFile", "planOutput", "requiresPullRequest"] as const;
+const CHECK_DECLARATIONS = ["verify", "planFile", "planOutput", "requiresPullRequest", "conditional"] as const;
 
-const GATE_DECLARATIONS = ["checklistScope", "checklistAudience", "authority", "autoRepair", "mayMutateRoute"] as const;
+const GATE_DECLARATIONS = [
+  "checklistScope",
+  "checklistAudience",
+  "authority",
+  "autoRepair",
+  "mayMutateRoute",
+  // Both added 1 Sep 2026, and both are here rather than in `CHECK_DECLARATIONS`
+  // because of what they decide rather than what they are about.
+  //
+  // `sendBackTo` was refreshed by **nothing** — the fourth repetition of the pattern
+  // `checklistScope`, the gate declarations and `refreshStageLabels` each document, and
+  // biting in the same place: a project that widens a gate's send-back targets reaches
+  // only tasks created afterwards, and the task needing it is by definition one already
+  // in flight. Found on NMGB-2533, where `ec-uat-acceptance` failed its promotion check
+  // and the stage that owed the missing files was a `deployment` the gate's
+  // `["kind:implementation"]` could not reach.
+  "sendBackTo",
+  // `onFailure` names who repairs a failed check, so it is read at the one moment the
+  // stage has already failed — no subtask pending, nothing queued. That is exactly the
+  // shape `refreshCheckDeclarations` excludes, and rightly: a check is the test a
+  // stage's *next output* must pass, and there is no next output here. This decides
+  // what the operator is offered now, which is the `authority` tier.
+  "onFailure",
+] as const;
 
 /**
  * Whether gate scopes can be brought into line without moving an existing item.
@@ -425,7 +449,7 @@ export function refreshCheckDeclarations(
     const updates: Partial<TaskStage> = {};
     for (const field of CHECK_DECLARATIONS) {
       const next = normalize(definition[field]);
-      if (normalize(stage[field]) !== next) {
+      if (!sameDeclaration(stage[field], next)) {
         (updates as Record<string, unknown>)[field] = next;
       }
     }
@@ -455,7 +479,7 @@ export function refreshGateDeclarations(
     for (const field of GATE_DECLARATIONS) {
       if (field === "checklistScope" && !scopeSafe) continue;
       const next = normalize(definition[field]);
-      if (normalize(stage[field]) !== next) {
+      if (!sameDeclaration(stage[field], next)) {
         (updates as Record<string, unknown>)[field] = next;
       }
     }
@@ -516,7 +540,7 @@ export function refreshPendingStages(
     const updates: Partial<TaskStage> = {};
     for (const field of REFRESHABLE) {
       const next = normalize(definition[field]);
-      if (normalize(stage[field]) !== next) {
+      if (!sameDeclaration(stage[field], next)) {
         (updates as Record<string, unknown>)[field] = next;
       }
     }
@@ -1022,6 +1046,9 @@ function findDefinition(
       authority?: StageAuthority;
       autoRepair?: boolean;
       mayMutateRoute?: boolean;
+      conditional?: boolean;
+      sendBackTo?: readonly string[];
+      onFailure?: StageFailureRepair;
       gate?: string;
     }
   | undefined {
@@ -1044,6 +1071,24 @@ function normalize(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Whether a declaration differs from config, for the scalar and non-scalar alike.
+ *
+ * `normalize` passes anything that is not a string straight through, so comparing a
+ * `sendBackTo` array or an `onFailure` object with `!==` compares identities and is
+ * *always* unequal — which would mark the stage changed on every refresh, save the
+ * pipeline on every pass, and report a rename that never happened. Structural for
+ * everything else, which is exact here: both non-scalar declarations are a list of
+ * strings and an object of them.
+ */
+function sameDeclaration(current: unknown, next: unknown): boolean {
+  const a = normalize(current);
+  const b = normalize(next);
+  if (typeof a === "object" && a !== null) return JSON.stringify(a) === JSON.stringify(b);
+  if (typeof b === "object" && b !== null) return false;
+  return a === b;
 }
 
 /**

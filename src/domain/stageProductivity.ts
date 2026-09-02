@@ -42,6 +42,27 @@ import { Subtask, TaskStage } from "./taskPipeline";
  */
 export function changedNothing(stage: TaskStage): boolean {
   if (stage.kind !== "implementation") return false;
+  // A stage whose work may not apply to a given change has no signal here at all.
+  //
+  // This check reads "wrote nothing" as "probably did not do its job", which holds only
+  // where the stage was certainly supposed to write something. Some stages are
+  // conditional by construction: a navigation-and-permissions stage matters only for a
+  // brand-new report, and a UAT rework stage only when UAT found something. For those,
+  // writing nothing is the *designed* outcome and this fires on every single run.
+  //
+  // Measured across 17 pipelines, 2 Sep 2026. `rc-nav-permissions` ran 38 times over 8
+  // task instances, wrote zero files, and was held all 8 times — 23 of the 98 approvals
+  // in the preceding week, every one of them clearing this hold. Four `*-uat-rework`
+  // stages were held the same way. Its own intent said "if this change does not add a
+  // new report, state that explicitly and move on", so the route and the runtime were
+  // contradicting each other in writing.
+  //
+  // A check that fires on every run carries no information, and this file's own
+  // narrowness rules exist because such a check is one people approve through without
+  // reading. So the declaration supplies the missing precondition rather than switching
+  // a check off: absent, nothing changes and every existing stage is judged exactly as
+  // before.
+  if (stage.conditional) return false;
   // A stage that never ran cannot have failed to change anything.
   if (!stage.subtasks.some((subtask) => subtask.startedAt)) return false;
   // Absence of an activity record means *unmeasured*, not zero. A subtask that ran

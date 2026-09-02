@@ -155,6 +155,7 @@ function createStage(
     ...(definition.authority ? { authority: definition.authority } : {}),
     ...(definition.autoRepair ? { autoRepair: true } : {}),
     ...(definition.mayMutateRoute ? { mayMutateRoute: true } : {}),
+    ...(definition.conditional ? { conditional: true } : {}),
     ...(definition.sendBackTo && definition.sendBackTo.length > 0
       ? { sendBackTo: [...definition.sendBackTo] }
       : {}),
@@ -170,6 +171,7 @@ function createStage(
       ? { checklistAudience: definition.checklistAudience }
       : {}),
     ...(definition.requiresPullRequest ? { requiresPullRequest: true } : {}),
+    ...(definition.onFailure ? { onFailure: { ...definition.onFailure } } : {}),
     ...(definition.requiredMcpServers && definition.requiredMcpServers.length > 0
       ? { requiredMcpServers: [...definition.requiredMcpServers] }
       : {}),

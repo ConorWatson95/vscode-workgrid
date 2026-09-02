@@ -7,7 +7,12 @@
  * untouched. All transitions live in ./pipelineEngine and are pure.
  */
 
-import { ChecklistAudience, StageAuthority, StageKind } from "./taskRoute";
+import {
+  ChecklistAudience,
+  StageAuthority,
+  StageFailureRepair,
+  StageKind,
+} from "./taskRoute";
 import { InterventionRecord } from "./interventions";
 import { PipelineExperiment } from "./pipelineExperiment";
 
@@ -444,6 +449,13 @@ export interface TaskStage {
    */
   requiresPullRequest?: boolean;
   /**
+   * Where a failure of this stage's check is routed, copied from the route so a
+   * persisted pipeline stays self-describing. Absent means a person moves it.
+   *
+   * See `RouteStageDefinition.onFailure` and `domain/checkFailureRepair.ts`.
+   */
+  onFailure?: StageFailureRepair;
+  /**
    * Who may pass this stage's approval gate, copied from the route so a persisted
    * pipeline stays self-describing. Absent means `"human"` — a person approves, which
    * is what every gate did before this existed.
@@ -465,6 +477,13 @@ export interface TaskStage {
    * See `RouteStageDefinition.mayMutateRoute` and `domain/routeMutation.ts`.
    */
   mayMutateRoute?: boolean;
+  /**
+   * This stage's work may not apply, so writing nothing is a legitimate outcome.
+   * Copied from the route so a persisted pipeline stays self-describing.
+   *
+   * See `RouteStageDefinition.conditional` and `domain/stageProductivity.ts`.
+   */
+  conditional?: boolean;
   /** Why this stage exists, when it was appended by a rule rather than a route. */
   addedByRule?: string;
   /**

@@ -1050,6 +1050,25 @@ export function correctionPrompt(
     "stage is recorded as fixed, and everything after it is built on the version you",
     "have just said is wrong.",
     "",
+    // Added 2 Sep 2026 from a measurement, not a guess. Of 13 stages held on this
+    // marker, 3 were emitted to say the *opposite* of what it means: "not needed — this
+    // is a straightforward report correction, not a rebuild", "false — I can amend this
+    // in place; no rebuild needed. Here's the fix." The runtime read each as "this needs
+    // a re-run" and held the route, so a stage that had just offered the fix was stopped
+    // as though it had refused. A 23% false-stop rate on the one marker whose whole
+    // purpose is to be believed.
+    //
+    // Closed in the prompt rather than the parser because there is no evidence to read:
+    // all three wrote zero files, exactly like the ten genuine declines, so nothing in
+    // the activity separates them. Keying a hold on the prose would be the false-stop
+    // trade this domain refuses everywhere else.
+    "",
+    "One thing this line is NOT for: disagreeing that a rebuild is needed. If you can",
+    "make the fix here, just make it — you do not need to say anything about rebuilds.",
+    `Use "${CORRECTION_DECLINED_MARKER}" only to say the opposite: that you *cannot* do`,
+    "this as a targeted change. Emitting it to mean \"no rebuild needed, here is the",
+    "fix\" stops the route for a person who then finds the fix already offered.",
+    "",
     "Report what you changed and why, in a few lines. If the finding was wrong — the",
     "code already does what it says is missing — say that instead of changing",
     "something to satisfy it.",

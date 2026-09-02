@@ -2,6 +2,40 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.117.0
+
+Both changes came out of a census of what is actually holding stages, rather than from a
+guess about what autonomy needs next.
+
+- **`conditional` — a stage whose work may not apply.** `changedNothing` reads "wrote no
+  files" as "probably did not do its job", which holds only where the stage was certainly
+  supposed to write something. Some stages are conditional by construction, and for those
+  it fired on every single run.
+
+  Measured across 17 pipelines: `rc-nav-permissions` ran 38 times over 8 task instances,
+  wrote zero files, and was held all 8 times — **23 of the 98 approvals** in the preceding
+  week, every one of them clearing that hold. Four `*-uat-rework` stages sat held the same
+  way. The route and the runtime were contradicting each other in writing: the stage's own
+  intent said *"if this change does not add a new report, state that explicitly and move
+  on"*.
+
+  The declaration supplies the check's missing precondition rather than switching it off.
+  Absent, nothing changes. It is refused for the case the check exists to catch — a stage
+  that ought to be writing files — and everything else about such a stage is still
+  checked.
+
+- **`CORRECTION-DECLINED` was being emitted to mean its own opposite.** Of 13 stages held
+  on that marker, **3** used it to say a rebuild was *not* needed: *"not needed — this is a
+  straightforward report correction, not a rebuild"*, *"false — I can amend this in place;
+  no rebuild needed. Here's the fix."* The runtime read each as "this needs a re-run" and
+  stopped the route, so a stage that had just offered the fix was held as though it had
+  refused — a 23% false-stop rate on the one marker whose whole purpose is to be believed.
+
+  Closed in the prompt rather than the parser, because there is nothing to read: all three
+  wrote zero files, exactly like the ten genuine declines, so no evidence separates them.
+  Keying a hold on the prose would be the false-stop trade this domain refuses everywhere
+  else.
+
 ## 0.116.1
 
 - **A held stage read as a stage waiting for a signature.** Four different demands settle

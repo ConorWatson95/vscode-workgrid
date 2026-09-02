@@ -265,7 +265,7 @@ function parseStage(
   // Rejected rather than coerced, for `requiresPullRequest`'s reason: read as absent, a
   // typo turns an automatic repair off, which is safe; read as true it would apply a
   // review's proposals with nobody watching.
-  for (const field of ["autoRepair", "mayMutateRoute"] as const) {
+  for (const field of ["autoRepair", "mayMutateRoute", "conditional"] as const) {
     if (raw[field] !== undefined && typeof raw[field] !== "boolean") {
       problems.push(`Rule "${ruleId}": stage "${field}" must be true or false.`);
       return undefined;
@@ -284,6 +284,7 @@ function parseStage(
     ...(sendBackTo ? { sendBackTo } : {}),
     ...(raw.autoRepair === true ? { autoRepair: true } : {}),
     ...(raw.mayMutateRoute === true ? { mayMutateRoute: true } : {}),
+    ...(raw.conditional === true ? { conditional: true } : {}),
   };
 }
 

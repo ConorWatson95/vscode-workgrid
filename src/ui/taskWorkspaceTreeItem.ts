@@ -10,6 +10,7 @@ import {
 } from "./statusPresentation";
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
 import { outstandingChecklist } from "../domain/pipelineEngine";
+import { declaredRepair, isDeclaredRepair } from "../domain/checkFailureRepair";
 import { itemsForGate } from "../domain/checklistScope";
 import {
   ChecklistItem,
@@ -222,7 +223,12 @@ export class StageTreeItem extends vscode.TreeItem {
       : stage.kind === "humanVerification"
         ? itemsForGate(task.pipeline, stage.id).length
         : outstandingChecklist(task.pipeline).length;
-    const base = stagePresentation(stage, outstandingInPipeline);
+    // Whether the route named someone to fix this stage's failed check, and whether the
+    // pipeline can still reach them. Derived here rather than in presentation because it
+    // is a fact about another stage — see `domain/checkFailureRepair.ts`.
+    const repairAvailable = !!task.pipeline
+      && isDeclaredRepair(declaredRepair(task.pipeline, stage.id));
+    const base = stagePresentation(stage, outstandingInPipeline, repairAvailable);
     const block = stageBlock(task.pipeline, stage);
     const visual = block ? { ...base, ...blockedStageVisual(block) } : base;
 

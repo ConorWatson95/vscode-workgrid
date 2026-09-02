@@ -233,3 +233,59 @@ describe("a correction that changed nothing", () => {
     ).toBe(true);
   });
 });
+
+describe("a stage whose work may not apply", () => {
+  const wroteNothing = (over: Record<string, unknown> = {}) =>
+    ({
+      id: "rework",
+      name: "UAT rework",
+      kind: "implementation",
+      status: "active",
+      intent: "Fix what UAT found.",
+      splittable: false,
+      requiresApproval: false,
+      subtasks: [
+        {
+          id: "rework-1",
+          title: "Rework",
+          prompt: "p",
+          status: "done",
+          startedAt: "2026-09-02T00:00:00.000Z",
+          activity: { toolCounts: { Read: 3 } },
+        },
+      ],
+      ...over,
+    }) as never;
+
+  // Measured 2 Sep 2026: rc-nav-permissions ran 38 times across 8 task instances, wrote
+  // zero files and was held every time — 23 of 98 approvals in a week, all clearing this
+  // hold. Its own intent said doing nothing was the right outcome, so the route and the
+  // runtime contradicted each other in writing.
+  it("is not held for writing nothing when the route says the work is conditional", () => {
+    expect(changedNothing(wroteNothing({ conditional: true }))).toBe(false);
+  });
+
+  // Absence means unchanged: every stage in existence predates the field.
+  it("is still held when the route says nothing", () => {
+    expect(changedNothing(wroteNothing())).toBe(true);
+  });
+
+  // The declaration supplies a missing precondition; it does not switch off the check
+  // for a stage that genuinely wrote something either way.
+  it("does not change a stage that did write files", () => {
+    const wrote = wroteNothing({
+      conditional: true,
+      subtasks: [
+        {
+          id: "rework-1",
+          title: "Rework",
+          prompt: "p",
+          status: "done",
+          startedAt: "2026-09-02T00:00:00.000Z",
+          activity: { pathsWritten: ["a.cs"] },
+        },
+      ],
+    });
+    expect(changedNothing(wrote)).toBe(false);
+  });
+});

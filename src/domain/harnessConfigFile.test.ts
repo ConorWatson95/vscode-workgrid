@@ -215,6 +215,81 @@ describe("checklistAudience", () => {
   });
 });
 
+describe("onFailure", () => {
+  const routeWith = (onFailure: unknown, verify: unknown = "pwsh check.ps1") => ({
+    routes: [
+      {
+        id: "r1",
+        label: "R1",
+        stages: [
+          { id: "promote", label: "Promote", kind: "deployment", intent: "Promote it." },
+          {
+            id: "accept",
+            label: "Accept",
+            kind: "humanVerification",
+            intent: "Accept it.",
+            gate: "approval",
+            ...(verify === null ? {} : { verify }),
+            onFailure,
+          },
+        ],
+      },
+    ],
+  });
+
+  it("accepts an earlier stage id", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "promote" }));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].onFailure).toEqual({ repair: "promote" });
+  });
+
+  it("is absent by default, so nothing that has not opted in changes", () => {
+    const parsed = parseHarnessConfig(routeWith(undefined));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].onFailure).toBeUndefined();
+  });
+
+  // Rejected rather than coerced: read as absent, a typo leaves the route looking as
+  // though it declared a repair owner while a failed check goes on stopping dead.
+  it("rejects a malformed declaration rather than reading it as absent", () => {
+    for (const bad of ["promote", { repair: "" }, {}, ["promote"], 3]) {
+      const parsed = parseHarnessConfig(routeWith(bad));
+      expect(parsed.routes).toEqual([]);
+      expect(parsed.problems.join(" ")).toContain("onFailure");
+    }
+  });
+
+  // Config that silently does nothing is indistinguishable from the feature being
+  // absent — the lesson the unquoted hook command taught this codebase.
+  it("rejects a repair owner on a stage with no check to fail", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "promote" }, null));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("needs a \"verify\" command");
+  });
+
+  it("rejects a stage that is not in the route", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "nope" }));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("not a stage of this route");
+  });
+
+  // Repairing forward, or itself, would let the route loop.
+  it("rejects itself and a later stage", () => {
+    for (const target of ["accept", "later"]) {
+      const config = routeWith({ repair: target });
+      config.routes[0].stages.push({
+        id: "later",
+        label: "Later",
+        kind: "deployment",
+        intent: "Later.",
+      } as never);
+      const parsed = parseHarnessConfig(config);
+      expect(parsed.routes).toEqual([]);
+      expect(parsed.problems.join(" ")).toContain("not an earlier stage");
+    }
+  });
+});
+
 describe("sendBackTo", () => {
   const routeWith = (sendBackTo: unknown) => ({
     routes: [
