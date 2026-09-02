@@ -201,6 +201,20 @@ export interface SubtaskActivity {
    * asked for rather than the one that ran.
    */
   actualModel?: string;
+  /**
+   * The Claude Code build this subtask ran under, from the session's init event.
+   *
+   * Almost everything the harness believes about the CLI is a probed fact against one
+   * build, and `CLAUDE.md` keeps a compatibility backlog whose baseline is a specific
+   * version. Without a per-run record, whether a stage ran before or after a behaviour
+   * changed is reconstructed from release dates and somebody's memory of when they
+   * installed something.
+   *
+   * It has already cost a measurement: an ask-rule change could not be evaluated against
+   * the 47 stage runs that followed it, because nothing recorded which of them carried
+   * the build. Absent means unreported, never old.
+   */
+  cliVersion?: string;
 }
 
 /**

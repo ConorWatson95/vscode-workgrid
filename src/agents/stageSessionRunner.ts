@@ -43,6 +43,8 @@ export interface StageSession {
    * asked for, since a disallowed model falls back silently.
    */
   readonly activeModel?: string;
+  /** The CLI build that ran it, from the init event. See SubtaskActivity.cliVersion. */
+  readonly cliVersion?: string;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
   on(event: "mcp", listener: (report: McpStartupReport) => void): unknown;
@@ -379,6 +381,7 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           // substituted without failing, and a stage comparison against the
           // requested name would then be comparing two runs of the same model.
           ...(session.activeModel ? { actualModel: session.activeModel } : {}),
+          ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         };
       };
 

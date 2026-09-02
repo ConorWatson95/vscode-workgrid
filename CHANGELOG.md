@@ -2,6 +2,34 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.117.1
+
+Runtime hardening against Claude Code releases up to 2.1.258. No architectural change —
+two of the four relevant items turned out to demand nothing.
+
+- **`SubtaskActivity.cliVersion`** — the build a subtask actually ran under, read from the
+  init event beside `actualModel`. Almost everything the harness believes about the CLI is
+  a probed fact against one version, and nothing recorded which version a stage used. That
+  already cost a measurement: an ask-rule change shipped mid-morning could not be evaluated
+  against the 47 runs that followed, because the only way to tell whether a run carried it
+  was somebody's memory of when they installed the build.
+
+- **`CLAUDE_CODE_SUBAGENT_MODEL_FORCE`** on stage processes. A stage's `model` is a
+  declaration about how that work gets done, and it governed only the root process — 7% of
+  stage sessions delegate, and a subagent could take its model from an agent definition the
+  harness never reads. Set unconditionally: there is no case where a route declares a
+  stage's model and means "except the parts it delegates".
+
+- **Checked and left alone:** 2.1.257 makes `claude -p` wait for an armed Monitor rather
+  than exiting after the apparent final result, which invalidates exactly the assumption
+  the stage runner makes — it finishes on the turn result, not process exit. It is safe
+  here because `Monitor` and `ScheduleWakeup` are not in the declared `--tools` set, and
+  `--tools` was probed to be structurally enforcing. The narrowing built to save prefix
+  tokens closed a lifecycle hole nobody was looking for.
+
+- Fable 5.1 is **not** adopted as a default. It is positioned at this runtime's exact
+  boundary, which makes it a claim to measure rather than assume.
+
 ## 0.117.0
 
 Both changes came out of a census of what is actually holding stages, rather than from a

@@ -35,6 +35,22 @@ export interface SubagentLimits {
 
 export const MAX_CONCURRENT_SUBAGENTS_VAR = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS";
 export const MAX_SUBAGENT_SPAWN_DEPTH_VAR = "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH";
+/**
+ * Forces every subagent onto the model the stage was given, ignoring spawn-time and
+ * agent-definition overrides. Added by Claude Code 2.1.257.
+ *
+ * A stage's `model` is a declaration the route makes about how that work is done, and
+ * without this it governed only the root process: 7% of stage sessions use the Agent
+ * tool, and a delegated run could pick its own model from an agent definition the
+ * harness never reads. So a stage declared `sonnet` could do most of its actual thinking
+ * on something else, and `UsageTotals.models` would show two entries for a stage that
+ * asked for one — which is the tell `actualModel` was recorded to catch, arriving from a
+ * source nothing could control.
+ *
+ * Set unconditionally, like the two limits above. There is no case where the route
+ * declares a stage's model and means "except for the parts it delegates".
+ */
+export const SUBAGENT_MODEL_FORCE_VAR = "CLAUDE_CODE_SUBAGENT_MODEL_FORCE";
 
 /**
  * Environment overrides for a stage process.
@@ -48,6 +64,11 @@ export function subagentLimitEnv(limits: SubagentLimits): Record<string, string>
   return {
     [MAX_CONCURRENT_SUBAGENTS_VAR]: String(atLeastOne(limits.concurrency)),
     [MAX_SUBAGENT_SPAWN_DEPTH_VAR]: String(atLeastOne(limits.depth)),
+    // "1" rather than "true": the two vars beside it are numeric and the CLI parses
+    // this family the same way. Probed truthiness is not something to guess at, so if a
+    // future build wants a different spelling it will show up as a stage whose delegated
+    // work reports a second model -- which `UsageTotals.models` already surfaces.
+    [SUBAGENT_MODEL_FORCE_VAR]: "1",
   };
 }
 

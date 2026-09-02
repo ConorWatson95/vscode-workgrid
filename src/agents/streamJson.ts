@@ -201,6 +201,30 @@ export function modelOf(event: StreamEvent): string | undefined {
   return undefined;
 }
 
+/**
+ * The Claude Code version that ran this session, from its system/init event.
+ *
+ * Recorded because almost everything the harness believes about the CLI is a
+ * *probed* fact against one build. `CLAUDE.md` carries a compatibility backlog whose
+ * validated baseline is a specific version, and a per-stage record is what makes any of
+ * it checkable after the fact: whether a stage ran before or after a behaviour changed
+ * is otherwise reconstructed from release dates and the operator's memory of when they
+ * installed something.
+ *
+ * It has already cost a measurement. An ask-rule change shipped mid-morning could not be
+ * evaluated against the 47 stage runs that followed, because nothing recorded which of
+ * them ran the build that carried it — so the only honest reading of the number was that
+ * it could not be read.
+ *
+ * Absent means the field was not reported, never that the version is old: older builds
+ * emit no such field, which is the rule `mcpServerErrorsOf` already follows.
+ */
+export function cliVersionOf(event: StreamEvent): string | undefined {
+  if (event.type !== "system" || event.subtype !== "init") return undefined;
+  const version = (event as { version?: unknown }).version;
+  return typeof version === "string" && version.trim() ? version.trim() : undefined;
+}
+
 export type { McpServerError, McpServerStatus };
 
 /**

@@ -2,15 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_CONCURRENT_SUBAGENTS_VAR,
   MAX_SUBAGENT_SPAWN_DEPTH_VAR,
+  SUBAGENT_MODEL_FORCE_VAR,
   subagentLimitEnv,
 } from "./subagentLimits";
 
 describe("subagentLimitEnv", () => {
-  it("names both CLI variables as strings", () => {
+  // Exhaustive on purpose: this is the whole environment a stage process is given for
+  // subagents, and a variable added without a decision behind it should fail here.
+  it("names every CLI variable as a string", () => {
     expect(subagentLimitEnv({ concurrency: 3, depth: 1 })).toEqual({
       [MAX_CONCURRENT_SUBAGENTS_VAR]: "3",
       [MAX_SUBAGENT_SPAWN_DEPTH_VAR]: "1",
+      [SUBAGENT_MODEL_FORCE_VAR]: "1",
     });
+  });
+
+  // A stage's declared model is a statement about how that work gets done, and 7% of
+  // stage sessions delegate. Without the force, a delegated run could take its model
+  // from an agent definition the harness never reads.
+  it("forces subagents onto the stage's model whatever the limits are", () => {
+    for (const limits of [{ concurrency: 1, depth: 1 }, { concurrency: 8, depth: 3 }]) {
+      expect(subagentLimitEnv(limits)[SUBAGENT_MODEL_FORCE_VAR]).toBe("1");
+    }
   });
 
   // Zero would reach the CLI as a limit it may treat as unset — the opposite of

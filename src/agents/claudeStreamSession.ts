@@ -11,6 +11,7 @@ import {
   mcpServersOf,
   mcpServerErrorsOf,
   modelOf,
+  cliVersionOf,
   shortModelName,
   rateLimitOf,
   costUsdOf,
@@ -184,6 +185,13 @@ export class ClaudeStreamSession {
   contextTokens = 0;
   /** Model the CLI reported for this session (short form), once known. */
   activeModel?: string;
+  /**
+   * The Claude Code build that ran this session, from its init event.
+   *
+   * Held beside `activeModel` for the same reason: both are what the CLI *resolved*
+   * rather than what was asked for, and neither can be reconstructed afterwards.
+   */
+  cliVersion?: string;
   /** Latest plan usage / rate-limit state reported by the CLI. */
   rateLimit?: RateLimitStatus;
   /** Cumulative cost of this session in USD. */
@@ -373,6 +381,11 @@ export class ClaudeStreamSession {
 
     const sid = sessionIdOf(event);
     if (sid) this.sessionId = sid;
+
+    // Read before the model branch, not inside it: a build that reports a version and
+    // no model would otherwise record neither.
+    const version = cliVersionOf(event);
+    if (version) this.cliVersion = version;
 
     const model = modelOf(event);
     if (model) {

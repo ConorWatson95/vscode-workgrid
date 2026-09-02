@@ -3189,6 +3189,74 @@ teach from other directions: **when the same observation keeps arriving and keep
 dismissed, the dismissal is the defect.** Eleven "Later"s were not eleven judgements; they
 were one missing verb.
 
+### What a CLI release changed, and what it only appeared to
+
+2 Sep 2026, against releases up to 2.1.258. Recorded because two of the four items looked
+like they demanded architecture and did not, and re-deriving that costs a morning.
+
+**"A final result is not process quiescence" — already closed, and by accident.** 2.1.257
+makes `claude -p` wait for an armed Monitor rather than exiting shortly after the apparent
+final result. `stageSessionRunner` finishes a subtask on session status `waiting`, which is
+derived from the turn result and **not** from process exit — so the assumption the release
+invalidates is exactly the one the runner makes. It is safe here for a reason that had
+nothing to do with lifecycle: `Monitor` and `ScheduleWakeup` are not in the declared
+`--tools` set, and `--tools` was probed to be *structurally* enforcing — no schema, no
+call. A stage cannot arm a monitor, so nothing can hold the process open past its result.
+
+Worth noting what that means: the tool-set narrowing was built to cut 15k tokens of prefix
+and it closed a lifecycle hole nobody was looking for. It also means the hole re-opens the
+moment `additionalStageTools` names one of them, which is a thing a project may do to a
+route. The remaining path is a **backgrounded `Bash`**, which is declared — and that is
+what `sessionProcessRegistry` and the `taskkill /T /F` sweep already exist for.
+
+**`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` closes a real determinism hole**, and this one was
+worth acting on. A stage's `model` is a declaration the route makes about how that work
+gets done, and it governed only the root process: 7% of stage sessions use the Agent tool,
+and a delegated run could take its model from an agent definition the harness never reads.
+So a stage declared `sonnet` could do most of its thinking on something else, and
+`UsageTotals.models` would show two entries for a stage that asked for one — the tell
+`actualModel` exists to catch, arriving from a source nothing could control. Set
+unconditionally beside the two subagent limits: there is no case where a route declares a
+stage's model and means "except the parts it delegates".
+
+**`SubtaskActivity.cliVersion`, and the measurement it already cost.** Almost everything
+this file asserts about the CLI is a probed fact against one build, and the compatibility
+backlog above names a baseline — but nothing recorded which build any given stage actually
+ran. That is not hypothetical: an ask-rule change shipped mid-morning on 1 Sep could not be
+evaluated against the 47 stage runs that followed it, because the only way to tell whether
+a run carried it was the operator's memory of when they installed the vsix. The honest
+reading of the number was that it could not be read. Now recorded from the init event
+beside `actualModel`, for the same reason: both are what the CLI *resolved*, and neither is
+reconstructable afterwards.
+
+**Fable 5.1: not adopted, and the reason is a rule rather than caution.** It is positioned
+for long unattended work and self-verification, which is precisely this runtime's boundary
+— so the temptation is to assume it reduces how much mutation machinery the harness needs.
+That is a claim about *where a failure lives*, and this codebase settles those by
+measurement: three cheap experiments on 28 Aug rejected two confident abstractions
+outright. The experiment worth running is the one the daily proposes — replay historical
+stage briefs where a human had to say "continue" or where a silent assumption proved wrong,
+against both models, scoring only *continued / repaired / asked / assumed wrongly*. If both
+fail in the same places, the harness needs the structural semantics; if 5.1 handles most of
+them, the mutation vocabulary should stay much smaller than it currently is. Until then the
+default stage model is unchanged.
+
+One deterministic-routing trap recorded now rather than discovered later: the `fable` and
+`best` aliases still resolve to Fable 5 in some gateway sessions, so a route must name
+`claude-fable-5-1` concretely. An alias that silently resolves to the previous generation
+is `actualModel`'s failure mode with a new cause.
+
+**Two community reports, deliberately not coded around.** A sandbox mounting `~/.claude`
+read-only would break a hook that persists its own state there; nothing here does, because
+harness state lives under the git common dir and the hooks it writes are one-directional
+policy responders. And a report of newline-containing environment variables producing
+unintended execution reinforces an existing rule rather than adding one: **stage
+environment construction is security-sensitive input, not process configuration.** It is
+also the sharpest argument yet for `adjudicateInsert` deriving its own position, kind
+constraints and gate rather than accepting them — an inserted stage must inherit a known
+environment policy, never author one. Neither is reproduced here, and neither gets a
+workaround until it is.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`
