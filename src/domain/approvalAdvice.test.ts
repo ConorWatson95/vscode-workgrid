@@ -219,6 +219,31 @@ describe("a review corrected and amended many times", () => {
     expect(advice.sendBackTo?.id).toBe("app");
   });
 
+  it("reads the unquoted citation a review actually writes", () => {
+    // The quoted form was the only one read, and no prompt ever asked for one. This is
+    // the spelling `deferralInstruction`'s "say so in a sentence" produces.
+    const p = pipeline();
+    p.stages[2].subtasks[2].reply = [
+      "**Critical**",
+      "- 1. the predicate is unconditional. Owned by the Implement the application stage, not this one.",
+    ].join(NL);
+    const advice = approvalAdvice(p, p.stages[2]);
+    expect(advice.sendBackTo?.id).toBe("app");
+  });
+
+  it("does not read a partial name as a citation", () => {
+    // NMGB-2822 wrote "a plan and data-stage decision". Matching part of a name would
+    // pick a stage by a shared word, and a near-match re-opens correct work — so this
+    // falls back to the positional guess the operator already distrusts.
+    const p = pipeline();
+    p.stages[2].subtasks[2].reply = [
+      "**Critical**",
+      "- 1. the shape is a plan and application-stage decision, not a review fix.",
+    ].join(NL);
+    const advice = approvalAdvice(p, p.stages[2]);
+    expect(advice.sendBackTo?.id).toBe("nav");
+  });
+
   it("falls back to the positional target when the findings name nobody", () => {
     // "nav" is what the positional rule picks here, and it is what a real gate
     // suggested for a critical about a controller: "Send the findings to

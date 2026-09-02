@@ -54,17 +54,43 @@ export function ownedByPendingStage(
     if (stage.id === raisedByStage) continue;
     if (!UNRESOLVED.has(stage.status)) continue;
 
-    const name = stage.name.trim().toLowerCase();
-    // A name too short to be distinctive would match half the prose in a report.
-    if (name.length < 4) continue;
-
-    let from = haystack.indexOf(name);
-    while (from !== -1) {
-      if (referencesAStage(haystack, from, name.length)) return stage;
-      from = haystack.indexOf(name, from + 1);
-    }
+    if (citesStageByName(haystack, stage.name)) return stage;
   }
   return undefined;
+}
+
+/**
+ * Whether a stage's own name is cited *as a stage* anywhere in this text.
+ *
+ * Shared with `namedByFindings`, which asks the same question of a review's blocking
+ * findings in order to recommend a send-back target. It read only the double-quoted
+ * spelling, and no prompt has ever asked for one: `deferralInstruction` says "say so in
+ * your report, in a sentence" and specifies no form. So a review naming an owner in the
+ * obvious English — `a plan and data-stage decision, not a review fix` — matched
+ * nothing, and the recommendation fell back to proximity and offered the stage that had
+ * just been corrected instead of the one the finding named.
+ *
+ * The narrowness is `ownedByPendingStage`'s, unchanged and for its reasons: the whole
+ * name, and cited rather than merely mentioned. Deliberately **not** widened to match
+ * part of a name — "the data stage" against `Implement the data` — because a near-match
+ * that picks the wrong stage re-opens correct work, which is the failure both callers
+ * exist to prevent. The prompt now asks for the name it already has from `routeStages`,
+ * which is the half of this that makes the English form reachable at all.
+ *
+ * `text` is expected already lower-cased by the caller, since both callers loop over
+ * every stage against one body of prose.
+ */
+export function citesStageByName(text: string, stageName: string): boolean {
+  const name = stageName.trim().toLowerCase();
+  // A name too short to be distinctive would match half the prose in a report.
+  if (name.length < 4) return false;
+
+  let from = text.indexOf(name);
+  while (from !== -1) {
+    if (referencesAStage(text, from, name.length)) return true;
+    from = text.indexOf(name, from + 1);
+  }
+  return false;
 }
 
 /**

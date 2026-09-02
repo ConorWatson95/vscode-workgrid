@@ -1299,6 +1299,103 @@ export function undoCorrection(
   } as TaskPipeline);
 }
 
+/**
+ * Withdraws the amendments a correction caused, leaving the correction itself alone.
+ *
+ * `correctStage` files the cascade at the moment the correction is *filed*, before
+ * anything knows whether it will change a thing — which is the right order, since the
+ * later stages must not stand as passed on output that is about to move. But when the
+ * correction then writes nothing and is held by `correctionChangedNothing`, the base
+ * those stages were amended against never moved, so every amendment is a delta against
+ * output identical to the one they already ran on.
+ *
+ * Measured on NMGB-2822. Three upstream stages declined their corrections in turn and
+ * `r-sql-object-review` was amended **four** times, each round re-reading a worktree it
+ * had already reported on — round four opens "the worktree is byte-for-byte what I
+ * reviewed last round" and restates the same single critical. $2.74 and four
+ * near-identical accounts of one stage, at the gate where somebody has to find the
+ * finding that is actually outstanding. Nothing detected it: `correctionChangedNothing`
+ * held the correcting stage, and the cascade it had already filed ran on regardless.
+ *
+ * Deliberately narrower than `undoCorrection`, which is the operator withdrawing a
+ * finding and restores the corrected stage too. Here the correction stays exactly as
+ * the hold left it — held, with its reply intact, waiting for a human to read what it
+ * said and choose a re-run. All that is taken back is work predicated on a change that
+ * did not happen.
+ *
+ * Rules:
+ *
+ * - **Restored, not re-opened.** Each stage goes back to the settlement its earliest
+ *   amendment snapshotted, which is `withdrawAmendments`' whole purpose. Re-opening
+ *   would charge the stages for an upstream change that never occurred — the cost this
+ *   exists to stop, arrived at from the other direction.
+ * - **An amendment that ran is booked as discarded**, by the same path `undoCorrection`
+ *   uses. It was paid for, and the ledger's point is that what a route cost is what was
+ *   spent on it. Amendments still pending cost nothing and book nothing.
+ * - **Deferrals are left alone.** `undoCorrection` settles what its re-opened stages
+ *   declined because every one of them is re-opened; here the rounds *before* the
+ *   amendment survive, and `settleDiscardedDeferrals` keys on the stage rather than the
+ *   subtask — so settling would discard items those surviving rounds raised.
+ * - **Keyed on the correction's own `at`**, so amendments from an earlier correction of
+ *   the same upstream stage are not swept up with it. Absorbed amendments carry the
+ *   earliest `at` of the group, which is the limitation `undoCorrection` already has
+ *   and errs towards withdrawing less.
+ */
+export function withdrawAmendmentsOf(
+  pipeline: TaskPipeline,
+  stageId: string,
+  correctionAt: string | undefined,
+  at: string,
+  reason: string,
+): { pipeline: TaskPipeline; restored: string[] } {
+  const index = pipeline.stages.findIndex((s) => s.id === stageId);
+  if (index === -1) return { pipeline, restored: [] };
+
+  const stage = pipeline.stages[index];
+  const causedByThis = (subtask: Subtask) =>
+    subtask.correction?.upstream?.stageId === stageId &&
+    (correctionAt === undefined || subtask.correction?.at === correctionAt);
+
+  // Nothing to take back. Checked before calling `withdrawAmendments`, because its
+  // fallback re-opens a stage carrying no amendment from this correction — right when
+  // a correction is being withdrawn, and wrong here: a stage that was never amended
+  // was never told anything by this correction, so it has nothing to respond to.
+  const affected = pipeline.stages
+    .slice(index + 1)
+    .filter((s) => s.subtasks.some(causedByThis));
+  if (affected.length === 0) return { pipeline, restored: [] };
+
+  const { later, discarded } = withdrawAmendments(
+    pipeline,
+    index,
+    { stageId, correctionAt },
+    at,
+    reason,
+  );
+
+  const stages = pipeline.stages.map((s, i) => {
+    if (i <= index) return s;
+    // Only the amended ones: `withdrawAmendments` re-opens the rest through its
+    // fallback, which is not this transition's business.
+    return affected.some((a) => a.id === s.id) ? (later[i] ?? s) : s;
+  });
+
+  return {
+    pipeline: {
+      ...pipeline,
+      stages,
+      // The route stays where the hold put it — on the held correction, which is what
+      // the operator has to act on. Restoring a later stage's settlement must not move
+      // the pointer off the one thing waiting for them.
+      currentStage: stage.id,
+      ...(discarded.length > 0
+        ? { discarded: [...(pipeline.discarded ?? []), ...discarded] }
+        : {}),
+    },
+    restored: affected.map((s) => s.id),
+  };
+}
+
 export function planStage(
   pipeline: TaskPipeline,
   stageId: string,

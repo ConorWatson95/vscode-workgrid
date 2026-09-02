@@ -1,5 +1,6 @@
 import { outstandingDeferrals } from "./pipelineEngine";
 import { ReviewFinding, findingsOfSubtasks, summariseFindings } from "./reviewFindings";
+import { citesStageByName } from "./deferralOwnership";
 import { sendBackTargets } from "./stageRefresh";
 import { StageEvidence, stageEvidence } from "./stageEvidence";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
@@ -101,6 +102,17 @@ export function approvalAdvice(
  * Falls back to the positional rule when the findings name nothing, or name more than
  * one stage. A wrong confident target is worse than the old guess, because the operator
  * reads the sentence and trusts it.
+ *
+ * **The quoted spelling was the only one read, and no prompt asked for it.** This looked
+ * for `"Implement the data"` and nothing else, while `deferralInstruction` tells a stage
+ * to say who owns the work "in a sentence" and names no form — so the parser read a
+ * convention that had never been requested. On NMGB-2822 a SQL review wrote, twice, that
+ * a critical was `a plan and data-stage decision, not a review fix`; this matched
+ * nothing, and the gate recommended `Implement the application`, the stage whose
+ * correction had just triggered the amendment. Both ends are fixed: the prompt asks for
+ * the name as `routeStages` lists it, and `citesStageByName` accepts the citation
+ * spellings `ownedByPendingStage` already reads. Not widened to partial names — see
+ * there for why.
  */
 function namedByFindings(
   findings: readonly ReviewFinding[],
@@ -111,7 +123,7 @@ function namedByFindings(
     .map((f) => f.text.toLowerCase())
     .join(" ");
   if (!text) return undefined;
-  const named = targets.filter((t) => text.includes(`"${t.name.toLowerCase()}"`));
+  const named = targets.filter((t) => citesStageByName(text, t.name));
   return named.length === 1 ? named[0] : undefined;
 }
 

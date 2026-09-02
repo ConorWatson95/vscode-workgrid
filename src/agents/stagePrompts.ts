@@ -458,8 +458,12 @@ If you find work that has not been done and is not yours, what to do depends ent
 on whether any stage of the workflow above owns it. Decide that first — the route is
 listed for you, with each stage's objective.
 
-**A later stage clearly owns it.** Say so in your report, in a sentence, and move on.
-Do **not** mark it "${DEFERRED_MARKER}". That marker holds the route until a human
+**A later stage clearly owns it.** Say so in your report, in a sentence, and move on,
+naming that stage in double quotes exactly as the workflow above lists it — "Implement
+the data", not "the data stage". The runtime reads the name to work out where a finding
+should be sent back to, and a stage described rather than named is one it cannot find:
+a review that wrote "a plan and data-stage decision" had its critical recommended to
+the wrong stage entirely. Do **not** mark it "${DEFERRED_MARKER}". That marker holds the route until a human
 writes a sentence about who owns each item — and you have just established that the
 route already owns it, so the answer is on the screen and the question is noise. One
 task accumulated forty of these, thirty of them the same four observations reworded

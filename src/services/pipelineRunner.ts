@@ -40,6 +40,7 @@ import {
   recordVerification,
   revertSubtask,
   startSubtask,
+  withdrawAmendmentsOf,
 } from "../domain/pipelineEngine";
 import { formatSendBackNote, guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
@@ -434,6 +435,60 @@ export class PipelineRunner {
    * the report shows the evidence rather than only the verdict — a stage that failed
    * verification is exactly the one whose output someone needs.
    */
+  /**
+   * Takes back the amendments a correction filed, when the correction moved nothing.
+   *
+   * `correctStage` invalidates the later stages at the moment a correction is *filed*,
+   * which is the right order — they must not stand as passed on output that is about to
+   * change. Both holds above establish the same fact afterwards: it did not change.
+   * Declined and wrote-nothing are one situation for this purpose, so they share one
+   * call site rather than each growing their own copy.
+   *
+   * On NMGB-2822 nothing revisited it. Three upstream stages declined in turn and
+   * `r-sql-object-review` was amended four times, each round re-reading a worktree it
+   * had already reported on — round four opens "the worktree is byte-for-byte what I
+   * reviewed last round" and restates the same single critical. $2.74 and four
+   * near-identical accounts of one stage, at the gate where somebody has to find the
+   * finding that is actually outstanding.
+   *
+   * Announced, like every other thing here that takes work back: a stage whose
+   * settlement reappears with no explanation is indistinguishable from one that never
+   * moved.
+   */
+  private withdrawIdleCascade(
+    pipeline: TaskPipeline,
+    taskName: string,
+    stage: TaskStage,
+    correctionAt: string | undefined,
+    reason: string,
+    steps: string[],
+  ): TaskPipeline {
+    const undone = withdrawAmendmentsOf(
+      pipeline,
+      stage.id,
+      correctionAt,
+      new Date().toISOString(),
+      reason,
+    );
+    if (undone.restored.length === 0) return pipeline;
+
+    const names = undone.pipeline.stages
+      .filter((s) => undone.restored.includes(s.id))
+      .map((s) => `"${s.name}"`)
+      .join(", ");
+    steps.push(
+      `Nothing changed upstream, so ${names} ` +
+        `${undone.restored.length === 1 ? "keeps the settlement it had" : "keep the settlements they had"} ` +
+        "— the amendment was withdrawn rather than run again.",
+    );
+    this.logger.info(
+      `Harness [${taskName}] withdrew ${undone.restored.length} amendment(s) caused by ` +
+        `${stage.name}: the correction changed nothing, so the stages behind it had ` +
+        "nothing to respond to.",
+    );
+    return undone.pipeline;
+  }
+
   private async runVerification(
     task: TaskWorkspace,
     stage: TaskStage,
@@ -2022,6 +2077,14 @@ export class PipelineRunner {
           `Harness [${task.name}] ${stage.name} declined a correction: ${correctionDeclined} ` +
             "Nothing was changed; holding the route rather than passing the stage.",
         );
+        pipeline = this.withdrawIdleCascade(
+          pipeline,
+          task.name,
+          stage,
+          subtask.correction.at,
+          `amendment withdrawn: the correction to ${stage.name} was declined`,
+          steps,
+        );
       }
     }
 
@@ -2045,6 +2108,15 @@ export class PipelineRunner {
             `Harness [${task.name}] ${stage.name} ran a correction that wrote no files ` +
               "and did not decline. Holding rather than passing: read what it said, then " +
               "either approve it or re-run the stage.",
+          );
+
+          pipeline = this.withdrawIdleCascade(
+            pipeline,
+            task.name,
+            stage,
+            ran.correction?.at,
+            `amendment withdrawn: the correction to ${stage.name} changed nothing`,
+            steps,
           );
         }
       }

@@ -12,6 +12,7 @@ import {
   handoffsBefore,
   correctStage,
   undoCorrection,
+  withdrawAmendmentsOf,
   undoableCorrection,
   recordDeferrals,
   recordActions,
@@ -2608,6 +2609,94 @@ describe("correctStage", () => {
 
   it("refuses an empty finding, which gives the session nothing to act on", () => {
     expect(correctStage(ran(), "implement", { finding: "   ", at: "t1" }).ok).toBe(false);
+  });
+});
+
+describe("withdrawAmendmentsOf", () => {
+  // NMGB-2822: three upstream stages declined their corrections in turn and the SQL
+  // review was amended four times against a worktree its own fourth round calls
+  // "byte-for-byte what I reviewed last round". The cascade is filed when a correction
+  // is filed, and nothing revisited it when the correction moved nothing.
+  const ran = (): TaskPipeline =>
+    ({
+      routeId: "report-change",
+      stages: [
+        {
+          id: "implement", name: "Implement the data", kind: "implementation",
+          status: "passed", intent: "", splittable: false, requiresApproval: false,
+          verdict: "pass" as const, finishedAt: "t0",
+          subtasks: [{
+            id: "implement-1", title: "Implement", prompt: "p", status: "done" as const,
+            reply: "Narrowed the predicate.", activity: { costUsd: 4.0 },
+          }],
+        },
+        {
+          id: "review", name: "SQL object review", kind: "domainReview",
+          status: "awaiting-approval", intent: "", splittable: false,
+          requiresApproval: true, finishedAt: "t0",
+          verification: { command: "check", exitCode: 0, at: "t0" },
+          subtasks: [{
+            id: "review-1", title: "Review", prompt: "p", status: "done" as const,
+            reply: "BLOCKING: the predicate is unconditional.", activity: { costUsd: 2.4 },
+          }],
+        },
+      ],
+    }) as TaskPipeline;
+
+  const corrected = (): TaskPipeline =>
+    must(correctStage(ran(), "implement", { finding: "gate it behind a setting", at: "t1" }));
+
+  it("restores the amended stage's settlement instead of re-running it", () => {
+    const p = withdrawAmendmentsOf(corrected(), "implement", "t1", "t2", "changed nothing");
+    expect(p.restored).toEqual(["review"]);
+    const review = p.pipeline.stages[1];
+    expect(review.status).toBe("awaiting-approval");
+    expect(review.finishedAt).toBe("t0");
+    expect(review.verification).toEqual({ command: "check", exitCode: 0, at: "t0" });
+    // The amendment is gone; the round that reported the critical is not.
+    expect(review.subtasks).toHaveLength(1);
+    expect(review.subtasks[0].id).toBe("review-1");
+    expect(review.subtasks[0].reply).toContain("BLOCKING");
+  });
+
+  it("leaves the held correction and its own work exactly as they were", () => {
+    const before = corrected();
+    const p = withdrawAmendmentsOf(before, "implement", "t1", "t2", "changed nothing");
+    expect(p.pipeline.stages[0]).toEqual(before.stages[0]);
+    // The operator has to act on the hold, so the pointer stays on it.
+    expect(p.pipeline.currentStage).toBe("implement");
+  });
+
+  it("books an amendment that already ran, and nothing for one that did not", () => {
+    const pending = withdrawAmendmentsOf(corrected(), "implement", "t1", "t2", "why");
+    expect(pending.pipeline.discarded ?? []).toEqual([]);
+
+    const withRun = corrected();
+    const amendment = withRun.stages[1].subtasks[1];
+    withRun.stages[1].subtasks[1] = {
+      ...amendment, status: "done", reply: "Byte-for-byte the same. My findings stand.",
+      activity: { costUsd: 0.3579 },
+    };
+    const p = withdrawAmendmentsOf(withRun, "implement", "t1", "t2", "why");
+    expect(p.pipeline.discarded?.[0]).toMatchObject({
+      stageId: "review", collateral: true, costUsd: 0.3579,
+    });
+  });
+
+  it("does nothing when this correction amended nobody", () => {
+    // A correction of the last stage in a route, and the guard that keeps this from
+    // re-opening stages through `withdrawAmendments`' fallback.
+    const before = corrected();
+    const p = withdrawAmendmentsOf(before, "review", "t1", "t2", "why");
+    expect(p.restored).toEqual([]);
+    // Handed back untouched, rather than the fallback re-opening anything.
+    expect(p.pipeline).toBe(before);
+  });
+
+  it("ignores amendments from a different correction of the same stage", () => {
+    const p = withdrawAmendmentsOf(corrected(), "implement", "t9", "t2", "why");
+    expect(p.restored).toEqual([]);
+    expect(p.pipeline.stages[1].status).toBe("pending");
   });
 });
 

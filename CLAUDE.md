@@ -3189,6 +3189,124 @@ teach from other directions: **when the same observation keeps arriving and keep
 dismissed, the dismissal is the defect.** Eleven "Later"s were not eleven judgements; they
 were one missing verb.
 
+### An owner named in prose, and a cascade against a worktree nobody had changed
+
+2 Sep 2026, both found in one held gate on NMGB-2822 — a `domainReview` amended four
+times, $2.74, whose fourth round opens *"the worktree is byte-for-byte what I reviewed
+last round"* and restates the same single critical.
+
+**The parser read a convention no prompt had asked for.** `namedByFindings` picks the
+send-back target a blocking finding names, and it matched only a double-quoted exact
+stage name; `deferralInstruction` says to name the owner *"in a sentence"* and specifies
+no form at all. So the review wrote, twice, that its critical was *"a plan and data-stage
+decision, not a review fix"*, matched nothing, and the gate recommended
+`Implement the application` — the stage whose correction had just triggered the
+amendment. The stage complied exactly with the instruction it was given.
+
+The family is the markers', **inverted**, and that is why it is recorded rather than
+counted as another instance: there the model asserts a fact no parser can check; here the
+parser was looking for exactly the right fact and the *form* defeated it, which no amount
+of instructing the model harder would have closed. Both ends are fixed — `citesStageByName`
+is extracted from `ownedByPendingStage` and accepts the citation spellings it already
+read, and the prompt asks for the name as `routeStages` lists it. Deliberately **not**
+widened to a partial name: "the data stage" against `Implement the data` would have fixed
+this exact reply, and it is the fuzzy match `sendBackTargets` already rejected once —
+a shared word picking the wrong stage re-opens correct work. A test pins the refusal.
+
+**And a correction that moved nothing still invalidated everything behind it.**
+`correctStage` files the downstream cascade when a correction is *filed*, before anything
+knows whether it will change a thing — which is the right order, since those stages must
+not stand as passed on output that is about to move. Both holds that establish the
+opposite one turn later — `CORRECTION-DECLINED` and `correctionChangedNothing` — left the
+cascade they had already filed to run on regardless. On NMGB-2822 three upstream stages
+declined in turn and the review paid for four rounds of re-reading an unchanged diff, at
+the one gate where somebody has to find the finding that is actually outstanding.
+
+`withdrawAmendmentsOf` takes them back, reusing `withdrawAmendments` untouched. Rules:
+
+- **Deliberately narrower than `undoCorrection`**, which is the operator withdrawing a
+  finding and restores the corrected stage too. Here the correction stays exactly as the
+  hold left it — blocked, reply intact, `currentStage` still on it — because that is the
+  thing the operator has to act on. Only work predicated on a change that did not happen
+  is taken back.
+- **Restored, not re-opened.** Each stage returns to the settlement its earliest
+  amendment snapshotted. Re-opening would charge it for an upstream change that never
+  occurred, which is this defect arrived at from the other direction.
+- **An amendment that ran is booked as discarded collateral**; a pending one books
+  nothing. It was paid for, and the ledger's point is that what a route cost is what was
+  spent on it.
+- **Deferrals are left alone**, unlike `undoCorrection` — the rounds *before* the
+  amendment survive here, and `settleDiscardedDeferrals` keys on the stage rather than
+  the subtask, so settling would discard items those surviving rounds raised.
+- **Both holds share one call site.** Declined and wrote-nothing are one situation for
+  this purpose, and the live case was the *declined* one — a fix stopping at
+  `correctionChangedNothing` would have missed NMGB-2822 entirely.
+
+### Attributing the discard ledger, and two hypotheses it killed
+
+2 Sep 2026. The experiment CLAUDE.md named as next and gated the two missing checker
+kinds behind: 57% of all agent spend is discarded, flat across stage kinds, so the driver
+is task-level. `TaskPipeline.discarded` records a `reason` on all 353 entries. Attributed:
+
+| line | n | $ |
+|---|---|---|
+| re-run by hand — the stage the operator chose | 98 | 186 |
+| re-run by hand — collateral swept up with it | 107 | 208 |
+| correction cascade (`re-opened by a correction to …`) | 133 | 167 |
+| correction withdrawn | 15 | 8 |
+
+Of the 98, the 46 carrying a stage-specific note, classified by hand:
+
+| cause | n | $ |
+|---|---|---|
+| requirement or approach change | 17 | 51 |
+| operator conversation / instruction | 11 | 16 |
+| check reported a false fact | 8 | 9 |
+| send-back done as a re-run | 7 | 7 |
+| transient API error | 2 | 9 |
+| harness defect (since fixed) | 1 | 18 |
+
+**It is not requirements churn** — 13% of the re-run column, and the composition is
+diffuse enough that no cause dominates. **The two missing checker kinds would have
+prevented none of these 98**, which was the decision this experiment was run to make;
+they are not worth building on this evidence. Three of the six causes already have
+shipped mechanisms, retiring $34 of the $394.
+
+**The cascade is ~1 stage, not a sweep.** 107 collateral over 98 re-runs is **1.1**
+stages re-opened per hand re-run — `discarded` only books stages that had usage, and on a
+20–29 stage route most downstream stages were pending anyway. So the earlier reading of
+this number as a sweeping cascade was wrong: $208 is the absolute ceiling on finer
+invalidation, not a floor.
+
+**Two hypotheses derived from the ledger, both refuted on inspection.** Recorded because
+each is the kind that gets re-litigated:
+
+- **"The RU-550 check move was incomplete."** `ec-uat-promote` was re-run by hand eight
+  times between 06:04 and 12:59 on 14 Aug for $20.70, the operator writing *"It's already
+  promoted. I checked it, its good!"*, and its recorded verification exits 0 at 13:01 —
+  the textbook shape of a verify that cannot pass until a human merges. But the move
+  landed **20 Aug** (`1c478638f`). $22.65 of that disease predates the fix and $0.38
+  follows it. The fix worked, and **a config change retired the waste that no runtime
+  change did** — which is the more useful half of the result.
+- **"Send-back findings are leaking route-wide."** 44 of 69 guidance notes carry a
+  `stageId` and no `scope`, which `guidanceFor` delivers to every stage — including
+  sixteen reading *"Sent back from ..."*, the archetypal stage-scoped note. Every one of
+  those predates 13 Aug, when scoping shipped; from that date every send-back is scoped.
+  The *absence means unchanged* rule working exactly as written, and the unscoped notes
+  after it are approval notes, which are cumulative by design.
+
+**The measurement gap, stated rather than papered over:** the 52 re-runs with no
+stage-specific note are not a missing feature — their nearest note is an approval note
+from another stage, so the classifier had nothing to read. 13% is a floor with a wide
+error bar, not a number.
+
+What survives, and neither is a bug: the $208 of collateral, whose honest fix is
+deferring invalidation until a re-run completes so downstream stages amend against a real
+delta instead of restarting cold — a change to *when* the pipeline invalidates, not a
+patch; and `sq-change` ×7, the operator conducting a conversation through the revert
+button (*"how many dealers would this change affect?"*) when `stageInterjection` exists
+for exactly that and was not reached for.
+
 ### What a CLI release changed, and what it only appeared to
 
 2 Sep 2026, against releases up to 2.1.258. Recorded because two of the four items looked
