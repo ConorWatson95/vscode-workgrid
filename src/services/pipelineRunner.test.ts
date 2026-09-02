@@ -1927,6 +1927,45 @@ describe("verification command substitution", () => {
     expect(stage?.verification).toBeUndefined();
   });
 
+  it("keeps a link made while the stage was running, and scopes the check with it", async () => {
+    // Both halves of one live failure. A UAT stage failed for want of `${ticket}`, the
+    // operator linked the task 51 seconds later while the advance was still running, and
+    // the advance wrote its snapshot back over the link — so the command was reported as
+    // not working when it had worked, twice, and the check went on seeing no ticket.
+    const command = 'Test-WorkPromoted.ps1 -Ticket "RU-525"';
+    const { runner, repo, verified } = makeRunner(
+      {
+        calls: [],
+        async run(task) {
+          // The operator, mid-session, through a command that reads and writes the
+          // repository exactly as `setTaskOrigin` does.
+          const held = (await repo.get(task.id))!;
+          await repo.save({
+            ...held,
+            origin: { sourceId: "jira", ref: "RU-525", at: "2026-09-02T09:47:38.000Z" },
+          });
+          return { ok: true, text: "Done." };
+        },
+        async create() {},
+        async stop() {},
+      } as unknown as StageSessionRunner,
+      { verify: { [command]: { exitCode: 0 } } },
+    );
+    const subject = {
+      ...task(),
+      name: "RenaultGB - MyRewards Summary",
+      pipeline: createPipeline(SCOPED),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const after = await repo.get(subject.id);
+    expect(after?.origin?.ref).toBe("RU-525");
+    expect(verified).toEqual([command]);
+    expect(after?.pipeline?.stages[0].status).toBe("passed");
+  });
+
   it("runs the check once the task carries a ticket", async () => {
     const command = 'Test-WorkPromoted.ps1 -Ticket "NMGB-2534"';
     const sessions = fakeSessions({ "": { text: "Done." } });

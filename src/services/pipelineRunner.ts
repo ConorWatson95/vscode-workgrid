@@ -504,6 +504,14 @@ export class PipelineRunner {
       }
     | undefined
   > {
+    // Read afresh, for the placeholders below. An advance holds its task for minutes,
+    // and `${ticket}` is exactly the sort of thing an operator establishes *because* a
+    // stage has just complained about it — on the failure this was found on, the link
+    // was made 51 seconds before the check ran and the check still saw a task with none.
+    // Cheap, and the check is the one place a stale field is reported as a fact about
+    // the work rather than about the record.
+    task = (await this.repository.get(task.id)) ?? task;
+
     // Before the tree is judged, not after: the whole point is that these paths are
     // local environment and never work, so a check reading them as uncommitted work
     // fails a stage whose work is committed and pushed. It happened on four worktrees
@@ -2357,12 +2365,29 @@ export class PipelineRunner {
     return (await this.repository.get(task.id)) ?? task;
   }
 
+  /**
+   * Writes the pipeline back, onto the record as it stands rather than as it was.
+   *
+   * An advance holds one `TaskWorkspace` for the whole of a subtask — minutes — and
+   * spreading that snapshot back writes every *other* field as it was when the advance
+   * started. So an edit made meanwhile is silently reverted, and the state file's
+   * read-modify-write does not help: it merges the task *list*, not the fields of one
+   * task. A real UAT stage failed for want of `${ticket}`, the operator linked the task
+   * to its ticket at 09:47:38, and the advance overwrote the link 51 seconds later — the
+   * command having worked exactly as designed, twice.
+   *
+   * The runner owns `pipeline` for the duration of an advance, and nothing else. So the
+   * pipeline is written from memory and everything else is taken from the freshest read,
+   * which is the same repair `recordStageClaims` already makes for its own field and for
+   * the same stated reason.
+   */
   private async save(
     task: TaskWorkspace,
     pipeline: TaskPipeline,
   ): Promise<TaskWorkspace> {
+    const current = (await this.repository.get(task.id)) ?? task;
     const updated = {
-      ...task,
+      ...current,
       pipeline,
       updatedAt: new Date().toISOString(),
     };
