@@ -29,7 +29,7 @@
  * Pure and vscode-free.
  */
 
-import { Subtask, TaskStage } from "./taskPipeline";
+import { Subtask, SubtaskActivity, TaskStage } from "./taskPipeline";
 
 /**
  * Whether this settled stage was meant to change files and did not.
@@ -122,8 +122,55 @@ export const CHANGED_NOTHING_REASON =
 export function correctionChangedNothing(subtask: Subtask): boolean {
   if (!subtask.correction || subtask.correction.upstream) return false;
   if (!subtask.activity) return false;
+  if (wroteOutsideTheWriteTools(subtask.activity)) return false;
   return (subtask.activity.pathsWritten?.length ?? 0) === 0;
 }
+
+/**
+ * Whether this run could have written a file without `pathsWritten` recording it.
+ *
+ * `StageActivityWatcher` populates `pathsWritten` from `WRITE_TOOLS` alone — Write,
+ * Edit, NotebookEdit — so a session that creates and edits files through the shell
+ * records **none**, and an empty list then reads as a measured zero when it is
+ * nothing of the kind. That is not a corner case here: of 251 settled subtasks in
+ * one repository's state file since 25 Aug, **128 used only Bash or PowerShell and
+ * recorded zero written paths**. A SQL implementation stage that wrote a whole
+ * project directory with `printf`, `cat >>` and `[System.IO.File]::WriteAllText`
+ * is indistinguishable, on this field, from one that did nothing.
+ *
+ * That was survivable while the consequence was a spurious hold costing a click.
+ * It stopped being survivable when `pipelineRunner` began withdrawing the
+ * downstream cascade on this answer: a correction that really did fix the code took
+ * every stage behind it — the code review included — back to `passed`, so the fix
+ * shipped unreviewed and the finding was marked dealt with. A false positive here
+ * now costs exactly what the review existed to prevent, which is the opposite
+ * disposition from the one this check was written under.
+ *
+ * So the honest answer for a shell-only run is *unmeasured*, the rule `stageUsage`
+ * and the unmeasured-wait both follow: absence of measurement is not permission to
+ * act. It does mean the hold cannot fire on the shell-driven stages that produce
+ * most corrections — which is a real loss, and the reason the durable fix is to
+ * measure the worktree rather than the tool calls. Until then, failing to hold a
+ * correction that did nothing costs one click at the next gate; withdrawing a
+ * review of a fix that did happen costs the review.
+ *
+ * Keyed on the tools this run actually used, never on the absence of write tools
+ * alone: a session that used *no* tools at all wrote nothing by any route, and
+ * excusing that would switch the check off for the case it was built for — a
+ * correction that argued in prose and touched nothing.
+ */
+function wroteOutsideTheWriteTools(activity: SubtaskActivity): boolean {
+  const counts = activity.toolCounts ?? {};
+  return SHELL_TOOLS.some((tool) => (counts[tool] ?? 0) > 0);
+}
+
+/**
+ * Tools that can write a file without the harness recording a path for it.
+ *
+ * Both, because gating only `Bash` is how the credential rule was first found to
+ * miss: the CLI reaches for `PowerShell` and the check never sees the call.
+ */
+const SHELL_TOOLS = ["Bash", "PowerShell"] as const;
 
 /** How that hold explains itself, in the stage's `blocked` line. */
 export const CORRECTION_CHANGED_NOTHING_REASON =

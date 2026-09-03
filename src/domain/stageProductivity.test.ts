@@ -289,3 +289,42 @@ describe("a stage whose work may not apply", () => {
     expect(changedNothing(wrote)).toBe(false);
   });
 });
+describe("correctionChangedNothing — a shell-only run is unmeasured", () => {
+  // The live failure: a correction fixed the code with `printf`/`cat >>`, recorded no
+  // written paths, and the runner withdrew the downstream cascade — putting the code
+  // review that would have checked the fix back to `passed`.
+  it("does not fire when the run could only have written through the shell", () => {
+    const subtask = {
+      id: "s1",
+      brief: "b",
+      status: "done",
+      correction: { finding: "f", at: "2026-09-03T00:00:00.000Z" },
+      activity: { pathsWritten: [], toolCounts: { Bash: 61 } },
+    } as unknown as Subtask;
+    expect(correctionChangedNothing(subtask)).toBe(false);
+  });
+
+  it("does not fire for PowerShell either", () => {
+    const subtask = {
+      id: "s1",
+      brief: "b",
+      status: "done",
+      correction: { finding: "f", at: "2026-09-03T00:00:00.000Z" },
+      activity: { pathsWritten: [], toolCounts: { PowerShell: 6 } },
+    } as unknown as Subtask;
+    expect(correctionChangedNothing(subtask)).toBe(false);
+  });
+
+  // The case the check exists for: a correction that argued in prose and touched
+  // nothing by any route. Excusing this would switch it off entirely.
+  it("still fires on a correction that used no shell at all", () => {
+    const subtask = {
+      id: "s1",
+      brief: "b",
+      status: "done",
+      correction: { finding: "f", at: "2026-09-03T00:00:00.000Z" },
+      activity: { pathsWritten: [], toolCounts: { Read: 4, Grep: 2 } },
+    } as unknown as Subtask;
+    expect(correctionChangedNothing(subtask)).toBe(true);
+  });
+});
