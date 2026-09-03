@@ -41,6 +41,35 @@ describe("stagePresentation", () => {
     expect(new Set(icons).size).toBe(icons.length);
   });
 
+  // Reported from a live task: a held implementation stage, a gate five rows below it
+  // and two settled reviews after that all drew as equal peers, so the tree made three
+  // different claims about where the route was.
+  it("says which row the route is waiting on", () => {
+    const visual = stagePresentation(stage({ status: "awaiting-approval" }), undefined, undefined, "at");
+    expect(visual.description).toContain("the route is here");
+  });
+
+  it("marks an open gate the route has not reached, and leaves settled stages alone", () => {
+    const gate = stagePresentation(stage({ status: "awaiting-approval" }), undefined, undefined, "ahead");
+    expect(gate.description).toContain("not reached");
+    const settled = stagePresentation(stage({ status: "passed" }), undefined, undefined, "ahead");
+    expect(settled.description).not.toContain("reached");
+  });
+
+  it("adds nothing to a stage behind the route, and nothing when position is unknown", () => {
+    const behind = stagePresentation(stage({ status: "passed" }), undefined, undefined, "behind");
+    expect(behind).toEqual(stagePresentation(stage({ status: "passed" })));
+  });
+
+  // Position must not change what a row offers: a gate the route has gone past is
+  // still a gate the operator can approve.
+  it("leaves the menus of a stage ahead of the route untouched", () => {
+    const ahead = stagePresentation(stage({ status: "awaiting-approval" }), undefined, undefined, "ahead");
+    const plain = stagePresentation(stage({ status: "awaiting-approval" }));
+    expect(ahead.contextValue).toBe(plain.contextValue);
+    expect(ahead.iconId).toBe(plain.iconId);
+  });
+
   it("spins only while a stage is active", () => {
     expect(stagePresentation(stage({ status: "active" })).iconId).toContain("~spin");
     expect(stagePresentation(stage({ status: "pending" })).iconId).not.toContain("~spin");

@@ -2,6 +2,7 @@ import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { findingsOfSubtasks, summariseFindings } from "../domain/reviewFindings";
 import { isCorrectable, undoableCorrection } from "../domain/pipelineEngine";
 import { deferralHeadline } from "../domain/deferralText";
+import { StagePosition } from "../domain/routePosition";
 
 /**
  * Presentation for pipeline stages in the tree. Pure, so the labelling rules are
@@ -38,8 +39,16 @@ export function stagePresentation(
    * and this function is given one. Derived by `declaredRepair`, never recomputed here.
    */
   repairAvailable?: boolean,
+  /**
+   * Where this stage sits relative to the point the route is stopped at.
+   *
+   * Passed in for `outstandingInPipeline`'s reason — it is a fact about the whole
+   * pipeline, and this function is given one stage. Optional so a caller that has no
+   * pipeline renders exactly as it did before.
+   */
+  position?: StagePosition,
 ): StageVisual {
-  const visual = statusVisual(stage, outstandingInPipeline);
+  const visual = withPosition(statusVisual(stage, outstandingInPipeline), stage, position);
   // A second token rather than a status of its own: "has output to correct" is
   // orthogonal to what the stage is doing, and a correction leaves the stage
   // `pending` while still holding everything it produced.
@@ -378,4 +387,44 @@ export function activeStageLabel(pipeline: TaskPipeline | undefined): string | u
   if (block) return `${current.name} — ${blockedStageVisual(block).description}`;
   if (current.status === "awaiting-approval") return `${current.name} — awaiting approval`;
   return `${current.name}…`;
+}
+
+/**
+ * Says which row the route is waiting on, and which open gates it has gone past.
+ *
+ * Only ever *adds* to the description: the icon, colour and `contextValue` are the
+ * stage's own status and the menus are keyed on them, so position must not change
+ * what a row offers — a gate the route has moved past is still a gate you can
+ * approve. Reported from a live task where a held implementation stage, a gate five
+ * rows below it and two settled reviews after that were drawn as equal peers, and
+ * the honest reading of the three together was that the route was in three places.
+ */
+function withPosition(
+  visual: StageVisual,
+  stage: TaskStage,
+  position?: StagePosition,
+): StageVisual {
+  if (!position) return visual;
+
+  // Nothing is added to a resolved stage. A green tick behind the frontier is not
+  // making a claim about position, and annotating twenty of them to explain one
+  // would bury the row that matters — which is the failure this is fixing.
+  if (position === "behind") return visual;
+
+  const note =
+    position === "at"
+      ? "the route is here"
+      : // Every other status ahead of the frontier is a stage that ran before the
+        // correction re-opened an earlier one, and its settlement stands. Only a
+        // still-open demand is worth marking, because that is the one competing for
+        // the eye with the row the route is actually stopped on.
+        stage.status === "awaiting-approval" || stage.status === "failed"
+        ? "the route has not reached this yet"
+        : undefined;
+  if (!note) return visual;
+
+  return {
+    ...visual,
+    description: visual.description ? `${visual.description} · ${note}` : note,
+  };
 }

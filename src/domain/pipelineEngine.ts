@@ -2441,7 +2441,19 @@ export function approveStage(
   return ok({
     ...replaceStage(
       { ...pipeline, stages: withAssessment },
-      { ...stage, status: "passed", finishedAt: at },
+      // Approving is how an operator clears a hold, so the reason must not survive the
+      // approval. Retained, it made a green stage carry a live demand: `stageReport`
+      // prints "This stage did not do its work" on a stage that passed, the whole-task
+      // report lists it among the stages that did not do their work, and
+      // `stageAuthority` refuses to certify it from evidence for the rest of the route.
+      // Observed on a task whose `rc-plan` sat `passed` still saying its correction was
+      // declined and needed a re-run — which is the state `CORRECTION-DECLINED` exists to
+      // prevent, surviving because the status was cleared and the reason was not.
+      //
+      // Safe to drop rather than archive: the hold is derived from what the stage said,
+      // its subtask replies are retained, and every undo snapshot carries its own
+      // `blocked` — so a withdrawal restores the value that stood before the repair.
+      { ...stage, status: "passed", finishedAt: at, blocked: undefined },
     ),
     ...counted(pipeline, { kind: "approval", stageId: stage.id }, actor === "harness" ? undefined : at),
     currentStage: undefined,

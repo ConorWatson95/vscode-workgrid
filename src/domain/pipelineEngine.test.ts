@@ -16,6 +16,7 @@ import {
   undoableCorrection,
   recordDeferrals,
   recordActions,
+  recordStageBlocked,
   outstandingDeferrals,
   resolveDeferral,
   holdStageForFindings,
@@ -321,6 +322,20 @@ describe("approveStage", () => {
   it("rejects approving a stage that is not at its gate", () => {
     const result = approveStage(createPipeline(ROUTE), "review", T);
     expect(result.ok === false && result.error.kind).toBe("notAwaitingApproval");
+  });
+
+  // Approving is the way a hold is cleared, so a passed stage must not keep saying it
+  // did not do its work — the report prints that verbatim and `stageAuthority` refuses
+  // to certify a stage carrying it.
+  it("clears the hold it was approved out of", () => {
+    let pipeline = must(skipStage(createPipeline(ROUTE), "build", T));
+    pipeline = must(finishSubtask(pipeline, "review-1", { status: "done", at: T }));
+    pipeline = recordStageBlocked(pipeline, "review", "this stage changed no files");
+    expect(pipeline.stages[1].blocked).toBeDefined();
+
+    pipeline = must(approveStage(pipeline, "review", T));
+    expect(pipeline.stages[1].status).toBe("passed");
+    expect(pipeline.stages[1].blocked).toBeUndefined();
   });
 });
 

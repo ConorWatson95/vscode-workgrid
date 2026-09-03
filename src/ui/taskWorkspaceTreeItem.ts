@@ -12,6 +12,7 @@ import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
 import { outstandingChecklist } from "../domain/pipelineEngine";
 import { declaredRepair, isDeclaredRepair } from "../domain/checkFailureRepair";
 import { itemsForGate } from "../domain/checklistScope";
+import { positionOf } from "../domain/routePosition";
 import {
   ChecklistItem,
   DenialItem,
@@ -228,7 +229,10 @@ export class StageTreeItem extends vscode.TreeItem {
     // is a fact about another stage — see `domain/checkFailureRepair.ts`.
     const repairAvailable = !!task.pipeline
       && isDeclaredRepair(declaredRepair(task.pipeline, stage.id));
-    const base = stagePresentation(stage, outstandingInPipeline, repairAvailable);
+    // Which row the route is waiting on. Derived from the pipeline rather than read
+    // from `currentStage`, which `approveStage` empties on every approval.
+    const position = task.pipeline ? positionOf(task.pipeline, stage.id) : undefined;
+    const base = stagePresentation(stage, outstandingInPipeline, repairAvailable, position);
     const block = stageBlock(task.pipeline, stage);
     const visual = block ? { ...base, ...blockedStageVisual(block) } : base;
 
