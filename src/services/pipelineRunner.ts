@@ -1,4 +1,9 @@
 import { certifyStage } from "../domain/stageAuthority";
+import {
+  declaredRepair,
+  formatCheckFailureNote,
+  isDeclaredRepair,
+} from "../domain/checkFailureRepair";
 import { adjudicateRepair, parseRepairProposals } from "../domain/repairProposal";
 import {
   adjudicateInsert,
@@ -736,6 +741,18 @@ export class PipelineRunner {
    * work is recorded here, so nothing is lost with it.
    */
   private readonly transientRetries = new Map<string, number>();
+
+  /**
+   * Stages whose failed check has already spent an automatic repair this session.
+   *
+   * In memory for `transientRetries`' reason, and bounded for a sharper one: repairing
+   * the owner re-opens this gate, which re-runs the check, which may fail again -- so
+   * without a bound a check that the repair cannot satisfy is a loop paying for a
+   * session each time round. One repair is the whole budget, because a second failure
+   * of the same check after the declared owner has been corrected is a different fact
+   * from the first, and the operator is the one who should read it.
+   */
+  private readonly checkRepairs = new Set<string>();
 
   /**
    * Stops a route mid-flight. Called when the user stops the task's agent:
@@ -1791,6 +1808,75 @@ export class PipelineRunner {
           `Left settled, unreachable from what this correction wrote: ` +
             `${spared.map((s) => `"${s.name}"`).join(", ")}.`,
         );
+      }
+    }
+
+    // A failed declared check, routed to the stage the route says owes the fix.
+    //
+    // The failure this closes is that a failed `verify` had exactly one disposition and
+    // it was a person, with both commands offered on the row wrong for it: `retryStage`
+    // re-opens the failed subtask cold and clears its reason, so it reaches the same exit
+    // code for the same reasons, and `revertToStage` discards the stage and everything
+    // after it. On NMGB-2799 the check said, correctly and in detail, that 2 of 18
+    // commits were not on `origin/UAT` -- and the stage that owed those cherry-picks
+    // could not even be *offered*, because it is a `deployment` and the gate's
+    // `sendBackTo` names implementation.
+    //
+    // Automated here rather than only offered, unlike `sendBackTargets`, because there
+    // is no inference in it to be wrong: the owner is named by the route and the finding
+    // is the check's own output verbatim. The harness still never reads meaning out of an
+    // exit code -- see `domain/checkFailureRepair.ts` for why that line is where it is.
+    //
+    // Only a **check** failure. `declaredRepair` keys on any failed subtask carrying a
+    // reason, which is right for the operator's click; here a crashed session or an
+    // exhausted transient retry must not spend a repair, because neither is evidence
+    // that an earlier stage got anything wrong.
+    if (!reply.ok && verification && verification.outcome.exitCode !== 0) {
+      const repair = declaredRepair(pipeline, stage.id);
+      if (isDeclaredRepair(repair) && repair.failed.onFailure?.auto) {
+        // Bounded to one automatic repair per stage per run of the extension, and held
+        // in memory for `transientRetries`' reason: correcting the owner re-opens this
+        // gate, which re-runs the check, which can fail again -- and without a bound
+        // that is a loop that spends a session each time round. A reload or a fresh
+        // Advance Route is a human deciding to try again, and should get a fresh budget
+        // rather than inherit an exhausted one from a state file written an hour ago.
+        const key = `${task.id}:${stage.id}`;
+        if (this.checkRepairs.has(key)) {
+          steps.push(
+            `"${stage.name}" failed its check again after "${repair.owner.name}" was ` +
+              "repaired — held for you.",
+          );
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} failed its check a second time after ` +
+              `an automatic repair to ${repair.owner.name}. Not repairing again: read ` +
+              "the check's output, because the second failure is not the first one.",
+          );
+        } else {
+          const corrected = correctStage(pipeline, repair.owner.id, {
+            finding: formatCheckFailureNote(repair),
+            at: new Date().toISOString(),
+          });
+          if (corrected.ok) {
+            pipeline = corrected.value;
+            this.checkRepairs.add(key);
+            // Announced, and no intervention recorded: `interventions` counts moments a
+            // human had to act, and this is one they did not -- the rule the runner's
+            // own automatic reverts already follow.
+            steps.push(
+              `"${stage.name}" failed its check, and the route names ` +
+                `"${repair.owner.name}" as owing the fix — repairing it.`,
+            );
+            this.logger.info(
+              `Harness [${task.name}] ${stage.name} failed its check; repairing ` +
+                `${repair.owner.name}, which the route declares owns it.`,
+            );
+          } else {
+            this.logger.warn(
+              `Harness [${task.name}] could not repair "${repair.owner.name}" after ` +
+                `${stage.name} failed its check: ${corrected.error.message}`,
+            );
+          }
+        }
       }
     }
 

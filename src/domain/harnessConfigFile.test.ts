@@ -243,6 +243,26 @@ describe("onFailure", () => {
     expect(parsed.routes[0].stages[1].onFailure).toEqual({ repair: "promote" });
   });
 
+  it("carries auto, so a route can ask for the repair to be applied without a click", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "promote", auto: true }));
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[1].onFailure).toEqual({ repair: "promote", auto: true });
+  });
+
+  // Naming an owner only puts an offer on a failed row; acting on the name spends a
+  // session and re-opens everything behind it. A project must be able to take the first
+  // without the second, which is the split `authority` and `autoRepair` already make.
+  it("leaves auto off when only an owner is named", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "promote" }));
+    expect(parsed.routes[0].stages[1].onFailure?.auto).toBeUndefined();
+  });
+
+  it("rejects a non-boolean auto rather than reading it as off", () => {
+    const parsed = parseHarnessConfig(routeWith({ repair: "promote", auto: "yes" }));
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("onFailure.auto");
+  });
+
   it("is absent by default, so nothing that has not opted in changes", () => {
     const parsed = parseHarnessConfig(routeWith(undefined));
     expect(parsed.problems).toEqual([]);

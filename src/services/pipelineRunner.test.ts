@@ -1490,6 +1490,118 @@ describe("declared verification", () => {
     expect(build?.subtasks[0].failureReason).toContain("CS1002");
   });
 
+  describe("a failed check the route names an owner for", () => {
+    /**
+     * Promote, then a gate whose check asks whether the promotion actually landed.
+     *
+     * The shape of the real failure: on NMGB-2799 the check reported, correctly and in
+     * detail, that 2 of 18 commits were not on `origin/UAT`. The stage that owed those
+     * cherry-picks could not be reached by a send-back at all, because it is a
+     * `deployment` and the gate declares `kind:implementation`.
+     */
+    const OWNED = (auto: boolean): RouteDefinition => ({
+      id: "test",
+      label: "Test",
+      description: "d",
+      stages: [
+        {
+          id: "promote",
+          label: "Promote",
+          kind: "deployment",
+          intent: "Cherry-pick it onto UAT.",
+          splittable: false,
+          gate: "auto",
+        },
+        {
+          id: "accept",
+          label: "Accept",
+          kind: "humanVerification",
+          intent: "Accept it.",
+          splittable: false,
+          gate: "approval",
+          verify: "test-promoted",
+          onFailure: { repair: "promote", ...(auto ? { auto: true } : {}) },
+        },
+      ],
+    });
+
+    const ownedTask = (auto: boolean) => ({ ...task(), pipeline: createPipeline(OWNED(auto)) });
+
+    const failing = { "test-promoted": { exitCode: 2, output: "2 of 18 commit(s) are not on origin/UAT" } };
+
+    it("repairs the declared owner, carrying the check's output as the finding", async () => {
+      const sessions = fakeSessions({ "": { text: "Promoted." } });
+      const { runner, repo } = makeRunner(sessions, { verify: failing });
+      const subject = ownedTask(true);
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      const promote = (await repo.get(subject.id))?.pipeline?.stages.find(
+        (s) => s.id === "promote",
+      );
+      const correction = promote?.subtasks.find((s) => s.correction);
+      expect(correction).toBeDefined();
+      // Verbatim, because the harness must never read meaning out of an exit code: the
+      // same check exits 2 with three sections, two of which say nothing is wrong.
+      expect(correction?.correction?.finding).toContain("2 of 18 commit(s) are not on origin/UAT");
+      // A correction, not an amendment: the promote stage got its own work wrong.
+      expect(correction?.correction?.upstream).toBeUndefined();
+    });
+
+    it("only offers the repair when the route has not asked for it to be applied", async () => {
+      // Naming an owner is a pre-filled offer on a failed row and costs nothing; acting
+      // on the name spends a session, so the two are separate declarations.
+      const sessions = fakeSessions({ "": { text: "Promoted." } });
+      const { runner, repo } = makeRunner(sessions, { verify: failing });
+      const subject = ownedTask(false);
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      const promote = (await repo.get(subject.id))?.pipeline?.stages.find(
+        (s) => s.id === "promote",
+      );
+      expect(promote?.subtasks.some((s) => s.correction)).toBe(false);
+    });
+
+    it("does not spend a repair on a session that failed before the check ran", async () => {
+      // A crashed session is not evidence that an earlier stage got anything wrong, and
+      // `declaredRepair` keys on any failed subtask carrying a reason -- which is right
+      // for the operator's click and wrong for spending a session on it.
+      const sessions = fakeSessions({ accept: { ok: false, error: "the agent session failed" } });
+      const { runner, repo } = makeRunner(sessions, { verify: failing });
+      const subject = ownedTask(true);
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      const promote = (await repo.get(subject.id))?.pipeline?.stages.find(
+        (s) => s.id === "promote",
+      );
+      expect(promote?.subtasks.some((s) => s.correction)).toBe(false);
+    });
+
+    it("repairs once, then holds — a second failure is not the first one", async () => {
+      // Repairing the owner re-opens this gate, which re-runs the check, which can fail
+      // again. Unbounded that is a loop paying for a session each time round.
+      const sessions = fakeSessions({ "": { text: "Promoted." } });
+      const { runner, repo } = makeRunner(sessions, { verify: failing });
+      const subject = ownedTask(true);
+      await repo.save(subject);
+
+      await runner.advance(subject);
+      const after = await repo.get(subject.id);
+      const report = await runner.advance(after!);
+
+      const promote = (await repo.get(subject.id))?.pipeline?.stages.find(
+        (s) => s.id === "promote",
+      );
+      expect(promote?.subtasks.filter((s) => s.correction).length).toBe(1);
+      expect(report.steps.join(" ")).toContain("failed its check again");
+    });
+  });
+
   describe("discarding declared local paths", () => {
     it("discards before the check reads the tree, not after", async () => {
       // The whole feature. A real task was failed by this check with its work committed

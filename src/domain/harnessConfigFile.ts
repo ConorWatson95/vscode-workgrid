@@ -507,7 +507,17 @@ function failureRepair(
     );
     return INVALID;
   }
-  return { repair };
+  const auto = (value as { auto?: unknown }).auto;
+  // Rejected rather than coerced, the rule `requiresPullRequest` follows: a
+  // misspelled or mistyped value silently leaves the automation off, which is
+  // indistinguishable from a route that never asked for it.
+  if (auto !== undefined && typeof auto !== "boolean") {
+    problems.push(
+      `Route "${routeId}" stage "${stageId}": "onFailure.auto" must be true or false.`,
+    );
+    return INVALID;
+  }
+  return { repair, ...(auto === undefined ? {} : { auto }) };
 }
 
 /**

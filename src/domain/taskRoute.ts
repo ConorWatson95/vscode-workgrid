@@ -174,6 +174,23 @@ export interface StageFailureRepair {
    * the stage kind -- which stage owed an artefact is knowledge only the route has.
    */
   repair: string;
+  /**
+   * Whether the harness may apply that repair itself, without waiting for a click.
+   *
+   * A **separate declaration from `repair`**, for the reason that split `authority`
+   * from `autoRepair`: naming an owner costs nothing, because all it does is put a
+   * pre-filled offer on a failed row, while acting on the name spends a session and
+   * re-opens everything behind the owner. A project must be able to adopt the offer
+   * without the automation, so absence means offer-only and nothing that has already
+   * declared `repair` changes behaviour.
+   *
+   * What licenses automating it at all is that **the target is declared, never
+   * derived**. `sendBackTargets` is not automated because it infers an owner from
+   * proximity and agreed with the operator 11 times in 19; there is no inference here
+   * to be wrong -- the route author named the stage, and the finding handed to it is
+   * the check's own output verbatim. The harness still never interprets the failure.
+   */
+  auto?: boolean;
 }
 
 export interface RouteStageDefinition {
