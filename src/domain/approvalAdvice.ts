@@ -3,6 +3,7 @@ import { ReviewFinding, findingsOfSubtasks, summariseFindings } from "./reviewFi
 import { citesStageByName } from "./deferralOwnership";
 import { sendBackTargets } from "./stageRefresh";
 import { StageEvidence, stageEvidence } from "./stageEvidence";
+import { RatifiedEvidence, ratifiedEvidence, summariseRatified } from "./ratifiedEvidence";
 import { TaskPipeline, TaskStage } from "./taskPipeline";
 
 /**
@@ -58,6 +59,15 @@ export interface ApprovalAdvice {
    */
   evidence: StageEvidence;
   /**
+   * What this approval accepts beyond the gate stage itself.
+   *
+   * A gate is the moment everything since the previous gate is accepted, and those
+   * stages are precisely the ones nobody has looked at. Reading only `evidence` meant
+   * a promotion backed by nothing but the agent's report presented exactly as one
+   * behind a green build. See `domain/ratifiedEvidence.ts`.
+   */
+  ratified: RatifiedEvidence;
+  /**
    * Work this stage declined, still without an owner.
    *
    * Surfaced at this gate because this is where it can be settled cheaply. The route
@@ -79,6 +89,7 @@ export function approvalAdvice(
   return {
     ...verdictAdvice(pipeline, stage),
     evidence: stageEvidence(stage),
+    ratified: ratifiedEvidence(pipeline, stage.id),
     declined: outstandingDeferrals(pipeline).filter(
       (item) => item.raisedByStage === stage.id,
     ).length,
@@ -130,7 +141,7 @@ function namedByFindings(
 function verdictAdvice(
   pipeline: TaskPipeline,
   stage: TaskStage,
-): Omit<ApprovalAdvice, "evidence" | "declined"> {
+): Omit<ApprovalAdvice, "evidence" | "declined" | "ratified"> {
   // Through `findingsOfSubtasks`, which reads the round that stands. Pooling every
   // round inline here — which this did — is the same bug the findings summary had, at
   // a second call site, and the two then contradicted each other on one screen: the
@@ -263,6 +274,14 @@ export function formatApprovalAdvice(advice: ApprovalAdvice): string {
       "",
       `⚠ **Self-reported.** ${advice.evidence.summary}`,
     );
+  }
+  // The rest of what this approval accepts. Kept separate from the line above rather
+  // than merged into it: that one is about the stage being read, this is about the
+  // stages nobody has read, and a reader who conflates them will take the gate stage's
+  // green build as covering the promotion behind it.
+  const span = summariseRatified(advice.ratified);
+  if (span) {
+    lines.push("", `⚠ **This gate accepts more than this stage.** ${span}`);
   }
   // Said at this gate rather than saved for the deployment door. Answering costs a
   // sentence each while the report is still in front of you; left alone they arrive
