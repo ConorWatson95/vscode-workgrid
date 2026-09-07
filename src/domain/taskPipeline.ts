@@ -732,6 +732,14 @@ export interface TaskPipeline {
    */
   discarded?: DiscardedRun[];
   /**
+   * Every failure, and what was done about it. See `FailedRun`.
+   *
+   * Append-only, apart from the one disposition patch. A revert never prunes it: a
+   * revert discards work because that work is predicated on output that has moved,
+   * and a failure is predicated on nothing — it happened.
+   */
+  failures?: FailedRun[];
+  /**
    * Why the last advance stopped, when it stopped for a reason no stage records.
    *
    * The tree groups a task by reading its stages, and a route that has simply *stopped*
@@ -794,6 +802,72 @@ export interface DiscardedRun {
    * collateral, so absence must not read as "unknown".
    */
   collateral?: boolean;
+}
+
+/**
+ * What was done about a failure, patched in by whichever responder ran.
+ *
+ * `"held"` is deliberately absent. `recordStageBlocked` has many callers that have
+ * nothing to do with a failed run — a `BLOCKED` marker, a declined correction, an
+ * implementation stage that wrote no files — so patching a disposition there would
+ * attribute a marker hold to a failure it never touched. A failure nobody responded
+ * to keeps no disposition at all, which is the row worth seeing.
+ */
+export type FailureDisposition =
+  /** `retryStage` — a cold re-open of the same stage. */
+  | "retried"
+  /** `correctStage` on the owner `onFailure` names. */
+  | "repaired"
+  /** `revertToStage` — this stage and everything after it. */
+  | "reverted"
+  /** The runner's own retry budget gave up. Never judged, so never blamed. */
+  | "transient";
+
+/**
+ * One subtask's failure, and what was eventually done about it.
+ *
+ * The ledger `discarded` is the precedent for, one field over. That one exists because
+ * re-opening a stage cleared `activity`, so every send-back also erased what the
+ * previous attempt had cost and a task sent back six times reported the price of its
+ * last attempt and looked calm. This is the same erasure: `failureReason` lives for
+ * exactly one instant, and every mechanism that responds to a failure clears it —
+ * `retryStage` and `revertSubtask` both set it to `undefined`, and `reopenAfter`
+ * discards the reply beside it. Measured on `qubeautoapp` 7 Sep 2026: **0** failed
+ * subtasks and **0** failure reasons across 352 stages, against 14 `retry`
+ * interventions and 165 discards reading "re-run by hand". Roughly 179 failures had
+ * happened and the reason for none of them survived, so no question about whether a
+ * loop converges could be asked at all.
+ *
+ * Nothing here is retrospective, and it must not pretend otherwise: the ledger is
+ * worth exactly what has failed since it shipped.
+ */
+export interface FailedRun {
+  stageId: string;
+  stageName: string;
+  subtaskId: string;
+  /** When the subtask failed. */
+  at: string;
+  /** The failure verbatim, exactly as `finishSubtask` received it. */
+  reason: string;
+  /**
+   * The declared check's exit code, when a failing `verify` is what failed the run.
+   *
+   * A check failure and a dead session both arrive as `reply.ok === false`, and they
+   * need opposite readings: one is evidence about the work, the other is evidence
+   * about the transport. Absent means no check produced this.
+   */
+  exitCode?: number;
+  /**
+   * Repair rounds already on the stage when this run failed. 0 on its first attempt.
+   *
+   * Derived at write time from the subtasks rather than counted forward on the
+   * pipeline, which would be a second source of truth for a fact the subtasks already
+   * carry — and one `retryStage` invalidates every time it empties a splittable stage.
+   */
+  round: number;
+  disposition?: FailureDisposition;
+  /** When that disposition was applied. */
+  dispositionAt?: string;
 }
 
 /** Refusals from one stage, waiting on a decision. */

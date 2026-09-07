@@ -3,6 +3,8 @@ import {
   ChecklistItem,
   DenialItem,
   DiscardedRun,
+  FailedRun,
+  FailureDisposition,
   PlanStepRecord,
   QuestionItem,
   Subtask,
@@ -1487,6 +1489,14 @@ export function finishSubtask(
     status: "done" | "failed" | "skipped";
     at: string;
     reason?: string;
+    /**
+     * The declared check's exit code, when a failing `verify` is what failed this run.
+     *
+     * Passed in rather than read out of `activity`: a check failure and a dead session
+     * both arrive here as `status: "failed"`, and the ledger has to tell them apart —
+     * one is evidence about the work, the other about the transport.
+     */
+    exitCode?: number;
     /** What the agent said, kept so the stage is not invisible afterwards. */
     reply?: string;
     /** What it actually did: tools, commands, files, output. */
@@ -1517,7 +1527,100 @@ export function finishSubtask(
       : s,
   );
 
-  return ok(settleStage(pipeline, { ...stage, subtasks }, outcome.at));
+  // Recorded here because this is the only place a failure is judged, and the reason
+  // exists for exactly one instant: `retryStage` and `revertSubtask` both clear it, and
+  // `reopenAfter` discards the reply beside it. A ledger appended from the responders
+  // instead would be written by none of the three that clear it first — which is the
+  // zero the state file was measured to hold. One site, because there is one origin;
+  // four would be four chances to forget, and `normalizePipeline` has already taught
+  // this codebase what one forgotten field costs.
+  const reason = outcome.status === "failed" ? outcome.reason?.trim() : undefined;
+  const failures = reason
+    ? [
+        ...(pipeline.failures ?? []),
+        {
+          stageId: stage.id,
+          stageName: stage.name,
+          subtaskId: subtask.id,
+          at: outcome.at,
+          reason,
+          ...(outcome.exitCode !== undefined ? { exitCode: outcome.exitCode } : {}),
+          // Read off the subtasks as they stand, before this outcome is applied: what
+          // is being counted is how many repairs the stage had already had when this
+          // run failed.
+          round: stage.subtasks.filter((s) => s.correction).length,
+        },
+      ]
+    : undefined;
+
+  return ok(
+    settleStage(
+      { ...pipeline, ...(failures ? { failures } : {}) },
+      { ...stage, subtasks },
+      outcome.at,
+    ),
+  );
+}
+
+/**
+ * Appends a failure the harness resolved itself, with its disposition already known.
+ *
+ * The transient path needs this and cannot use the patch below: it *reverts* the
+ * subtask rather than failing it, so `finishSubtask` never runs and there is no entry
+ * to patch. "Reverted, never judged" is right about the stage and wrong as a reason to
+ * keep no record — an outage that burned six sessions is the only thing
+ * `transientRetryAttempts` can be tuned against, and today it leaves nothing at all.
+ */
+export function recordFailure(
+  pipeline: TaskPipeline,
+  entry: Omit<FailedRun, "round"> & { round?: number },
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === entry.stageId);
+  if (!entry.reason.trim()) return pipeline;
+  return {
+    ...pipeline,
+    failures: [
+      ...(pipeline.failures ?? []),
+      {
+        ...entry,
+        reason: entry.reason.trim(),
+        round: entry.round ?? stage?.subtasks.filter((s) => s.correction).length ?? 0,
+      },
+    ],
+  };
+}
+
+/**
+ * Records what was done about a stage's most recent undecided failure.
+ *
+ * Most recent and undecided, so a stage that has failed twice does not have its first
+ * failure's disposition overwritten by the response to its second. A failure nobody
+ * responded to keeps no disposition, which is deliberately distinguishable from one
+ * that was held: absence means undecided, and a stage that failed and was abandoned is
+ * the row most worth finding. The rule an unmeasured wait already follows.
+ */
+export function recordFailureDisposition(
+  pipeline: TaskPipeline,
+  stageId: string,
+  disposition: FailureDisposition,
+  at: string,
+): TaskPipeline {
+  const failures = pipeline.failures;
+  if (!failures) return pipeline;
+  let index = -1;
+  for (let i = failures.length - 1; i >= 0; i--) {
+    if (failures[i].stageId === stageId && !failures[i].disposition) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return pipeline;
+  return {
+    ...pipeline,
+    failures: failures.map((entry, i) =>
+      i === index ? { ...entry, disposition, dispositionAt: at } : entry,
+    ),
+  };
 }
 
 /** Applies the stage-level consequence of its subtasks' statuses. */
@@ -2498,6 +2601,36 @@ export function skipStage(
 }
 
 /**
+ * The note a retry leaves for the run replacing the failed one.
+ *
+ * `retryStage` cleared `failureReason` and re-opened cold, and `checkFailureRepair`
+ * concedes what that costs in its own header: *"the re-run reaches the same exit code
+ * for the same reasons"*. That is a retry, not a loop — the operator was the only thing
+ * carrying the failure forward.
+ *
+ * Filed as guidance rather than through a channel of its own, for the reason
+ * `revertToStage`'s re-run reason already gives: guidance is cumulative, handed to the
+ * stage, and stated in the prompt to outrank the brief, so a second channel with the
+ * same meaning is one the prompts have no way to rank against the first. Scoped to the
+ * stage, because that is exactly the note's lifetime — once the stage passes, the
+ * failure either did not recur or came back as a new entry in the ledger.
+ *
+ * Narrowing, like `correctionPrompt`: a failure is a thing to get past, not an
+ * invitation to re-approach the stage. Left to itself a capable model reads "the last
+ * attempt failed" as licence to start over, which is the re-run this exists to avoid
+ * paying for twice.
+ */
+export function formatRetryNote(reason: string): string {
+  return (
+    "The previous run of this stage failed, and this is what it reported. Read it " +
+    "before you start: that run reached this outcome, so an approach that does not " +
+    "account for it reaches the same one again. Fix what the output shows is wrong " +
+    "and do not otherwise re-approach the stage.\n\n" +
+    reason.trim()
+  );
+}
+
+/**
  * Resets a failed or resolved stage back to pending so it can be attempted
  * again. A splittable stage is emptied, sending it back through `planStage` —
  * a stage that failed usually failed because the split was wrong.
@@ -2518,6 +2651,18 @@ export function retryStage(
   // transport. Emptying it would throw away exactly the work this command was added
   // to stop people throwing away.
   const corrected = stage.subtasks.some((s) => s.correction);
+  // Captured before the map below clears it, which is the whole point: this is the
+  // single instant the reason exists in, and every previous version of this function
+  // threw it away.
+  // The *latest* failure, not the first. A stage that failed, was corrected and failed
+  // again holds two reasons, and the retry is answering the second — carrying the first
+  // hands the new run an account of a version that has already been repaired, which is
+  // the failure `guidanceFor`'s stage scoping exists to prevent one level up.
+  const carried = [...stage.subtasks]
+    .reverse()
+    .filter((s) => s.status === "failed")
+    .map((s) => s.failureReason?.trim())
+    .find((text): text is string => !!text);
   // And only the units that did not finish are re-opened. A stage fails as soon as any
   // subtask does, so its siblings are routinely `done` — re-running those would be the
   // waste this command exists to avoid, at its most expensive on the corrected stage
@@ -2538,7 +2683,25 @@ export function retryStage(
             },
       );
 
-  return ok({
+  // Only when the caller gave a clock, for `counted`'s reason and one of its own: a
+  // note needs an `at`, and an id derived from it is what keeps the transition pure and
+  // a replay reproducible.
+  const guidance =
+    carried && at
+      ? [
+          ...(pipeline.guidance ?? []),
+          {
+            id: `retry-${stage.id}-${at}`,
+            stageId: stage.id,
+            stageName: stage.name,
+            text: formatRetryNote(carried),
+            at,
+            scope: "stage" as const,
+          },
+        ]
+      : pipeline.guidance;
+
+  const reopened: TaskPipeline = {
     ...replaceStage(pipeline, {
       ...stage,
       status: "pending",
@@ -2547,8 +2710,11 @@ export function retryStage(
       finishedAt: undefined,
     }),
     ...counted(pipeline, { kind: "retry", stageId: stage.id }, at),
+    ...(guidance ? { guidance } : {}),
     currentStage: undefined,
-  });
+  };
+
+  return ok(at ? recordFailureDisposition(reopened, stage.id, "retried", at) : reopened);
 }
 
 export interface PipelineProgress {

@@ -468,6 +468,58 @@ describe("revertToStage", () => {
     expect(result.pipeline.stages[0].checklist).toBeUndefined();
   });
 
+  it("answers every undecided failure on a stage it re-opens", () => {
+    // The failure that prompts a revert is routinely on a *later* stage than the one
+    // work restarts from -- that is what makes a revert expensive -- so marking only
+    // the target would leave the run that actually failed reading as abandoned.
+    const withFailures: TaskPipeline = {
+      ...pipeline([ran("plan"), ran("deploy"), ran("verify")]),
+      failures: [
+        { stageId: "plan", stageName: "Plan", subtaskId: "plan-1", at: "t0",
+          reason: "already answered", round: 0, disposition: "retried", dispositionAt: "t0" },
+        { stageId: "deploy", stageName: "Deploy", subtaskId: "deploy-1", at: "t1",
+          reason: "exit 2", round: 0 },
+        { stageId: "verify", stageName: "Verify", subtaskId: "verify-1", at: "t2",
+          reason: "exit 4", round: 0 },
+      ],
+    };
+    const result = revertToStage(withFailures, "deploy", { at: "t3" })!;
+    expect(result.pipeline.failures!.map((f) => [f.stageId, f.disposition])).toEqual([
+      // Untouched: it sits before the target, and its answer was already recorded.
+      ["plan", "retried"],
+      ["deploy", "reverted"],
+      ["verify", "reverted"],
+    ]);
+  });
+
+  it("never prunes the failure ledger", () => {
+    // A revert discards work because that work was predicated on output that moved. A
+    // failure is predicated on nothing -- it happened.
+    const withFailures: TaskPipeline = {
+      ...pipeline([ran("deploy")]),
+      failures: [
+        { stageId: "deploy", stageName: "Deploy", subtaskId: "deploy-1", at: "t1",
+          reason: "exit 2", round: 0 },
+      ],
+    };
+    const result = revertToStage(withFailures, "deploy", { at: "t3" })!;
+    expect(result.pipeline.failures).toHaveLength(1);
+    expect(result.pipeline.failures![0].reason).toBe("exit 2");
+  });
+
+  it("leaves the ledger alone when nothing is being discarded", () => {
+    // No `discard` means no clock, so there is no honest moment to date a disposition.
+    const withFailures: TaskPipeline = {
+      ...pipeline([ran("deploy")]),
+      failures: [
+        { stageId: "deploy", stageName: "Deploy", subtaskId: "deploy-1", at: "t1",
+          reason: "exit 2", round: 0 },
+      ],
+    };
+    const result = revertToStage(withFailures, "deploy")!;
+    expect(result.pipeline.failures![0].disposition).toBeUndefined();
+  });
+
   it("keeps the operator's guidance, which is usually why they reverted", () => {
     const withGuidance: TaskPipeline = {
       ...pipeline([ran("deploy")]),

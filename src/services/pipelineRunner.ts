@@ -38,6 +38,8 @@ import {
   recordPlanSteps,
   recordStepAccounts,
   unaccountedPlanSteps,
+  recordFailure,
+  recordFailureDisposition,
   recordStageBlocked,
   handoffsBefore,
   holdStageForFindings,
@@ -1621,8 +1623,22 @@ export class PipelineRunner {
         "Advance Route runs it again.";
       this.logger.error(`Harness [${task.name}] "${stage.name}" held: ${reason}`);
       steps.push(`"${stage.name}" is held: ${reason}`);
+      // Appended rather than patched: this path *reverts* the subtask, so
+      // `finishSubtask` never ran and there is no entry to attach a disposition to.
+      // Recorded all the same -- an outage that burned a whole retry budget is the only
+      // thing `transientRetryAttempts` can be tuned against, and it used to leave
+      // nothing behind at all.
+      const ledgered = recordFailure(saved.pipeline!, {
+        stageId: stage.id,
+        stageName: stage.name,
+        subtaskId: subtask.id,
+        at: new Date().toISOString(),
+        reason: cause,
+        disposition: "transient",
+        dispositionAt: new Date().toISOString(),
+      });
       return {
-        task: await this.save(saved, recordStageBlocked(saved.pipeline!, stage.id, reason)),
+        task: await this.save(saved, recordStageBlocked(ledgered, stage.id, reason)),
         failed: true,
         reason,
       };
@@ -1780,6 +1796,12 @@ export class PipelineRunner {
       status: reply.ok ? "done" : "failed",
       at: new Date().toISOString(),
       reason,
+      // A failing check and a dead session both arrive here as `ok: false` -- the check
+      // overrode the reply above -- and the ledger has to tell them apart, because one
+      // is evidence about the work and the other about the transport.
+      ...(verification && !verification.unresolved && verification.outcome.exitCode !== 0
+        ? { exitCode: verification.outcome.exitCode }
+        : {}),
       // Kept so the stage is not invisible afterwards. On failure especially: a
       // stage that went wrong is the one you most want to be able to read.
       reply: reply.text,
@@ -1857,7 +1879,15 @@ export class PipelineRunner {
             at: new Date().toISOString(),
           });
           if (corrected.ok) {
-            pipeline = corrected.value;
+            // Attributed to the stage whose check failed, not to the owner being
+            // repaired: the ledger's question is what happened about this failure, and
+            // the owner has no failure of its own.
+            pipeline = recordFailureDisposition(
+              corrected.value,
+              stage.id,
+              "repaired",
+              new Date().toISOString(),
+            );
             this.checkRepairs.add(key);
             // Announced, and no intervention recorded: `interventions` counts moments a
             // human had to act, and this is one they did not -- the rule the runner's

@@ -35,6 +35,9 @@ import {
   unexecutedPlanSteps,
   recordQuestion,
   retryStage,
+  recordFailure,
+  recordFailureDisposition,
+  formatRetryNote,
   narrowAmendments,
   unansweredQuestions,
   setChecklistItem,
@@ -2969,5 +2972,189 @@ describe("approveStage and who did the approving", () => {
     expect(out.value.interventions ?? []).toHaveLength(0);
     // The transition itself is identical -- only the bookkeeping differs.
     expect(out.value.stages[0].status).toBe("passed");
+  });
+});
+
+describe("the failure ledger", () => {
+  /** A stage with one failed run behind it, ready to be responded to. */
+  const failed = (reason = "exit 2: two commits are not on origin/UAT") => {
+    let pipeline = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    pipeline = must(startSubtask(pipeline, "build-1", { at: T }));
+    // A reply as well as a reason: `isCorrectable` reads it, and a stage that
+    // produced nothing gives a correction nothing to start from.
+    return must(
+      finishSubtask(pipeline, "build-1", {
+        status: "failed",
+        at: T,
+        reason,
+        reply: "what I tried",
+      }),
+    );
+  };
+
+  it("records a failed run, and records nothing for one that succeeded", () => {
+    const pipeline = failed();
+    expect(pipeline.failures).toHaveLength(1);
+    expect(pipeline.failures![0]).toMatchObject({
+      stageId: "build",
+      stageName: "Build",
+      subtaskId: "build-1",
+      at: T,
+      reason: "exit 2: two commits are not on origin/UAT",
+      round: 0,
+    });
+    expect(pipeline.failures![0].disposition).toBeUndefined();
+
+    let ok = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    ok = must(startSubtask(ok, "build-1", { at: T }));
+    ok = must(finishSubtask(ok, "build-1", { status: "done", at: T }));
+    expect(ok.failures).toBeUndefined();
+  });
+
+  it("keeps the check's exit code apart from a dead session", () => {
+    let pipeline = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    pipeline = must(startSubtask(pipeline, "build-1", { at: T }));
+    pipeline = must(
+      finishSubtask(pipeline, "build-1", {
+        status: "failed",
+        at: T,
+        reason: "the check failed",
+        exitCode: 2,
+      }),
+    );
+    expect(pipeline.failures![0].exitCode).toBe(2);
+    // A session that died leaves it absent rather than zero, or a transport failure
+    // reads as a check that passed.
+    expect(failed().failures![0].exitCode).toBeUndefined();
+  });
+
+  it("counts the repair rounds the stage already had", () => {
+    let pipeline = failed();
+    pipeline = must(
+      correctStage(pipeline, "build", { finding: "wrong cast", at: T }),
+    );
+    const fix = pipeline.stages[0].subtasks.find((sub) => sub.correction)!;
+    pipeline = must(startSubtask(pipeline, fix.id, { at: T }));
+    pipeline = must(
+      finishSubtask(pipeline, fix.id, {
+        status: "failed",
+        at: T,
+        reason: "still wrong",
+        reply: "what I tried again",
+      }),
+    );
+    expect(pipeline.failures!.map((entry) => entry.round)).toEqual([0, 1]);
+  });
+
+  it("says nothing when a failure carries no reason to record", () => {
+    let pipeline = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    pipeline = must(startSubtask(pipeline, "build-1", { at: T }));
+    pipeline = must(finishSubtask(pipeline, "build-1", { status: "failed", at: T }));
+    expect(pipeline.failures).toBeUndefined();
+  });
+
+  it("patches the most recent undecided entry, never an answered one", () => {
+    let pipeline = failed("first");
+    pipeline = recordFailureDisposition(pipeline, "build", "retried", T);
+    pipeline = must(startSubtask(pipeline, "build-2", { at: T }));
+    pipeline = must(
+      finishSubtask(pipeline, "build-2", {
+        status: "failed",
+        at: T,
+        reason: "second",
+        reply: "and again",
+      }),
+    );
+    pipeline = recordFailureDisposition(pipeline, "build", "reverted", T);
+    expect(pipeline.failures!.map((entry) => [entry.reason, entry.disposition])).toEqual([
+      ["first", "retried"],
+      ["second", "reverted"],
+    ]);
+  });
+
+  it("leaves a failure nobody responded to undecided", () => {
+    // Deliberately distinguishable from one that was held: a stage that failed and was
+    // abandoned is the row worth finding.
+    expect(recordFailureDisposition(failed(), "review", "retried", T).failures![0]
+      .disposition).toBeUndefined();
+  });
+
+  it("appends a failure the harness resolved itself, disposition and all", () => {
+    const pipeline = recordFailure(failed(), {
+      stageId: "build",
+      stageName: "Build",
+      subtaskId: "build-2",
+      at: T,
+      reason: "API Error: 529 Overloaded",
+      disposition: "transient",
+      dispositionAt: T,
+    });
+    expect(pipeline.failures).toHaveLength(2);
+    expect(pipeline.failures![1]).toMatchObject({
+      reason: "API Error: 529 Overloaded",
+      disposition: "transient",
+      round: 0,
+    });
+  });
+});
+
+describe("retryStage carries the failure forward", () => {
+  const failed = () => {
+    let pipeline = must(planStage(createPipeline(ROUTE), "build", SPECS));
+    pipeline = must(startSubtask(pipeline, "build-1", { at: T }));
+    return must(
+      finishSubtask(pipeline, "build-1", {
+        status: "failed",
+        at: T,
+        reason: "exit 2: Web.config points at another tenant",
+        reply: "what I tried",
+      }),
+    );
+  };
+
+  it("files the reason as guidance scoped to the stage being redone", () => {
+    // A stage that carries a correction keeps its subtasks, which is what makes the
+    // reason reachable — a splittable stage with none is emptied.
+    let pipeline = failed();
+    pipeline = must(correctStage(pipeline, "build", { finding: "cast", at: T }));
+    const fix = pipeline.stages[0].subtasks.find((sub) => sub.correction)!;
+    pipeline = must(startSubtask(pipeline, fix.id, { at: T }));
+    pipeline = must(
+      finishSubtask(pipeline, fix.id, {
+        status: "failed",
+        at: T,
+        reason: "exit 2 again",
+        reply: "what I tried again",
+      }),
+    );
+
+    const retried = must(retryStage(pipeline, "build", T));
+    const note = retried.guidance!.find((entry) => entry.id.startsWith("retry-"))!;
+    expect(note).toMatchObject({ stageId: "build", scope: "stage", at: T });
+    expect(note.text).toContain("exit 2 again");
+    expect(note.text).toBe(formatRetryNote("exit 2 again"));
+  });
+
+  it("marks the failure retried", () => {
+    let pipeline = failed();
+    pipeline = must(correctStage(pipeline, "build", { finding: "cast", at: T }));
+    const retried = must(retryStage(pipeline, "build", T));
+    expect(retried.failures![0]).toMatchObject({ disposition: "retried", dispositionAt: T });
+  });
+
+  it("records neither without a clock", () => {
+    // The rule `counted` follows: a call site with no clock records nothing rather than
+    // an event dated `undefined`. A note also has nowhere to derive its id from.
+    let pipeline = failed();
+    pipeline = must(correctStage(pipeline, "build", { finding: "cast", at: T }));
+    const retried = must(retryStage(pipeline, "build"));
+    expect(retried.guidance?.some((entry) => entry.id.startsWith("retry-"))).toBeFalsy();
+    expect(retried.failures![0].disposition).toBeUndefined();
+  });
+
+  it("survives a reload", () => {
+    const retried = must(retryStage(failed(), "build", T));
+    const reloaded = normalizePipeline(JSON.parse(JSON.stringify(retried)))!;
+    expect(reloaded.failures).toEqual(retried.failures);
   });
 });

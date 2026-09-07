@@ -705,10 +705,29 @@ export function revertToStage(
     ? settleDiscardedDeferrals(pipeline, reopened, discard.at)
     : pipeline;
 
+  // Every undecided failure on a stage being re-opened, not just the target's. The
+  // failure that prompted a revert is routinely on a *later* stage than the one work
+  // restarts from -- that is what makes a revert expensive -- and each of those runs is
+  // being thrown away by this transition, so each of them has now had its answer. The
+  // entries themselves are kept: a revert discards work because the work was predicated
+  // on output that moved, and a failure is predicated on nothing.
+  const reopenedSet = new Set(reopened);
+  const failures =
+    discard && withoutDiscardedDeferrals.failures?.some(
+      (entry) => !entry.disposition && reopenedSet.has(entry.stageId),
+    )
+      ? withoutDiscardedDeferrals.failures.map((entry) =>
+          !entry.disposition && reopenedSet.has(entry.stageId)
+            ? { ...entry, disposition: "reverted" as const, dispositionAt: discard.at }
+            : entry,
+        )
+      : undefined;
+
   return {
     pipeline: {
       ...withoutDiscardedDeferrals,
       stages,
+      ...(failures ? { failures } : {}),
       currentStage: undefined,
       // A question or refusal belonged to the run being discarded.
       pendingQuestion: undefined,
