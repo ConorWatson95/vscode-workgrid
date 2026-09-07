@@ -146,6 +146,45 @@ describe("groupForTask", () => {
     expect(groupForTask({ status: "ready", pipeline: p, heldCalls: 1 })).toBe("needs-you");
   });
 
+  // Shipped as `waiting-others` on the assumption that a reviewer merges, which is a
+  // guess about one team's process -- opening and merging a pull request is a
+  // development task here. The failure directions are not symmetric: a task filed as
+  // waiting on others drops out of the list scanned to decide what to pick up, so it is
+  // never done, where filing it as yours costs a glance.
+  it("files an unmerged pull request as yours", () => {
+    const p = pipeline([stage({ id: "promote", status: "passed" }), stage({ id: "next" })], {
+      pullRequests: [
+        { url: "https://host/pr/new?source=promote/x-uat&dest=UAT", stageId: "promote", at: "t0" },
+      ],
+    });
+    expect(of(p)).toBe("needs-you");
+  });
+
+  it("stops counting it once merged", () => {
+    const p = pipeline([stage({ id: "promote", status: "passed" }), stage({ id: "next" })], {
+      pullRequests: [
+        {
+          url: "https://host/pr/new?source=promote/x-uat&dest=UAT",
+          stageId: "promote",
+          at: "t0",
+          mergedAt: "t1",
+        },
+      ],
+    });
+    expect(of(p)).not.toBe("needs-you");
+  });
+
+  // A promotion still running contributes none, by construction rather than by another
+  // status test -- `outstandingPullRequests` only counts waits whose stage has resolved.
+  it("says nothing while the promoting stage is still running", () => {
+    const p = pipeline([stage({ id: "promote", status: "active" })], {
+      pullRequests: [
+        { url: "https://host/pr/new?source=promote/x-uat&dest=UAT", stageId: "promote", at: "t0" },
+      ],
+    });
+    expect(of(p)).toBe("working");
+  });
+
   it("is parked when nothing runs and nothing waits on you", () => {
     expect(of(pipeline([stage({ id: "a", status: "passed" }), stage({ id: "b", status: "pending" })]))).toBe(
       "parked",

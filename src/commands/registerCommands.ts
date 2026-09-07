@@ -2218,8 +2218,8 @@ async function advanceRouteCommand(
       const OPEN = "Open Pull Request";
       const CHECK = "Check Again";
       const choice = await vscode.window.showWarningMessage(
-        `"${task.name}" is waiting on ${outcome.waits.length} pull request(s) to be ` +
-          `merged${scope}, before "${outcome.stageName}".`,
+        `"${task.name}" needs ${outcome.waits.length} pull request(s) merged${scope} ` +
+          `before "${outcome.stageName}" can run.`,
         { modal: false },
         OPEN,
         CHECK,

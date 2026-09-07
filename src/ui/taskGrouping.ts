@@ -223,22 +223,28 @@ export function groupForTask(input: GroupInput): TaskGroupId {
   // else the task is nominally waiting on.
   if (stages.some((stage) => stage.status === "failed")) return "needs-you";
 
-  // A pull request nobody has merged is the purest case this group has: the work is
-  // complete, the route cannot advance, and the act is a human's in a browser — quite
-  // possibly somebody else's, since a reviewer usually merges. Filed here rather than
-  // in `needs-you` for the reason the audience declaration exists at all: a wait
-  // measured in hours or days must not pad the list scanned to decide what to pick up.
+  // A pull request nobody has merged: the work is complete, the route cannot advance,
+  // and somebody has to click merge. **Yours, not theirs** — opening and merging a pull
+  // request is a development task here, and this first shipped as `waiting-others` on
+  // the assumption that a reviewer merges, which is a guess about one team's process.
   //
-  // After the failure check above, deliberately. A route holding a pull request *and*
-  // carrying a failed stage is the operator's, because a broken route outranks anything
-  // the task is nominally waiting on — the rule the external gate already follows.
+  // Not declarable, deliberately, and the failure directions are why they are not
+  // symmetric. A task wrongly filed as waiting on others drops out of the list scanned
+  // to decide what to pick up next, so it is simply never done — the argument
+  // `checklistAudience` already makes about an item nobody is asked about. Wrongly
+  // filed as yours costs a glance. So absence of a declaration means the operator's,
+  // and a project where somebody else merges can say so when there is one.
+  //
+  // After the failure check above, deliberately: a route holding a pull request *and*
+  // carrying a failed stage is still about the failure, because that is what stops it
+  // being fixable by a click.
   //
   // Nothing is said here about `active`, and that is the point: `outstandingPullRequests`
   // only counts waits whose raising stage has resolved, so a promotion still running
   // contributes none. The mistake `externalGate` and the verification branch each had to
   // learn is avoided by construction rather than by another status test.
   if (input.pipeline && outstandingPullRequests(input.pipeline).length > 0) {
-    return "waiting-others";
+    return "needs-you";
   }
 
   // Before the approval check, because an external gate is usually sitting at exactly
