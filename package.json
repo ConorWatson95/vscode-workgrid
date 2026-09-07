@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.123.0",
+  "version": "0.124.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -226,6 +226,12 @@
         "title": "Record Base Commit…",
         "category": "Task Workspaces",
         "icon": "$(git-commit)"
+      },
+      {
+        "command": "taskWorkspaces.markPullRequestMerged",
+        "title": "Mark Pull Request Merged…",
+        "category": "Task Workspaces",
+        "icon": "$(git-pull-request)"
       },
       {
         "command": "taskWorkspaces.setReferences",
@@ -483,6 +489,11 @@
           "command": "taskWorkspaces.recordBaseCommit",
           "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/ && !(viewItem =~ /baseCommitRecorded/)",
           "group": "9_link@1"
+        },
+        {
+          "command": "taskWorkspaces.markPullRequestMerged",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /awaitingPullRequest/",
+          "group": "9_link@2"
         },
         {
           "command": "taskWorkspaces.setReferences",

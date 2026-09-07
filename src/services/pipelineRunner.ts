@@ -48,6 +48,9 @@ import {
   revertSubtask,
   startSubtask,
   withdrawAmendmentsOf,
+  recordPullRequests,
+  settlePullRequest,
+  outstandingPullRequests,
 } from "../domain/pipelineEngine";
 import { formatSendBackNote, guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
@@ -58,9 +61,11 @@ import {
   changedNothing,
   correctionChangedNothing,
 } from "../domain/stageProductivity";
+import { PullRequestWait } from "../domain/pullRequestWait";
 import {
   MISSING_PULL_REQUEST_REASON,
   missingPullRequestUrl,
+  reportedPullRequestUrls,
 } from "../domain/pullRequestEvidence";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
@@ -232,6 +237,19 @@ export type RunOutcome =
       stageId: string;
       stageName: string;
       items: { id: string; text: string; raisedByStageName: string }[];
+    }
+  /**
+   * An earlier stage promoted by pull request and nobody has merged it.
+   *
+   * Its own outcome for `deferredWork`'s reason and one more: this is the only hold the
+   * route cannot clear from inside, so presenting it as a failure or an approval would
+   * point the operator at the harness when the thing to do is in a browser tab.
+   */
+  | {
+      kind: "pullRequestOpen";
+      stageId: string;
+      stageName: string;
+      waits: { url: string; source?: string; target?: string; at: string }[];
     }
   /** The route finished. */
   | { kind: "done" }
@@ -442,6 +460,23 @@ export class PipelineRunner {
       task: TaskWorkspace,
       observation: { at: string; stageId?: string; subtaskId?: string },
     ) => Promise<void>,
+    /**
+     * Which of the pull requests a route is waiting on have been merged.
+     *
+     * Answered from git rather than a hosting API, which is what makes this possible at
+     * all: the stages have no Bitbucket credentials, and *merged* means the source's
+     * commits are on the target — a local question after a fetch, and true of GitHub,
+     * GitLab and Azure DevOps without knowing which is in use.
+     *
+     * Optional like the rest, and the failure direction is chosen: a runner built
+     * without it settles nothing, so a route holds and the operator clears it, where
+     * the opposite default would advance a route onto a target branch that does not
+     * have the work.
+     */
+    private readonly pullRequestStates?: (
+      task: TaskWorkspace,
+      waits: readonly PullRequestWait[],
+    ) => Promise<{ url: string; merged: boolean }[]>,
   ) {}
 
   /**
@@ -960,6 +995,11 @@ export class PipelineRunner {
     }
 
     const limit = maxSteps(current.pipeline);
+    // Once per advance, not per step: merging is a human act in a browser, so the
+    // answer cannot change while an advance is running, and asking per step would spend
+    // a fetch on each.
+    let settledPullRequestsThisAdvance = false;
+
     for (let step = 0; step < limit; step++) {
       if (signal?.aborted) return { outcome: { kind: "cancelled" }, steps: await this.recordStop(current, "cancelled", step, steps) };
 
@@ -1014,8 +1054,39 @@ export class PipelineRunner {
         current = (await this.repository.get(current.id)) ?? current;
       }
 
-      const pipeline = current.pipeline;
+      let pipeline = current.pipeline;
       if (!pipeline) return { outcome: { kind: "unharnessed" }, steps };
+
+      // Settles pull requests that have since been merged, before anything reads the
+      // hold. Once per advance rather than per step: it costs a fetch and two ref
+      // reads, and nothing inside one advance merges a pull request — the act is a
+      // human's in a browser, so the answer cannot change between steps. Re-advancing
+      // IS the re-check, which is why there is no separate command for it to fall out
+      // of step with.
+      if (
+        !settledPullRequestsThisAdvance &&
+        this.pullRequestStates &&
+        outstandingPullRequests(pipeline).length > 0
+      ) {
+        settledPullRequestsThisAdvance = true;
+        const merged = await this.pullRequestStates(
+          current,
+          outstandingPullRequests(pipeline),
+        );
+        let updated = pipeline;
+        for (const entry of merged) {
+          if (entry.merged) {
+            updated = settlePullRequest(updated, entry.url, new Date().toISOString());
+          }
+        }
+        if (updated !== pipeline) {
+          const count = (updated.pullRequests ?? []).filter((w) => w.mergedAt).length
+            - (pipeline.pullRequests ?? []).filter((w) => w.mergedAt).length;
+          current = await this.save(current, updated);
+          pipeline = updated;
+          steps.push(`${count} pull request(s) have been merged; carrying on.`);
+        }
+      }
 
       const action = nextAction(pipeline);
 
@@ -1156,6 +1227,44 @@ export class PipelineRunner {
                 id: item.id,
                 text: item.text,
                 raisedByStageName: item.raisedByStageName,
+              })),
+            },
+            steps,
+          };
+        }
+
+        case "pullRequestOpen": {
+          // Held rather than failed, and announced with the link. There is nothing to
+          // retry and nothing to approve: the work is complete, sitting on a branch, and
+          // the next act is a human's in a browser. Saying so here is the whole point of
+          // the state — without it the operator's first news was the *next* gate's check
+          // reporting the work as not on the target, which is true, misleading, and
+          // several stages removed from what to do about it.
+          const listed = action.waits
+            .map((wait) =>
+              wait.source && wait.target
+                ? `${wait.source} → ${wait.target}: ${wait.url}`
+                : wait.url,
+            )
+            .join("; ");
+          this.logger.warn(
+            `Harness [${current.name}] holding "${action.stage.name}": ` +
+              `${action.waits.length} pull request(s) not merged. ${listed}`,
+          );
+          steps.push(
+            `Held before "${action.stage.name}": ${action.waits.length} pull ` +
+              "request(s) still to be merged.",
+          );
+          return {
+            outcome: {
+              kind: "pullRequestOpen",
+              stageId: action.stage.id,
+              stageName: action.stage.name,
+              waits: action.waits.map((wait) => ({
+                url: wait.url,
+                ...(wait.source ? { source: wait.source } : {}),
+                ...(wait.target ? { target: wait.target } : {}),
+                at: wait.at,
               })),
             },
             steps,
@@ -2413,6 +2522,31 @@ export class PipelineRunner {
             `Harness [${task.name}] ${stage.name} promotes by pull request and reported ` +
               "no pull request URL. Holding rather than passing: check one was opened, " +
               "because the stage after it is a human merging it.",
+          );
+        }
+      } else if (settled?.requiresPullRequest) {
+        // The other half of the same fact, and the half that was missing. A stage that
+        // DID report a link has not finished the job either — somebody has to merge it —
+        // and with nowhere to record that, the wait surfaced as the next gate's check
+        // failing against a target branch that did not have the work yet.
+        //
+        // Recorded from every subtask's reply rather than the last, because a corrected
+        // stage reports the link in the round that opened it and a split one in whichever
+        // subtask did the pushing. `recordPullRequests` deduplicates on the URL.
+        const urls = settled.subtasks.flatMap((sub) =>
+          reportedPullRequestUrls(sub.reply ?? ""),
+        );
+        const before = pipeline.pullRequests?.length ?? 0;
+        pipeline = recordPullRequests(
+          pipeline,
+          stage.id,
+          urls,
+          new Date().toISOString(),
+        );
+        const added = (pipeline.pullRequests?.length ?? 0) - before;
+        if (added > 0) {
+          steps.push(
+            `"${stage.name}" reported ${added} pull request(s) to be merged.`,
           );
         }
       }

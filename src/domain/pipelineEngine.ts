@@ -23,6 +23,7 @@ import {
   producesChecklist,
 } from "./taskRoute";
 import { PlanStep, StepAccount } from "./planSteps";
+import { PullRequestWait, pullRequestBranches } from "./pullRequestWait";
 import { amendmentIsUnreachable } from "./amendmentReach";
 import { hasUsage, stageUsage, subtasksUsage } from "./stageUsage";
 import {
@@ -93,8 +94,86 @@ export type NextAction =
    * retrying — a human has to say who owns the work, or that nobody need.
    */
   | { kind: "deferredWork"; stage: TaskStage; items: DeferralItem[] }
+  /**
+   * An earlier stage promoted by pull request and nobody has merged it.
+   *
+   * Distinct from every other hold, because it is the only one where the route waits on
+   * an act performed **outside** it. Nothing has failed, nothing needs retrying, and the
+   * stage that owed the pull request has already been approved — so `blocked`
+   * misattributes it and `awaitApproval` asks for a decision nobody can make yet.
+   * Without this state the fact surfaced as the next gate's check failing, which
+   * reported complete work as not promoted.
+   */
+  | { kind: "pullRequestOpen"; stage: TaskStage; waits: PullRequestWait[] }
   /** No stages left. */
   | { kind: "done" };
+
+/**
+ * Pull requests recorded by a stage that has settled, and not yet merged.
+ *
+ * Keyed on the **raising stage being resolved**, exactly as `outstandingDeferrals` is
+ * and for the same reason: while that stage is still running or being corrected, the
+ * link may name a branch its next round replaces, and holding the route on it would
+ * stop a stage waiting for itself.
+ */
+export function outstandingPullRequests(pipeline: TaskPipeline): PullRequestWait[] {
+  const resolved = new Set(
+    pipeline.stages
+      .filter((stage) => stage.status === "passed" || stage.status === "skipped")
+      .map((stage) => stage.id),
+  );
+  return (pipeline.pullRequests ?? []).filter(
+    (wait) => !wait.mergedAt && resolved.has(wait.stageId),
+  );
+}
+
+/**
+ * Records the pull requests a stage reported.
+ *
+ * Deduplicated on the URL, because a corrected stage re-reports the same link and a
+ * split stage reports it from each subtask. Two links differing only in query order are
+ * two entries, deliberately: normalising a URL to compare it is guesswork, and a
+ * duplicate wait settles alongside its twin rather than holding anything longer.
+ */
+export function recordPullRequests(
+  pipeline: TaskPipeline,
+  stageId: string,
+  urls: readonly string[],
+  at: string,
+): TaskPipeline {
+  const existing = pipeline.pullRequests ?? [];
+  const known = new Set(existing.map((wait) => wait.url));
+  const added: PullRequestWait[] = [];
+  for (const url of urls) {
+    if (!url || known.has(url)) continue;
+    known.add(url);
+    added.push({ url, stageId, at, ...pullRequestBranches(url) });
+  }
+  if (added.length === 0) return pipeline;
+  return { ...pipeline, pullRequests: [...existing, ...added] };
+}
+
+/**
+ * Marks one recorded pull request merged.
+ *
+ * Idempotent, and it keeps the first answer: `mergedAt` is when the merge was first
+ * *seen*, and a later sweep overwriting it would move the end of a wait the gate
+ * measurements read.
+ */
+export function settlePullRequest(
+  pipeline: TaskPipeline,
+  url: string,
+  at: string,
+): TaskPipeline {
+  const existing = pipeline.pullRequests ?? [];
+  let changed = false;
+  const updated = existing.map((wait) => {
+    if (wait.url !== url || wait.mergedAt) return wait;
+    changed = true;
+    return { ...wait, mergedAt: at };
+  });
+  return changed ? { ...pipeline, pullRequests: updated } : pipeline;
+}
 
 /**
  * Adds one intervention to the pipeline, as a spreadable fragment.
@@ -215,6 +294,16 @@ export function nextAction(pipeline: TaskPipeline): NextAction {
       const items = outstandingDeferrals(pipeline);
       if (items.length > 0) return { kind: "deferredWork", stage, items };
     }
+
+    // Checked before this stage is allowed to start, and of *every* stage rather than
+    // only one that ships. That is the opposite of the deferral rule above, and the two
+    // facts differ in kind: a deferral is usually correct and harmless, where an
+    // unmerged promotion means the target branch does not have the work — so any stage
+    // that reads the target, whether a check, a verification or a later promotion, is
+    // about to draw a conclusion from a state that has not arrived. Which is exactly
+    // what happened: the very next gate checked origin/UAT and reported it missing.
+    const waits = outstandingPullRequests(pipeline);
+    if (waits.length > 0) return { kind: "pullRequestOpen", stage, waits };
 
     if (stage.splittable && stage.subtasks.length === 0) {
       return { kind: "split", stage };

@@ -1,5 +1,6 @@
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import { outstandingPullRequests } from "../domain/pipelineEngine";
 
 /**
  * Which bucket a task belongs in, so a list of them can be scanned rather than
@@ -221,6 +222,24 @@ export function groupForTask(input: GroupInput): TaskGroupId {
   // before the external gate below, because a broken route is the operator's whatever
   // else the task is nominally waiting on.
   if (stages.some((stage) => stage.status === "failed")) return "needs-you";
+
+  // A pull request nobody has merged is the purest case this group has: the work is
+  // complete, the route cannot advance, and the act is a human's in a browser — quite
+  // possibly somebody else's, since a reviewer usually merges. Filed here rather than
+  // in `needs-you` for the reason the audience declaration exists at all: a wait
+  // measured in hours or days must not pad the list scanned to decide what to pick up.
+  //
+  // After the failure check above, deliberately. A route holding a pull request *and*
+  // carrying a failed stage is the operator's, because a broken route outranks anything
+  // the task is nominally waiting on — the rule the external gate already follows.
+  //
+  // Nothing is said here about `active`, and that is the point: `outstandingPullRequests`
+  // only counts waits whose raising stage has resolved, so a promotion still running
+  // contributes none. The mistake `externalGate` and the verification branch each had to
+  // learn is avoided by construction rather than by another status test.
+  if (input.pipeline && outstandingPullRequests(input.pipeline).length > 0) {
+    return "waiting-others";
+  }
 
   // Before the approval check, because an external gate is usually sitting at exactly
   // that status — and it is the reason this group exists.

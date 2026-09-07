@@ -11,6 +11,7 @@ import {
 import { deriveTaskPhase, taskPhasePresentation } from "./taskPhase";
 import { outstandingChecklist } from "../domain/pipelineEngine";
 import { declaredRepair, isDeclaredRepair } from "../domain/checkFailureRepair";
+import { outstandingPullRequests } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
 import { positionOf } from "../domain/routePosition";
 import {
@@ -106,6 +107,7 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       outstanding > 0,
       task.origin !== undefined,
       task.baseCommit !== undefined,
+      task.pipeline ? outstandingPullRequests(task.pipeline).length > 0 : false,
     );
 
     const descriptionParts = [statusLabel];

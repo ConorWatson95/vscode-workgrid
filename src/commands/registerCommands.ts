@@ -14,6 +14,8 @@ import {
   ruleInsertionIndex,
   undoCorrection,
   undoableCorrection,
+  outstandingPullRequests,
+  settlePullRequest,
 } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
 import {
@@ -136,6 +138,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.unlinkTaskOrigin", (arg) => unlinkTaskOriginCommand(ctx, arg)),
     register("taskWorkspaces.recordBaseCommit", (arg) =>
       recordBaseCommitCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.markPullRequestMerged", (arg) =>
+      markPullRequestMergedCommand(ctx, taskIdOf(arg)),
     ),
     register("taskWorkspaces.setTicketReference", (arg) =>
       setTicketReferenceCommand(ctx, arg),
@@ -2202,6 +2207,33 @@ async function advanceRouteCommand(
       else if (choice === "Settle Them…") await settleDeferralsCommand(ctx, task.id);
       return;
     }
+    case "pullRequestOpen": {
+      // Offers the link first, because that is the entire action. Every other hold ends
+      // in something done inside the extension; this one ends in a browser tab, and a
+      // dialog that made the operator go and find the pull request themselves would be
+      // the failure `requiresPullRequest` was written to prevent, one step along.
+      const first = outcome.waits[0];
+      const scope =
+        first?.source && first?.target ? ` (${first.source} → ${first.target})` : "";
+      const OPEN = "Open Pull Request";
+      const CHECK = "Check Again";
+      const choice = await vscode.window.showWarningMessage(
+        `"${task.name}" is waiting on ${outcome.waits.length} pull request(s) to be ` +
+          `merged${scope}, before "${outcome.stageName}".`,
+        { modal: false },
+        OPEN,
+        CHECK,
+      );
+      if (choice === OPEN && first) {
+        await vscode.env.openExternal(vscode.Uri.parse(first.url));
+      } else if (choice === CHECK) {
+        // Re-advancing is the check: the runner settles a merged pull request on its
+        // way past, so there is no separate "has it merged yet" command to keep in step
+        // with the one that decides.
+        await advanceRouteCommand(ctx, { task });
+      }
+      return;
+    }
     case "exhausted":
       void vscode.window.showWarningMessage(
         `"${task.name}" hit the ${outcome.steps}-step limit without finishing. See the log.`,
@@ -2297,6 +2329,86 @@ function askingLine(text: string): string {
  * close. The sentence is kept on the item and offered as route guidance, which is
  * what carries it to the stages that still have to act.
  */
+/**
+ * Marks a pull request the route is waiting on as merged, by hand.
+ *
+ * Required rather than a convenience, which is why it exists at all: the hold is
+ * cleared by asking git whether the source's commits are on the target, and there are
+ * real waits that question cannot answer — a link to an existing pull request carries
+ * an id rather than branch names, and a source branch deleted after merging may leave
+ * nothing local to compare. Without this the route would hold forever on a merge that
+ * had already happened, which is the failure the unlimited-timeout argument warns
+ * about: a route that never advances looks identical to one waiting on you.
+ *
+ * Says what it is asserting, because that is the whole risk. Approving this when the
+ * merge has not happened advances the route onto a target branch that does not have
+ * the work — the state the gate exists to prevent — so the confirmation names the
+ * branches and the operator is the one certifying it.
+ */
+async function markPullRequestMergedCommand(
+  ctx: CommandContext,
+  taskId: string | undefined,
+): Promise<void> {
+  const task = taskId ? await ctx.repository.get(taskId) : undefined;
+  if (!task?.pipeline) return;
+
+  const waits = outstandingPullRequests(task.pipeline);
+  if (waits.length === 0) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is not waiting on any pull request.`,
+    );
+    return;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    waits.map((wait) => ({
+      label: wait.source && wait.target ? `${wait.source} → ${wait.target}` : wait.url,
+      description: wait.source ? wait.url : undefined,
+      wait,
+    })),
+    {
+      title: `Which pull request has been merged?`,
+      placeHolder: "Only pick one you have actually merged",
+    },
+  );
+  if (!picked) return;
+
+  const CONFIRM = "It is merged";
+  const confirmed = await vscode.window.showWarningMessage(
+    `Record the pull request as merged?`,
+    {
+      modal: true,
+      detail:
+        `${picked.label}
+
+` +
+        "Nothing here can verify it, so this is your word for it. If it has not " +
+        "actually been merged, the route will carry on to stages that read the target " +
+        "branch and will not find the work there.",
+    },
+    CONFIRM,
+  );
+  if (confirmed !== CONFIRM) return;
+
+  const settled = settlePullRequest(
+    task.pipeline,
+    picked.wait.url,
+    new Date().toISOString(),
+  );
+  await ctx.repository.save({
+    ...task,
+    pipeline: settled,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.logger.info(
+    `Harness [${task.name}] pull request marked merged by hand: ${picked.wait.url}`,
+  );
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    `Recorded as merged. Advance "${task.name}" to carry on.`,
+  );
+}
+
 async function settleDeferralsCommand(
   ctx: CommandContext,
   taskId: string | undefined,

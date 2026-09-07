@@ -114,6 +114,8 @@ export function buildContextValue(
   linkedToSuggestion = false,
   /** True when the task records the commit its branch was cut from. */
   baseCommitRecorded = false,
+  /** True when the route is holding on a pull request nobody has merged. */
+  awaitingPullRequest = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -144,5 +146,9 @@ export function buildContextValue(
   // offered only where there is none, because it cannot be changed once set — a task
   // quietly re-based would silently re-scope every check that enumerates its commits.
   if (baseCommitRecorded) tokens.push("baseCommitRecorded");
+  // Only where there is one to settle. Marking a pull request merged on a task waiting
+  // on none is a menu entry that does nothing — and worse than useless here, since the
+  // act it names is the operator certifying something nothing can verify.
+  if (awaitingPullRequest) tokens.push("awaitingPullRequest");
   return tokens.join(" ");
 }

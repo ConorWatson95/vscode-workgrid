@@ -89,6 +89,33 @@ export class GitStatusService {
   }
 
   /**
+   * Whether the remote has a branch by that name.
+   *
+   * Asked of the remote and not of local refs, because the failure it catches is a
+   * promote branch that exists only locally: NMGB-2533's promote stage reported a
+   * well-formed create link for `promote/nmgb-2533-navigator-uat-002` and `origin` had
+   * no such branch, so the link opened a page with nothing to compare.
+   *
+   * `ls-remote` rather than `rev-parse`, so it is the remote's answer now rather than
+   * whatever this clone last fetched — a stale remote-tracking ref would report a
+   * branch that was deleted after merging as still present.
+   */
+  async hasRemoteBranch(
+    worktreePath: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<boolean | undefined> {
+    const result = await this.git.run(
+      ["ls-remote", "--heads", "origin", branch],
+      { cwd: worktreePath, signal },
+    );
+    // Undefined, not false, when git could not say. Absence of an answer must not read
+    // as absence of a branch: that would tell somebody to push a branch that is there.
+    if (!result.ok) return undefined;
+    return result.value.stdout.trim().length > 0;
+  }
+
+  /**
    * Commits on `branch` that `baseBranch` does not yet have, newest first.
    *
    * The observation `domain/taskCommits.ts` accumulates. Correct at any instant and

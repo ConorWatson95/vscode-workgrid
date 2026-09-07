@@ -10,6 +10,7 @@ import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
 import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
 import { TaskWorkspaceService } from "./services/taskWorkspaceService";
 import { TaskCommitService } from "./services/taskCommitService";
+import { PullRequestWaitService } from "./services/pullRequestWaitService";
 import { ExtensionConfiguration } from "./configuration/extensionConfiguration";
 import { TerminalManager } from "./processes/terminalManager";
 import { AgentProviderRegistry } from "./agents/agentProviderRegistry";
@@ -878,6 +879,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   const taskCommits = new TaskCommitService(repository, statusService, logger);
+  const pullRequestWaits = new PullRequestWaitService(gitClient, statusService, logger);
 
   const runner = new PipelineRunner(
     stageRunner,
@@ -1011,6 +1013,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // `domain/taskCommits.ts` for the four derivations that fail. Non-fatal inside the
     // service, so a git failure here never reaches the route.
     (task, observation) => taskCommits.observe(task, observation),
+    // Answered from git rather than a hosting API: *merged* means the source's commits
+    // are on the target, so no token and no webhook — see `PullRequestWaitService`.
+    (task, waits) => pullRequestWaits.merged(task, waits),
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

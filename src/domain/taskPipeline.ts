@@ -15,6 +15,9 @@ import {
 } from "./taskRoute";
 import { InterventionRecord } from "./interventions";
 import { PipelineExperiment } from "./pipelineExperiment";
+import { PullRequestWait } from "./pullRequestWait";
+
+export type { PullRequestWait };
 
 export type TaskStageStatus =
   | "pending"
@@ -696,6 +699,21 @@ export interface TaskPipeline {
    * gate that ought to care.
    */
   deferrals?: DeferralItem[];
+  /**
+   * Pull requests a stage reported and nobody has merged yet, oldest first.
+   *
+   * The state the route had nowhere to put. A stage that promotes by pull request does
+   * its job by reporting the link — and then a human has to act, which is neither an
+   * approval (the stage's own gate has already been passed) nor a failure (nothing went
+   * wrong). With no state for it, "unmerged" surfaced as the *next* gate's check failing
+   * with `4 of 12 commit(s) are not on origin/UAT`, reported against work that was
+   * complete and waiting. See `domain/pullRequestWait.ts`.
+   *
+   * On the pipeline rather than the task, unlike commits and references: a pull request
+   * belongs to one run of one stage, and a revert discarding that run must discard the
+   * wait with it — the link names a branch that run created.
+   */
+  pullRequests?: PullRequestWait[];
   /**
    * Every moment a human had to act on this route, in order.
    *
