@@ -422,6 +422,26 @@ export class PipelineRunner {
      * A function because it is a setting the operator can change between advances.
      */
     private readonly amendmentModel: () => string | undefined = () => undefined,
+    /**
+     * Records the commits this task has made, observed at a stage boundary.
+     *
+     * Appended to the parameter list for the reason stated immediately above: every
+     * argument here is positional, so a new one goes at the end or it silently shifts
+     * the callbacks after it.
+     *
+     * Called either side of a subtask, which is what makes the record complete rather
+     * than merely stage-attributed: a commit made by hand between advances is caught by
+     * the *next* subtask's opening observation, where a closing one alone would miss it
+     * entirely. Both are the same union, so observing twice costs a `rev-list` and can
+     * never record anything wrong.
+     *
+     * Optional like the rest: a runner built without it records no commits, and every
+     * check that enumerates them falls back to inferring the set as it does today.
+     */
+    private readonly observeCommits?: (
+      task: TaskWorkspace,
+      observation: { at: string; stageId?: string; subtaskId?: string },
+    ) => Promise<void>,
   ) {}
 
   /**
@@ -1399,6 +1419,14 @@ export class PipelineRunner {
         ? await this.claims.snapshot(task.repositoryRoot)
         : undefined;
 
+    // Before the session as well as after it. Anything committed by hand since the last
+    // stage belongs to this task and is attributed to no subtask, which is honest --
+    // see `RecordedCommit.stageId`.
+    await this.observeCommits?.(task, {
+      at: new Date().toISOString(),
+      stageId: stage.id,
+    });
+
     const context = this.contextFor(task, stage.id);
 
     // A behaviour review is asked for a checklist, an assessment for a reading of
@@ -1819,6 +1847,16 @@ export class PipelineRunner {
         : reply.activity,
     });
     if (finished.ok) pipeline = finished.value;
+
+    // What this subtask committed. Recorded whichever way the subtask went: the commits
+    // exist in git regardless of what the reply is later taken to mean, and a stage that
+    // asked a question or was stopped has still committed whatever it committed -- the
+    // rule `claimEvidence` follows for worktrees, arrived at the same way.
+    await this.observeCommits?.(task, {
+      at: new Date().toISOString(),
+      stageId: stage.id,
+      subtaskId: subtask.id,
+    });
 
     // A correction now knows what it touched, which is the first moment the cascade
     // it caused can be questioned. Amendments the written paths rule out are taken

@@ -77,6 +77,65 @@ export function parseBranchCreation(reflog: string): BranchCreation | undefined 
   return undefined;
 }
 
+/** Refs belonging to other work, found among the commits a proposal would establish. */
+export interface ForeignReferences {
+  /** The other refs seen, in first-seen order. */
+  refs: string[];
+  /** How many of the commits carry one. */
+  commits: number;
+}
+
+/**
+ * Other tickets' references among the commits a proposed base commit would establish.
+ *
+ * A **warning, never a filter**, and the numbers are why. On
+ * `feature/renaultgb-myrewards-summary` the fork point yields 103 commits of which 75
+ * carry no reference at all — so keeping only the ones that name this task's ticket
+ * would discard three quarters of the set, most of it genuine. A commit with no ref is
+ * not evidence of anything.
+ *
+ * A commit naming a *different* ticket is different in kind: it is proof the proposal
+ * has swept in work this task did not do, which is exactly the contamination that makes
+ * a fork point untrustworthy on a branch that has integrated its base. Six such tickets
+ * appeared in that branch's 103, and one of the commits sampled from it is on
+ * `origin/DEV` and fifteen other branches.
+ *
+ * **The convention is the project's, never this module's.** Leading every commit with a
+ * ticket key is how one repository happens to work; `pattern` comes from the project's
+ * own suggestion source, and a project whose refs are numbers or GUIDs supplies its own
+ * or gets no warning rather than a wrong one.
+ */
+export function foreignReferences(
+  subjects: readonly string[],
+  ownRef: string | undefined,
+  pattern?: RegExp,
+): ForeignReferences {
+  const matcher = pattern ?? DEFAULT_REF;
+  const mine = ownRef?.trim().toLowerCase();
+  const refs: string[] = [];
+  let commits = 0;
+
+  for (const subject of subjects) {
+    const found = [...subject.matchAll(new RegExp(matcher.source, "g"))]
+      .map((match) => match[0])
+      .filter((ref) => ref.toLowerCase() !== mine);
+    if (found.length === 0) continue;
+    commits += 1;
+    for (const ref of found) if (!refs.includes(ref)) refs.push(ref);
+  }
+
+  return { refs, commits };
+}
+
+/**
+ * The shape a ticket key takes when a project declares none.
+ *
+ * Deliberately a copy of `TICKET_PATTERN` rather than an import: this module is about
+ * commit provenance, and coupling it to the ticket-reference domain would make a change
+ * there silently change what counts as contamination here.
+ */
+const DEFAULT_REF = /[A-Z][A-Z0-9]+-[0-9]+/;
+
 /** Why a proposed base commit must not be recorded. */
 export type BaseCommitRefusal =
   /** The task already has one. Changing it is a separate, deliberate act. */

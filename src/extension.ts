@@ -9,6 +9,7 @@ import { NodeStateFileLock } from "./persistence/nodeStateFileLock";
 import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
 import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
 import { TaskWorkspaceService } from "./services/taskWorkspaceService";
+import { TaskCommitService } from "./services/taskCommitService";
 import { ExtensionConfiguration } from "./configuration/extensionConfiguration";
 import { TerminalManager } from "./processes/terminalManager";
 import { AgentProviderRegistry } from "./agents/agentProviderRegistry";
@@ -876,6 +877,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { now: () => new Date().toISOString() },
   );
 
+  const taskCommits = new TaskCommitService(repository, statusService, logger);
+
   const runner = new PipelineRunner(
     stageRunner,
     repository,
@@ -1003,6 +1006,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Amendment subtasks only, and only when configured — see `resolveAmendmentModel`
     // for the measurement. Last, because every argument here is positional.
     () => configuration.amendmentModel(repositoryUri),
+    // Records the commits each task makes, observed either side of every subtask. The
+    // set every promotion check wants and none could reconstruct — see
+    // `domain/taskCommits.ts` for the four derivations that fail. Non-fatal inside the
+    // service, so a git failure here never reaches the route.
+    (task, observation) => taskCommits.observe(task, observation),
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

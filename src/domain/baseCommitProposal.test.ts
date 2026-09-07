@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseBranchCreation, mayRecordBaseCommit } from "./baseCommitProposal";
+import {
+  parseBranchCreation,
+  mayRecordBaseCommit,
+  foreignReferences,
+} from "./baseCommitProposal";
 
 // The real thing, from NMGB-2533's branch. Newest first, as git prints it.
 const REAL = [
@@ -83,5 +87,58 @@ describe("mayRecordBaseCommit", () => {
 
   it("says so when the reflog proposed nothing", () => {
     expect(mayRecordBaseCommit({ ancestor: false })).toBe("not-in-reflog");
+  });
+});
+
+describe("foreignReferences", () => {
+  // The live case. `feature/renaultgb-myrewards-summary` yielded 103 commits from its
+  // fork point, spanning six other tickets -- proof the proposal had swept in work the
+  // task never did, and the signal that makes a bad proposal obvious in the dialog.
+  it("names other tickets found among the commits", () => {
+    const result = foreignReferences(
+      [
+        "a1 NMGB-2533 - the task's own work",
+        "b2 RU-550 - somebody else's promotion",
+        "c3 NMGB-2814 - another ticket entirely",
+      ],
+      "NMGB-2533",
+    );
+    expect(result.refs).toEqual(["RU-550", "NMGB-2814"]);
+    expect(result.commits).toBe(2);
+  });
+
+  // 75 of those 103 commits carried no reference at all, so filtering on the convention
+  // would have discarded three quarters of the set. A commit with no ref is not
+  // evidence of anything, which is why this warns and never filters.
+  it("says nothing about a commit that names no ticket", () => {
+    const result = foreignReferences(
+      ["a1 Write down that shared project files are cherry-picked", "b2 fix a typo"],
+      "NMGB-2533",
+    );
+    expect(result).toEqual({ refs: [], commits: 0 });
+  });
+
+  it("ignores the task's own ref however it is cased", () => {
+    expect(
+      foreignReferences(["a1 nmgb-2533 - lower case in the subject"], "NMGB-2533").refs,
+    ).toEqual([]);
+  });
+
+  // Leading every commit with a ticket key is one repository's convention. A project
+  // whose refs look nothing like that supplies its own pattern, and gets no warning
+  // rather than a wrong one.
+  it("uses the project's own pattern when it declares one", () => {
+    const result = foreignReferences(
+      ["a1 #4417 the task's own", "b2 #9001 another piece of work"],
+      "#4417",
+      /#[0-9]+/,
+    );
+    expect(result.refs).toEqual(["#9001"]);
+  });
+
+  it("warns on every commit even when the task has no ref of its own", () => {
+    // A task linked to nothing still benefits: any ref at all is a ref this task
+    // cannot be shown to own.
+    expect(foreignReferences(["a1 RU-550 - work"], undefined).commits).toBe(1);
   });
 });

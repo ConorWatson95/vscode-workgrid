@@ -5,6 +5,7 @@ import { TaskReference } from "./taskReferences";
 export type { TaskReference };
 import { WorkspaceEnvironment } from "./workspaceEnvironment";
 import { WorktreeClaim } from "./worktreeLease";
+import { RecordedCommit } from "./taskCommits";
 
 export type TaskWorkspaceStatus =
   | "creating"
@@ -72,6 +73,21 @@ export interface TaskWorkspace {
    * already carries work, the tip would be wrong.
    */
   baseCommit?: string;
+  /**
+   * Commits this task made, observed at stage boundaries rather than reconstructed.
+   *
+   * The set `baseCommit` was meant to establish, arrived at the only way that holds. A
+   * fork point is exact for a clean short branch and wrong for one that has integrated
+   * its base — measured, `feature/renaultgb-myrewards-summary` yielded 338 commits, or
+   * 103 spanning six other tickets with `--first-parent --no-merges`. See
+   * `domain/taskCommits.ts` for all four reconstructions and why each fails.
+   *
+   * Append-only, and on the task rather than the pipeline, for the reason
+   * `TaskReference.origin` is: a commit exists in git whatever the pipeline later does,
+   * so a revert discarding a stage's output must not discard the record of what that
+   * stage committed.
+   */
+  commits?: RecordedCommit[];
 
   status: TaskWorkspaceStatus;
   createdAt: string;

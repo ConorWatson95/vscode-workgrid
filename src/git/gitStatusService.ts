@@ -89,6 +89,37 @@ export class GitStatusService {
   }
 
   /**
+   * Commits on `branch` that `baseBranch` does not yet have, newest first.
+   *
+   * The observation `domain/taskCommits.ts` accumulates. Correct at any instant and
+   * empty once the work is promoted, which is why the union over a task's life is the
+   * answer and a single reading is not. A base commit merged into the branch never
+   * appears, because it is on the base -- the property every fork-point walk lacked.
+   *
+   * Two dots, not three. `<base>..<branch>` asks what the base does not have, which is
+   * the question; `<base>...<branch>` is symmetric difference and would include the
+   * base's own later work as though this task had made it.
+   */
+  async getUnpromotedCommits(
+    worktreePath: string,
+    branch: string,
+    baseBranch: string,
+    signal?: AbortSignal,
+  ): Promise<Result<string[], GitError>> {
+    const result = await this.git.run(
+      ["rev-list", `${baseBranch}..${branch}`],
+      { cwd: worktreePath, signal },
+    );
+    if (!result.ok) return result;
+    return ok(
+      result.value.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  }
+
+  /**
    * Whether `commit` is an ancestor of `branch`.
    *
    * The check that makes a stale or mistyped base commit harmless. `rev-list <branch>

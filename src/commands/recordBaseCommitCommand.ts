@@ -2,6 +2,9 @@ import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
 import { resolveTaskArg } from "./suggestionCommands";
 import { TaskWorkspace } from "../domain/taskWorkspace";
+import { foreignReferences, ForeignReferences } from "../domain/baseCommitProposal";
+import { taskTicket } from "../domain/ticketReference";
+import { loadHarness } from "../services/reviewRulesService";
 
 /**
  * Records the commit a task's branch was cut from, for a task that predates the field.
@@ -38,7 +41,11 @@ export async function recordBaseCommitCommand(
 
   const proposal = await ctx.service.proposeBaseCommit(task);
   const candidate = proposal.ok
-    ? await confirmProposal(task, proposal.value)
+    ? await confirmProposal(
+        task,
+        proposal.value,
+        contamination(ctx, task, proposal.value.subjects),
+      )
     : await askForCommit(task, message(proposal.error));
   if (!candidate) return;
 
@@ -70,6 +77,7 @@ export async function recordBaseCommitCommand(
 async function confirmProposal(
   task: TaskWorkspace,
   proposal: { commit: string; createdFrom: string; subjects: string[] },
+  foreign: ForeignReferences,
 ): Promise<string | undefined> {
   const branch = task.intendedBranch ?? task.branchName;
   const mismatch =
@@ -77,6 +85,19 @@ async function confirmProposal(
       ? ""
       : `\n\nThe reflog says it was cut from ${proposal.createdFrom}, while the task ` +
         `records its base branch as ${task.baseBranch}. Worth a look before agreeing.`;
+
+  // The signal that makes a bad proposal obvious. A fork point is wrong on a branch
+  // that has integrated its base, and the tell is other tickets' work in the set:
+  // `feature/renaultgb-myrewards-summary` proposed 103 commits spanning six of them.
+  // Stated before the list, because it is the reason to decline and nobody reading a
+  // long list of subjects will derive it for themselves.
+  const contaminated =
+    foreign.commits > 0
+      ? `\n\n${foreign.commits} of these reference other work ` +
+        `(${foreign.refs.slice(0, 6).join(", ")}). So the proposal has swept in commits ` +
+        "this task did not make, which is what happens on a branch that has had its " +
+        "base merged in. Decline unless you can account for them."
+      : "";
 
   const RECORD = "Record";
   const DIFFERENT = "Enter a different commit";
@@ -87,7 +108,7 @@ async function confirmProposal(
       detail:
         `The reflog says ${branch} was created from ${proposal.createdFrom} at that ` +
         `commit. It would establish these ${proposal.subjects.length} commit(s) as the ` +
-        `task's own:\n\n${preview(proposal.subjects)}${mismatch}`,
+        `task's own:\n\n${preview(proposal.subjects)}${contaminated}${mismatch}`,
     },
     RECORD,
     DIFFERENT,
@@ -121,6 +142,37 @@ async function askForCommit(
         : "That is not a commit hash.",
   });
   return typed?.trim() || undefined;
+}
+
+/**
+ * Other tickets' refs among the proposed commits, by the project's own convention.
+ *
+ * The pattern is the project's, never the extension's: leading every commit with a
+ * ticket key is how one repository happens to work, so it comes from that project's
+ * suggestion source, and a project declaring none gets the default shape rather than a
+ * wrong one. Harness problems are not surfaced here -- this is a warning about a
+ * warning, and the caller has no stake in them.
+ */
+function contamination(
+  ctx: CommandContext,
+  task: TaskWorkspace,
+  subjects: string[],
+): ForeignReferences {
+  const root = ctx.resolveRepositoryRoot();
+  const declared = root
+    ? loadHarness(root, {
+        configuredPath: ctx.configuration.harnessConfigPath(ctx.repositoryUri()),
+      }).suggestionSources.find((source) => source.refPattern)?.refPattern
+    : undefined;
+  let pattern: RegExp | undefined;
+  try {
+    pattern = declared ? new RegExp(declared) : undefined;
+  } catch {
+    // An uncompilable pattern is the project's problem, not this dialog's, and it is
+    // rejected where it is parsed. Falling back beats refusing to warn.
+    pattern = undefined;
+  }
+  return foreignReferences(subjects, taskTicket(task), pattern);
 }
 
 /** First few subjects, since a long list turns a dialog into something nobody reads. */
