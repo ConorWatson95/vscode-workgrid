@@ -15,6 +15,7 @@ import {
   undoableCorrection,
 } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
+import { InspectedOrphan, planOrphanSweep } from "../domain/orphanSweep";
 import {
   refreshPendingStages,
   addMissingStages,
@@ -156,6 +157,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.attachRoute", (arg) => attachRouteCommand(ctx, arg)),
     register("taskWorkspaces.adoptBranch", () => adoptBranchCommand(ctx)),
     register("taskWorkspaces.removeOrphan", (arg) => removeOrphanCommand(ctx, arg)),
+    register("taskWorkspaces.removeAllOrphans", () => removeAllOrphansCommand(ctx)),
     register("taskWorkspaces.openInVisualStudio", (arg) => openInVisualStudioCommand(ctx, arg)),
     register("taskWorkspaces.revealInExplorer", (arg) => revealInExplorerCommand(ctx, arg)),
     register("taskWorkspaces.sessionHistory", () => sessionHistoryCommand(ctx)),
@@ -2632,6 +2634,136 @@ async function removeOrphanCommand(ctx: CommandContext, arg: unknown): Promise<v
     await deleteOrphanBranch(ctx, repositoryRoot, branch);
   }
   ctx.tree.refresh();
+}
+
+/**
+ * Removes every untracked worktree in one sweep.
+ *
+ * Exists because the alternative is reading `git worktree list` and deciding by eye
+ * which entries are work and which are debris. That list says nothing about which
+ * worktrees a task owns — and getting it wrong removed two tracked ones. Reconciliation
+ * already computes the answer, so this hands the operator that list rather than asking
+ * anybody to re-derive it.
+ *
+ * Four rules, each load-bearing:
+ *
+ * - **The list is recomputed here, never read off the row that was clicked.** A tree node
+ *   is only as fresh as the last render, and this is the one command where acting on a
+ *   stale list deletes the wrong directory.
+ * - **A dirty worktree is kept and named, never forced.** The per-row command offers to
+ *   discard changes, which is defensible when somebody is looking at one worktree and its
+ *   change count; in bulk it would make "remove all" the cheapest way to lose uncommitted
+ *   work. `removeWorktree` refuses a dirty tree on its own account too — the pre-read is
+ *   what lets the confirmation say which ones will survive, and what is skipped is said
+ *   out loud, since a sweep that quietly left three behind reads as one that failed.
+ * - **An unreadable status counts as dirty.** Absence of measurement is not permission to
+ *   delete somebody's directory, the direction `WorktreeDiscardService` already chose.
+ * - **Branches are never deleted.** The per-row command offers it as one deliberate
+ *   choice; in bulk it is indefensible, because a worktree is a checkout that can be
+ *   remade and a branch may hold the only copy of its commits.
+ */
+async function removeAllOrphansCommand(ctx: CommandContext): Promise<void> {
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) return;
+
+  const listed = await ctx.service.listTasks(repositoryRoot);
+  if (!listed.ok) {
+    void vscode.window.showErrorMessage(
+      "Could not read the worktree list, so nothing was removed.",
+    );
+    return;
+  }
+  if (listed.value.orphans.length === 0) {
+    void vscode.window.showInformationMessage("No untracked worktrees to remove.");
+    return;
+  }
+
+  // Read before anything is confirmed, because it decides which of the two lists a
+  // worktree appears in. Concurrent: each is a ~250ms git spawn on a large solution.
+  // An unreadable status leaves `changedFileCount` absent rather than guessing a zero,
+  // which is the distinction `planOrphanSweep` turns on.
+  const inspected = await Promise.all(
+    listed.value.orphans.map(async ({ worktree }): Promise<InspectedOrphan> => {
+      const status = await ctx.status.getStatus(worktree.path);
+      return {
+        path: worktree.path,
+        branch: worktree.branch,
+        changedFileCount: status.ok ? status.value.changedFileCount : undefined,
+      };
+    }),
+  );
+
+  const { removable, kept } = planOrphanSweep(inspected);
+  const describe = (o: InspectedOrphan) => `${o.branch ?? "(detached)"} — ${o.path}`;
+
+  if (removable.length === 0) {
+    void vscode.window.showWarningMessage(
+      `All ${kept.length} untracked worktree(s) have uncommitted changes, so none were removed.`,
+      { modal: true, detail: kept.map(describe).join("\n") },
+    );
+    return;
+  }
+
+  const remove = `Remove ${removable.length} worktree(s)`;
+  const detail = [
+    ...removable.map(describe),
+    ...(kept.length > 0
+      ? [
+          "",
+          "Kept, because they have uncommitted changes or their status could not be read:",
+          ...kept.map(
+            (o) =>
+              `${describe(o)}${
+                o.changedFileCount === undefined
+                  ? " (status unreadable)"
+                  : ` (${o.changedFileCount} change(s))`
+              }`,
+          ),
+        ]
+      : []),
+    "",
+    "Branches are not deleted.",
+  ].join("\n");
+
+  const choice = await vscode.window.showWarningMessage(
+    `Remove ${removable.length} untracked worktree(s)?`,
+    { modal: true, detail },
+    remove,
+  );
+  if (choice !== remove) return;
+
+  // Sequential: every removal writes the same `.git/worktrees` admin directory, and a
+  // failure part-way through must leave a list the next render can still be trusted on.
+  const failures: string[] = [];
+  let removed = 0;
+  for (const orphan of removable) {
+    const result = await ctx.worktrees.removeWorktree(repositoryRoot, orphan.path, {
+      force: false,
+    });
+    if (result.ok) {
+      removed++;
+      ctx.logger.info(`Removed untracked worktree ${orphan.path}`);
+    } else {
+      failures.push(`${orphan.branch ?? orphan.path}: ${describeWorktreeError(result.error)}`);
+      ctx.logger.warn(`Could not remove untracked worktree ${orphan.path}`);
+    }
+  }
+
+  ctx.tree.refresh();
+
+  // Announced either way. This is a command that destroys directories, and one that
+  // silently removed fewer than it said it would is indistinguishable from a broken one.
+  if (failures.length > 0) {
+    void vscode.window.showWarningMessage(
+      `Removed ${removed} of ${removable.length} untracked worktree(s).`,
+      { modal: true, detail: failures.join("\n") },
+    );
+  } else {
+    const suffix = kept.length > 0 ? `; kept ${kept.length} with uncommitted changes` : "";
+    void vscode.window.showInformationMessage(
+      `Removed ${removed} untracked worktree(s)${suffix}.`,
+    );
+  }
 }
 
 /** Deletes an orphan's branch, offering a forced delete if it is unmerged. */

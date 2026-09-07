@@ -476,6 +476,31 @@ function formatWaited(since: string): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+/**
+ * The heading for untracked worktrees, and the home of the bulk removal button.
+ *
+ * Expanded, unlike the suggestions heading: an orphan is a thing sitting in the
+ * repository right now, and it was a flat top-level row before this existed. The
+ * heading is added for somewhere to put "remove them all", so it must not cost the
+ * rows their visibility to do it.
+ *
+ * Only built for two or more, because with one orphan the bulk command is the per-row
+ * command and a heading over a single row is the filing system `computeRoot` avoids
+ * making of a small repository.
+ */
+export class OrphanGroupTreeItem extends vscode.TreeItem {
+  constructor(readonly children: OrphanWorktreeTreeItem[]) {
+    super("Untracked worktrees", vscode.TreeItemCollapsibleState.Expanded);
+    this.description = `${children.length}`;
+    this.contextValue = "orphan-group";
+    this.iconPath = new vscode.ThemeIcon("git-branch");
+    this.tooltip = new vscode.MarkdownString(
+      "Git worktrees no task owns. Adopt one to track it, or remove them — a worktree" +
+        " a task owns, and one a stage claimed, is never listed here.",
+    );
+  }
+}
+
 /** A node representing an untracked git worktree that can be adopted. */
 export class OrphanWorktreeTreeItem extends vscode.TreeItem {
   constructor(

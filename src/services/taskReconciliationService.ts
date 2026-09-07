@@ -67,23 +67,45 @@ export function reconcileTasks(
     }
 
     matchedPaths.add(key);
+    // A worktree that came back clears the `failed` this function put on it.
+    //
+    // Marking a missing worktree `failed` was only ever half a rule: nothing undid it, so
+    // a worktree that disappeared and returned left its task failed permanently, and the
+    // only repair was editing the state file by hand. That is not hypothetical — a
+    // session tidying up untracked worktrees removed two tracked ones and re-added them
+    // minutes later, and both tasks stayed failed with their pipelines intact underneath.
+    //
+    // Safe because `failed` has exactly one author. This is the only place in the runtime
+    // that fails a *task* — a failed stage or subtask lives on the pipeline — so the
+    // status means "worktree missing" and nothing else, and the worktree being present is
+    // the whole of its negation.
+    //
+    // Restored to `ready` rather than to what it was before, because nothing records
+    // that and inventing a field to hold it would be a second source of truth for a
+    // status the pipeline already derives the real phase from. `ready` is what every
+    // harnessed task at rest carries anyway.
+    //
+    // `archived` is deliberately not touched, matching the guard above: archiving is a
+    // decision about the task, not an observation about its worktree.
+    const recovered = task.status === "failed";
     const refreshedBranch = worktree.branch ?? task.branchName;
     const branchChanged = refreshedBranch !== task.branchName;
     // Backfilled once, from the recorded name rather than from git: a task created
     // before this field existed may already be sitting on a switched branch, and
     // taking git's answer would enshrine the wrong branch as the intended one.
     const backfill = task.intendedBranch === undefined;
+    const changed = branchChanged || backfill || recovered;
     tasks.push({
-      task:
-        branchChanged || backfill
-          ? {
-              ...task,
-              branchName: refreshedBranch,
-              intendedBranch: task.intendedBranch ?? task.branchName,
-            }
-          : task,
+      task: changed
+        ? {
+            ...task,
+            branchName: refreshedBranch,
+            intendedBranch: task.intendedBranch ?? task.branchName,
+            ...(recovered ? { status: "ready" as const } : {}),
+          }
+        : task,
       worktreeExists: true,
-      changed: branchChanged || backfill,
+      changed,
     });
   }
 

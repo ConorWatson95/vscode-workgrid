@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.118.0",
+  "version": "0.119.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -272,6 +272,12 @@
       {
         "command": "taskWorkspaces.removeOrphan",
         "title": "Remove Untracked Worktree",
+        "category": "Task Workspaces",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "taskWorkspaces.removeAllOrphans",
+        "title": "Remove All Untracked Worktrees",
         "category": "Task Workspaces",
         "icon": "$(trash)"
       },
@@ -551,6 +557,16 @@
           "command": "taskWorkspaces.startTerminal",
           "when": "view == taskWorkspaces.tree && viewItem =~ /harnessed/",
           "group": "2_agent@3"
+        },
+        {
+          "command": "taskWorkspaces.removeAllOrphans",
+          "when": "view == taskWorkspaces.tree && viewItem == orphan-group",
+          "group": "inline@1"
+        },
+        {
+          "command": "taskWorkspaces.removeAllOrphans",
+          "when": "view == taskWorkspaces.tree && viewItem == orphan-group",
+          "group": "9_danger@1"
         },
         {
           "command": "taskWorkspaces.adopt",

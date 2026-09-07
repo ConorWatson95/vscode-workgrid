@@ -4,6 +4,7 @@ import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
 import {
   TaskWorkspaceTreeItem,
   MessageTreeItem,
+  OrphanGroupTreeItem,
   OrphanWorktreeTreeItem,
   StageTreeItem,
   ChecklistTreeItem,
@@ -36,6 +37,7 @@ import { createRenderThrottle } from "../utilities/renderThrottle";
 type TreeNode =
   | TaskGroupTreeItem
   | TaskWorkspaceTreeItem
+  | OrphanGroupTreeItem
   | OrphanWorktreeTreeItem
   | MessageTreeItem
   | StageTreeItem
@@ -233,6 +235,7 @@ export class TaskWorkspaceTreeProvider
           : [];
       return [...asked, ...refused, ...checklist];
     }
+    if (element instanceof OrphanGroupTreeItem) return element.children;
     if (element instanceof SuggestionGroupTreeItem) return element.children;
     if (element) return [];
 
@@ -375,11 +378,15 @@ export class TaskWorkspaceTreeProvider
               ),
           );
 
-    for (const orphan of result.value.orphans) {
-      nodes.push(
-        new OrphanWorktreeTreeItem(orphan.worktree.path, orphan.worktree.branch),
-      );
-    }
+    // Grouped only once there are two of them, so the heading appears exactly where the
+    // bulk removal it exists to carry has something to sweep. One orphan stays the flat
+    // row it has always been: the per-row command already removes it, and a heading over
+    // a single child is the filing system the task grouping above deliberately avoids.
+    const orphanItems = result.value.orphans.map(
+      (orphan) => new OrphanWorktreeTreeItem(orphan.worktree.path, orphan.worktree.branch),
+    );
+    if (orphanItems.length > 1) nodes.push(new OrphanGroupTreeItem(orphanItems));
+    else nodes.push(...orphanItems);
 
     // Last, and collapsed. Suggestions are work that has not started, so they must not
     // compete with a task that is stopped and waiting.

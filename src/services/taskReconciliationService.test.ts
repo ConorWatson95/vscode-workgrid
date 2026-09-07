@@ -81,6 +81,55 @@ describe("reconcileTasks", () => {
     expect(result.tasks[0].changed).toBe(false);
   });
 
+  // The other half of the rule above. Nothing used to undo the failure, so a worktree
+  // removed and re-added left its task failed for good, repairable only by editing the
+  // state file by hand.
+  it("clears the failure when the worktree comes back", () => {
+    const result = reconcileTasks(
+      [task({ status: "failed", intendedBranch: "feature/task" })],
+      [worktree({ branch: "feature/task" })],
+      repoRoot,
+    );
+    expect(result.tasks[0].worktreeExists).toBe(true);
+    expect(result.tasks[0].changed).toBe(true);
+    expect(result.tasks[0].task.status).toBe("ready");
+  });
+
+  // Archiving is a decision about the task, not an observation about its worktree, so a
+  // present worktree must not drag an archived task back into the list.
+  it("leaves an archived task archived when its worktree is present", () => {
+    const result = reconcileTasks(
+      [task({ status: "archived", intendedBranch: "feature/task" })],
+      [worktree({ branch: "feature/task" })],
+      repoRoot,
+    );
+    expect(result.tasks[0].task.status).toBe("archived");
+    expect(result.tasks[0].changed).toBe(false);
+  });
+
+  // Recovery must not quietly re-point the task at a branch somebody switched to while
+  // the worktree was away: the branch refresh is its own rule and still applies.
+  it("recovers a task and refreshes its branch together", () => {
+    const result = reconcileTasks(
+      [task({ status: "failed", branchName: "feature/old", intendedBranch: "feature/old" })],
+      [worktree({ branch: "feature/new" })],
+      repoRoot,
+    );
+    expect(result.tasks[0].task.status).toBe("ready");
+    expect(result.tasks[0].task.branchName).toBe("feature/new");
+    expect(result.tasks[0].task.intendedBranch).toBe("feature/old");
+  });
+
+  it("leaves a healthy task untouched", () => {
+    const result = reconcileTasks(
+      [task({ status: "implementing", intendedBranch: "feature/task" })],
+      [worktree({ branch: "feature/task" })],
+      repoRoot,
+    );
+    expect(result.tasks[0].task.status).toBe("implementing");
+    expect(result.tasks[0].changed).toBe(false);
+  });
+
   it("refreshes a changed branch name from git", () => {
     const result = reconcileTasks(
       [task({ branchName: "feature/old" })],
