@@ -55,3 +55,51 @@ export function planOrphanSweep(orphans: InspectedOrphan[]): OrphanSweep {
   }
   return { removable, kept };
 }
+
+/**
+ * Whether a worktree looks like one this extension provisioned for a task.
+ *
+ * The reason this exists, and it is the whole lesson of the day it was written: a sweep
+ * that trusted the orphan list removed five standing release checkouts and a publish
+ * tree, twice. Being an orphan means only "no task matches it" — and `reconcileTasks`
+ * protects a claimed tree, while the claims in a real state file record a *branch* and
+ * leave `worktreePath` undefined, and standing publish trees are claimed by nobody at
+ * all. So to reconciliation, `C:/Dev/release-RU-525-live` and a dead task worktree are
+ * indistinguishable, and CLAUDE.md says removing the former leaves the next publish
+ * nowhere to run.
+ *
+ * Provenance is the honest test, not safety. Whether a checkout is *safe* to delete is a
+ * question about commits, and the obvious version of it — "its branch is merged into
+ * DEV" — is precisely the test that caused this: a `promote/*` branch carries work headed
+ * for UAT and LIVE that DEV never sees, so merged-into-DEV says nothing about whether
+ * anyone still needs it. What the harness can answer without guessing is whether *it*
+ * made the thing, and it names what it makes: a directory immediately under the
+ * configured worktree parent, called `<repo>-<slug>`.
+ *
+ * Deliberately a *recommendation*, not a filter. An unrecognised orphan is still listed
+ * and still removable — a worktree somebody made by hand in the task directory is real
+ * debris, and hiding it would rebuild the dead end this feature was added to fix. It is
+ * simply never pre-selected, so removing one is a decision rather than a side effect of
+ * clicking "all".
+ */
+export function looksHarnessProvisioned(
+  worktreePath: string,
+  repositoryRoot: string,
+  configuredParentDir: string,
+): boolean {
+  const normalize = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+  const segments = normalize(worktreePath).split("/");
+  const name = segments.pop();
+  if (!name) return false;
+
+  // Immediately under the configured parent, never merely somewhere beneath it: a
+  // worktree nested deeper was put there by something other than `worktreeProvisioner`.
+  if (segments.join("/") !== normalize(configuredParentDir)) return false;
+
+  const repoName = normalize(repositoryRoot).split("/").pop();
+  if (!repoName) return false;
+
+  // The `-` matters: it is the separator the provisioner uses, and without it a
+  // repository called `qube` would claim `qubeautoapp-anything`.
+  return name.startsWith(`${repoName}-`);
+}

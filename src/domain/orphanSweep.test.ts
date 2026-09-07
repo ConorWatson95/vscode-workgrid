@@ -1,5 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { planOrphanSweep } from "./orphanSweep";
+import { looksHarnessProvisioned, planOrphanSweep } from "./orphanSweep";
+
+describe("looksHarnessProvisioned", () => {
+  const repo = "C:/Dev/qubeautoapp";
+  const parent = "C:/Dev/worktrees";
+  const check = (p: string) => looksHarnessProvisioned(p, repo, parent);
+
+  it("recognises a worktree the provisioner would have made", () => {
+    expect(check("C:/Dev/worktrees/qubeautoapp-nissan-gb-data-load-navigator")).toBe(true);
+  });
+
+  // Every one of these was deleted by a sweep that trusted the orphan list, and every one
+  // is a standing release or publish checkout the next promotion needs.
+  it.each([
+    "C:/Dev/release-RU-525-live",
+    "C:/Dev/release-nojira-aftersales-sm",
+    "C:/Dev/wt-imt-uat",
+    "C:/Dev/qube-publish-sm",
+  ])("does not recognise %s, which lives outside the configured parent", (p) => {
+    expect(check(p)).toBe(false);
+  });
+
+  it.each(["C:/Dev/worktrees/live-props", "C:/Dev/worktrees/qube-p2799-cache"])(
+    "does not recognise %s, which is in the parent but not named for the repository",
+    (p) => {
+      expect(check(p)).toBe(false);
+    },
+  );
+
+  it("matches case-insensitively and across separators", () => {
+    expect(looksHarnessProvisioned("c:\\dev\\worktrees\\QUBEAUTOAPP-task", repo, parent)).toBe(
+      true,
+    );
+  });
+
+  it("requires the separator, so a longer repository name cannot be claimed", () => {
+    expect(looksHarnessProvisioned("C:/Dev/worktrees/qubeautoapp-x", "C:/Dev/qube", parent)).toBe(
+      false,
+    );
+  });
+
+  // Nested deeper means something other than the provisioner put it there.
+  it("does not recognise a worktree nested below the parent", () => {
+    expect(check("C:/Dev/worktrees/nested/qubeautoapp-task")).toBe(false);
+  });
+
+  it("does not recognise the repository itself", () => {
+    expect(check("C:/Dev/qubeautoapp")).toBe(false);
+  });
+});
 
 describe("planOrphanSweep", () => {
   it("removes a clean worktree", () => {

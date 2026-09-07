@@ -15,7 +15,11 @@ import {
   undoableCorrection,
 } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
-import { InspectedOrphan, planOrphanSweep } from "../domain/orphanSweep";
+import {
+  InspectedOrphan,
+  looksHarnessProvisioned,
+  planOrphanSweep,
+} from "../domain/orphanSweep";
 import {
   refreshPendingStages,
   addMissingStages,
@@ -2645,8 +2649,14 @@ async function removeOrphanCommand(ctx: CommandContext, arg: unknown): Promise<v
  * already computes the answer, so this hands the operator that list rather than asking
  * anybody to re-derive it.
  *
- * Four rules, each load-bearing:
+ * Five rules, each load-bearing:
  *
+ * - **Nothing is removed that was not ticked.** The first version took everything the
+ *   orphan list offered, and that list is not a list of debris: an orphan is a worktree no
+ *   *task* matches, and a standing release or publish checkout matches no task by design.
+ *   It removed five `release-*` trees and a publish tree, twice, and CLAUDE.md says that
+ *   leaves the next publish nowhere to run. `looksHarnessProvisioned` decides what arrives
+ *   pre-ticked; everything else is listed, flagged, and left to a deliberate tick.
  * - **The list is recomputed here, never read off the row that was clicked.** A tree node
  *   is only as fresh as the last render, and this is the one command where acting on a
  *   stale list deletes the wrong directory.
@@ -2693,16 +2703,50 @@ async function removeAllOrphansCommand(ctx: CommandContext): Promise<void> {
     }),
   );
 
-  const { removable, kept } = planOrphanSweep(inspected);
+  const { removable: candidates, kept } = planOrphanSweep(inspected);
   const describe = (o: InspectedOrphan) => `${o.branch ?? "(detached)"} — ${o.path}`;
 
-  if (removable.length === 0) {
+  if (candidates.length === 0) {
     void vscode.window.showWarningMessage(
-      `All ${kept.length} untracked worktree(s) have uncommitted changes, so none were removed.`,
+      `All ${kept.length} untracked worktree(s) have uncommitted changes or an unreadable status, so none can be removed.`,
       { modal: true, detail: kept.map(describe).join("\n") },
     );
     return;
   }
+
+  // Chosen, never assumed. The first version of this removed everything the orphan list
+  // offered, which took five standing release checkouts and a publish tree with it — an
+  // orphan is only a worktree no task matches, and standing publish trees match no task
+  // by design. So the sweep now proposes: recognisably harness-provisioned worktrees come
+  // pre-ticked, everything else is listed and left for the operator to tick deliberately.
+  const parentDir = ctx.configuration.worktreeParentDir();
+  type OrphanPick = vscode.QuickPickItem & { orphan: InspectedOrphan };
+  const picks: OrphanPick[] = candidates.map((orphan) => {
+    const recognised = looksHarnessProvisioned(orphan.path, repositoryRoot, parentDir);
+    return {
+      orphan,
+      label: orphan.branch ?? "(detached)",
+      description: orphan.path,
+      detail: recognised
+        ? undefined
+        : "$(warning) Not a task worktree this extension created — it may be a standing release or publish checkout.",
+      picked: recognised,
+    };
+  });
+
+  const chosen = await vscode.window.showQuickPick(picks, {
+    canPickMany: true,
+    title: "Remove untracked worktrees",
+    placeHolder:
+      kept.length > 0
+        ? `${kept.length} with uncommitted changes are not listed. Branches are never deleted.`
+        : "Ticked items will be removed. Branches are never deleted.",
+    ignoreFocusOut: true,
+  });
+  // Escape means cancel, and an empty tick-list means the same: neither is a mandate to
+  // remove anything.
+  if (!chosen || chosen.length === 0) return;
+  const removable = chosen.map((pick) => pick.orphan);
 
   const remove = `Remove ${removable.length} worktree(s)`;
   const detail = [
