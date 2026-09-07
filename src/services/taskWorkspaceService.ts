@@ -119,6 +119,11 @@ export class TaskWorkspaceService {
       return err({ kind: "worktree", error: created.error });
     }
 
+    const baseCommit = await this.resolveBaseCommit(
+      created.value.path,
+      input.baseBranch,
+      signal,
+    );
     const now = this.clock.now();
     const task: TaskWorkspace = {
       id: this.clock.newId(),
@@ -128,6 +133,7 @@ export class TaskWorkspaceService {
       worktreePath: created.value.path,
       branchName: proposal.value.branchName,
       baseBranch: input.baseBranch,
+      ...(baseCommit ? { baseCommit } : {}),
       status: "ready",
       createdAt: now,
       updatedAt: now,
@@ -136,6 +142,31 @@ export class TaskWorkspaceService {
     await this.repository.save(task);
     this.logger.info(`Created task "${task.name}" on ${task.branchName}`);
     return ok(task);
+  }
+
+  /**
+   * The commit a branch was cut from, or undefined when git cannot say.
+   *
+   * Non-fatal by design. This is a fact recorded *for* later checks, not one anything
+   * about creating a task depends on, and `TaskWorkspace.baseCommit` is optional
+   * precisely so absence means "fall back to the old behaviour". Failing task creation
+   * because a merge-base could not be read would trade a degraded check for no task at
+   * all — the direction `WorktreeDiscardService` and the unmeasured-wait rule choose.
+   */
+  private async resolveBaseCommit(
+    worktreePath: string,
+    baseBranch: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const base = await this.status.getMergeBase(worktreePath, baseBranch, signal);
+    if (!base.ok || !base.value) {
+      this.logger.warn(
+        `Could not record the base commit for ${worktreePath} against ${baseBranch}. ` +
+          "Checks that enumerate this task's commits will fall back to scoping by name.",
+      );
+      return undefined;
+    }
+    return base.value;
   }
 
   /**
@@ -186,6 +217,11 @@ export class TaskWorkspaceService {
     );
     if (!created.ok) return err({ kind: "worktree", error: created.error });
 
+    const baseCommit = await this.resolveBaseCommit(
+      created.value.path,
+      input.baseBranch,
+      signal,
+    );
     const now = this.clock.now();
     const task: TaskWorkspace = {
       id: this.clock.newId(),
@@ -195,6 +231,7 @@ export class TaskWorkspaceService {
       worktreePath: created.value.path,
       branchName: input.branchName,
       baseBranch: input.baseBranch,
+      ...(baseCommit ? { baseCommit } : {}),
       status: "ready",
       createdAt: now,
       updatedAt: now,
@@ -224,6 +261,7 @@ export class TaskWorkspaceService {
       });
     }
 
+    const baseCommit = await this.resolveBaseCommit(worktreePath, options.baseBranch);
     const now = this.clock.now();
     const task: TaskWorkspace = {
       id: this.clock.newId(),
@@ -233,6 +271,7 @@ export class TaskWorkspaceService {
       worktreePath,
       branchName,
       baseBranch: options.baseBranch,
+      ...(baseCommit ? { baseCommit } : {}),
       status: "ready",
       createdAt: now,
       updatedAt: now,

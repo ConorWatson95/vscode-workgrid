@@ -30,6 +30,32 @@ describe("${repoRoot}", () => {
   });
 });
 
+describe("${baseCommit}", () => {
+  // The reason the field exists at all. `baseBranch` is a name, and once the branch is
+  // merged `rev-list <branch> ^DEV` is empty -- so without the fork commit a promotion
+  // check has no set to enumerate and falls back to scraping ticket keys out of commit
+  // subjects. Measured on NMGB-2533: the branch yields exactly its 12 commits, two of
+  // which carry no ticket in the subject and would have been scoped wrong.
+  it("lets a check enumerate the task's own commits", () => {
+    const result = substitutePlaceholders(
+      'git rev-list ${branch} ^${baseCommit}',
+      { ...VALUES, baseCommit: "7fe00c7e8" },
+    );
+    expect(result.command).toBe("git rev-list feature/NMGB-2792-ev-share ^7fe00c7e8");
+    expect(result.missing).toEqual([]);
+  });
+
+  // Blanking it would turn the enumeration into `rev-list <branch>`, which is the whole
+  // history -- a check demanding every commit in the repository be promoted. Left
+  // verbatim, the failure names its own cause, exactly as it does for ${ticket}.
+  it("is left verbatim on a task that predates it being recorded", () => {
+    const result = substitutePlaceholders("git rev-list ${branch} ^${baseCommit}", VALUES);
+    expect(result.command).toBe("git rev-list feature/NMGB-2792-ev-share ^${baseCommit}");
+    expect(result.missing).toEqual(["baseCommit"]);
+    expect(result.unknown).toEqual([]);
+  });
+});
+
 describe("substitutePlaceholders", () => {
   it("substitutes every known placeholder", () => {
     const result = substitutePlaceholders(

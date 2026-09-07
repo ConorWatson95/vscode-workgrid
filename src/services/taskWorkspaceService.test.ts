@@ -10,9 +10,17 @@ const noopLogger: Logger = {
   debug: () => {},
 };
 
-// adoptWorktree and proposeTask never touch git, so the git services can be
-// stubbed; only the repository is exercised here.
-function makeService(repo: InMemoryTaskRepository) {
+// The worktree service is still stubbed — nothing here creates one. The status
+// service is not: `adoptWorktree` and `createTaskFromBranch` now resolve the branch's
+// base commit, so a stub that answers nothing would silently exercise only the
+// fall-back path and assert the field into existence nowhere.
+function makeService(
+  repo: InMemoryTaskRepository,
+  mergeBase: { ok: true; value: string } | { ok: false; error: unknown } = {
+    ok: true,
+    value: "base0000",
+  },
+) {
   let counter = 0;
   const clock: ServiceClock = {
     now: () => "2026-07-22T00:00:00.000Z",
@@ -21,7 +29,7 @@ function makeService(repo: InMemoryTaskRepository) {
   return new TaskWorkspaceService(
     repo,
     {} as never,
-    {} as never,
+    { getMergeBase: async () => mergeBase } as never,
     noopLogger,
     clock,
   );
@@ -98,7 +106,7 @@ describe("createTaskFromBranch", () => {
     return new TaskWorkspaceService(
       repo,
       worktrees as never,
-      {} as never,
+      { getMergeBase: async () => ({ ok: true, value: "base0000" }) } as never,
       noopLogger,
       clock,
     );

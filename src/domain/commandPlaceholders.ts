@@ -29,6 +29,16 @@ export interface CommandPlaceholders {
   branch: string;
   /** What that branch was cut from. */
   baseBranch: string;
+  /**
+   * The commit it was cut from, or undefined on a task that predates it being recorded.
+   *
+   * Undefined is a real answer, exactly as it is for `ticket`, and for a sharper reason:
+   * a check enumerating this task's commits as `rev-list <branch> ^<baseCommit>` must
+   * not run with the placeholder blanked, because `rev-list <branch>` is the entire
+   * history and would demand every commit in the repository be promoted. `missing`
+   * keeps it verbatim so the failure names its own cause.
+   */
+  baseCommit?: string;
   /** Absolute path of the task's worktree. */
   worktreePath: string;
   /**
@@ -64,6 +74,7 @@ const KNOWN = [
   "worktreePath",
   "repoRoot",
   "ticket",
+  "baseCommit",
 ] as const;
 
 export interface Substitution {

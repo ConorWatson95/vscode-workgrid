@@ -48,6 +48,30 @@ export interface TaskWorkspace {
    */
   intendedBranch?: string;
   baseBranch: string;
+  /**
+   * The commit this task's branch was cut from, recorded once at creation.
+   *
+   * What it buys is an **authoritative commit set**: `rev-list <branch> ^<baseCommit>`
+   * is exactly this task's commits, at any later date, whoever authored them. Without
+   * it there is no such set — `baseBranch` is a *name*, and once the branch is merged
+   * `rev-list <branch> ^DEV` is empty, so a promotion check has nothing to enumerate and
+   * falls back to scraping ticket keys out of commit subjects across the base branch.
+   * That is the fragile half of every promotion check here, and it carries documented
+   * hacks for its own failure: a fix to the check itself, made while working a ticket,
+   * leads with that ticket's URL by convention and is indistinguishable from the work.
+   *
+   * **Recorded, never derived later.** The merge-base is the fork point only while the
+   * branch is unmerged — afterwards `merge-base(branch, base)` is the branch's own tip,
+   * which is why this cannot be backfilled onto tasks that predate it, and why absence
+   * has to mean "fall back" rather than "compute it now". A wrong value is worse than
+   * none: it would enumerate another ticket's commits and demand they be promoted.
+   *
+   * Resolved by merge-base rather than by reading the base branch's tip, so one
+   * operation is right for all three ways a task begins — for a freshly cut branch the
+   * merge-base *is* the base tip, while for an adopted branch or worktree, which
+   * already carries work, the tip would be wrong.
+   */
+  baseCommit?: string;
 
   status: TaskWorkspaceStatus;
   createdAt: string;

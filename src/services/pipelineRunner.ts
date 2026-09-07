@@ -540,6 +540,12 @@ export class PipelineRunner {
       taskName: task.name,
       branch: task.branchName,
       baseBranch: task.baseBranch,
+      // So a check can enumerate this task's own commits, as
+      // `rev-list <branch> ^<baseCommit>`, rather than inferring the set from commit
+      // subjects across the base branch. Undefined on a task created before it was
+      // recorded, which `missing` reports and leaves verbatim — a check that cannot
+      // enumerate must not run enumerating the whole history.
+      baseCommit: task.baseCommit,
       worktreePath: task.worktreePath,
       // So a check can name its own script from the root. The command runs with the
       // worktree as cwd, so a relative path runs the branch's copy — which is how a task
@@ -2322,6 +2328,7 @@ export class PipelineRunner {
           taskName: task.name,
           branch: task.branchName,
           baseBranch: task.baseBranch,
+          baseCommit: task.baseCommit,
           worktreePath: task.worktreePath,
           repoRoot: task.repositoryRoot,
           ticket: taskTicket(task),
