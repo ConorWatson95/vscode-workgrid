@@ -33,6 +33,7 @@ import {
   parseHandoff,
 } from "./handoff";
 import { buildCliArgs, commandForShell } from "./claudeCliArgs";
+import { killProcessTree } from "../utilities/processTree";
 import { redactSecrets } from "../domain/secretRedaction";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
@@ -359,7 +360,22 @@ export class ClaudeStreamSession {
   stop(): void {
     if (this.child && this.child.exitCode === null) {
       this.child.stdin.end();
-      this.child.kill();
+      // Not `child.kill()`. On Windows the CLI is spawned through a shell, so the
+      // direct child is a `cmd.exe` shim and killing it leaves the CLI running --
+      // which orphaned a live stage session on every stop, deactivate and compaction
+      // restart. Probed 7 Sep 2026; see `utilities/processTree`.
+      const pid = this.child.pid;
+      if (pid === undefined) {
+        this.child.kill();
+      } else {
+        try {
+          killProcessTree(pid);
+        } catch (error) {
+          // Already gone is the common case and not worth a warning; anything else
+          // must not stop a stop, which several paths call while unwinding.
+          this.logger.debug(`Could not terminate Claude session process ${pid}: ${error}`);
+        }
+      }
     }
     this.busy = false;
     this.setStatus("stopped");

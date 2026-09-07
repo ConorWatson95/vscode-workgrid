@@ -1,12 +1,21 @@
 /**
  * Which agent processes the harness started, and which of them it may reap.
  *
- * `AgentSessionManager` keeps its sessions in a `Map<taskId, ClaudeStreamSession>`
- * and `stop()` calls `child.kill()`, so stopping a task really does terminate its
- * process, and `dispose()` reaps every session when the extension deactivates
- * cleanly. What none of that survives is the extension host **crashing**: the map
- * goes with it, and a live stage session keeps running with no record of its pid, no
- * owner, and nothing that will ever kill it.
+ * `AgentSessionManager` keeps its sessions in a `Map<taskId, ClaudeStreamSession>`,
+ * `stop()` terminates the process tree and `dispose()` reaps every session when the
+ * extension deactivates cleanly. What none of that survives is the extension host
+ * **crashing**: the map goes with it, and a live stage session keeps running with no
+ * record of its pid, no owner, and nothing that will ever kill it.
+ *
+ * That first sentence read `stop()` calls `child.kill()`, so stopping a task really
+ * does terminate its process` until 7 Sep 2026, and it was false on Windows for as
+ * long as it stood. The CLI is spawned through a shell, so the direct child is a
+ * `cmd.exe` shim: `child.kill()` killed the shim and orphaned the CLI, on every stop,
+ * every clean deactivate and every compaction restart. Which also meant this
+ * registry's own sweep could not repair it — the record it holds is the shim's pid,
+ * so once the shim was dead the record was `forget`-ed as "no longer running" while
+ * the process it stood for lived on. See `utilities/processTree` for the probe and
+ * for the invariant that makes recording the shim sound.
  *
  * This module is the durable half. The registry records what was spawned; this
  * decides what to do with each record on the next activation, given what the OS says
@@ -43,7 +52,14 @@
 
 /** What the registry wrote when a session was spawned. */
 export interface SessionProcessRecord {
-  /** OS process id of the CLI we spawned. */
+  /**
+   * OS process id of what we spawned — on Windows the `cmd.exe` shim in front of the
+   * CLI, not the CLI itself.
+   *
+   * Sound because `cmd /c` waits for its child, so the shim's lifetime brackets the
+   * CLI's exactly — *provided every kill is a tree kill*, which is what
+   * `killProcessTree` exists to guarantee at both call sites.
+   */
   pid: number;
   /** The task the session belongs to. */
   taskId: string;
@@ -61,6 +77,33 @@ export interface SessionProcessRecord {
   stageName?: string;
   /** When the harness spawned it, by the harness's clock. */
   startedAt: string;
+  /**
+   * The repository whose window spawned it, normalised — the `worktreePath` rule.
+   *
+   * The registry lives under `globalStorageUri`, which is shared by *every* window on
+   * the machine and not only every window on one repository, while a sweep can only
+   * ask its own repository which subtasks are running. So without this a window on
+   * repository B reads repository A's records, finds their subtask ids in none of its
+   * own pipelines, and concludes they are orphans. That was survivable while a kill
+   * hit only a shell shim; the moment the kill started taking the tree it became a
+   * live stage session of somebody else's, terminated mid-turn.
+   *
+   * Not the near-miss this module was written from — those were processes we never
+   * recorded, and "only reap what we started" is the whole answer to that. These
+   * *are* ours. The record is right and the question the sweep asks about it is being
+   * answered by the wrong pipeline.
+   *
+   * Absent on a record written before this field existed, which is a `keep`: absence
+   * of measurement is not permission to act, the direction every other rule here
+   * takes. Such a record is cleared by its own window on `stop()` and forgotten once
+   * its process dies, so nothing accumulates.
+   */
+  repositoryRoot?: string;
+}
+
+/** The `worktreePath` reconciliation key, for the same reason: case and separators. */
+export function normalizeRepositoryRoot(root: string): string {
+  return root.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 /** What the OS says about one recorded pid. */
@@ -121,7 +164,9 @@ export function decideSessionProcesses(
   records: readonly SessionProcessRecord[],
   probes: readonly ProbedProcess[],
   activeSubtaskIds: ReadonlySet<string>,
+  repositoryRoot?: string,
 ): SessionProcessDecision[] {
+  const here = repositoryRoot ? normalizeRepositoryRoot(repositoryRoot) : undefined;
   const probeOf = new Map(probes.map((probe) => [probe.pid, probe]));
 
   return records.map((record) => {
@@ -146,6 +191,24 @@ export function decideSessionProcesses(
 
     if (!record.subtaskId) {
       return { record, action: "keep" as const, reason: "a hand-driven session, not a stage" };
+    }
+
+    // Checked before the subtask test, because that test is the one that gets the
+    // wrong answer: another repository's running subtask is absent from this one's
+    // pipelines for the same reason a finished one is.
+    if (here === undefined || record.repositoryRoot === undefined) {
+      return {
+        record,
+        action: "keep" as const,
+        reason: "cannot tell which repository this belongs to, so leaving it",
+      };
+    }
+    if (record.repositoryRoot !== here) {
+      return {
+        record,
+        action: "keep" as const,
+        reason: "belongs to a window open on another repository",
+      };
     }
 
     if (activeSubtaskIds.has(record.subtaskId)) {

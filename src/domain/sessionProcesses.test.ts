@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
-  decideSessionProcesses,
+  decideSessionProcesses as decideRaw,
   ProbedProcess,
   SessionProcessRecord,
   summariseSessionProcesses,
 } from "./sessionProcesses";
 
 const AT = "2026-08-26T10:00:00.000Z";
+const HERE = "C:/Dev/repo";
+
+/**
+ * Every production sweep has a repository — `extension.ts` returns early without one
+ * — so the default here matches the record factory, and the cases below read as they
+ * always did. The repository-scoping cases pass their own.
+ */
+const decideSessionProcesses = (
+  records: readonly SessionProcessRecord[],
+  probes: readonly ProbedProcess[],
+  activeSubtaskIds: ReadonlySet<string>,
+  root: string | undefined = HERE,
+) => decideRaw(records, probes, activeSubtaskIds, root);
 
 const record = (over: Partial<SessionProcessRecord> = {}): SessionProcessRecord => ({
   pid: 100,
@@ -14,6 +27,7 @@ const record = (over: Partial<SessionProcessRecord> = {}): SessionProcessRecord 
   subtaskId: "build-1",
   stageName: "Implement the data",
   startedAt: AT,
+  repositoryRoot: "c:/dev/repo",
   ...over,
 });
 
@@ -138,5 +152,51 @@ describe("summariseSessionProcesses", () => {
       active(),
     );
     expect(summariseSessionProcesses(decisions)).toContain("could not confirm");
+  });
+});
+
+describe("decideSessionProcesses across windows", () => {
+  it("leaves a process recorded by a window open on another repository", () => {
+    // The registry is machine-global, so this window reads that record; `active` can
+    // only come from this repository, so a subtask still running there looks finished.
+    const [decision] = decideSessionProcesses(
+      [record({ repositoryRoot: "c:/dev/other" })],
+      [probe()],
+      active(),
+    );
+    expect(decision.action).toBe("keep");
+    expect(decision.reason).toContain("another repository");
+  });
+
+  it("still kills its own repository's orphan despite case and separators", () => {
+    const [decision] = decideSessionProcesses([record()], [probe()], active(), "C:\\Dev\\Repo\\");
+    expect(decision.action).toBe("kill");
+  });
+
+  it("keeps a record written before the repository was stamped", () => {
+    const [decision] = decideSessionProcesses(
+      [record({ repositoryRoot: undefined })],
+      [probe()],
+      active(),
+    );
+    expect(decision.action).toBe("keep");
+    expect(decision.reason).toContain("which repository");
+  });
+
+  it("keeps everything when the sweeping window has no repository", () => {
+    // `decideRaw`, not the wrapper: passing `undefined` to a defaulted parameter
+    // takes the default, which is the arity this case exists to exercise. The
+    // production sweep returns early without a root, so this is belt and braces.
+    const [decision] = decideRaw([record()], [probe()], active());
+    expect(decision.action).toBe("keep");
+  });
+
+  it("forgets a dead process whichever repository owned it", () => {
+    const [decision] = decideSessionProcesses(
+      [record({ repositoryRoot: "c:/dev/other" })],
+      [probe({ alive: false })],
+      active(),
+    );
+    expect(decision.action).toBe("forget");
   });
 });

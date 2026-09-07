@@ -217,6 +217,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const agentProcesses = new SessionProcessRegistry({
     directory: vscode.Uri.joinPath(context.globalStorageUri, "agent-processes").fsPath,
     logger,
+    // Read lazily: the root is resolved after this is built. It scopes the sweep,
+    // whose `active` set can only ever come from this repository -- see
+    // `SessionProcessRecord.repositoryRoot`.
+    repositoryRoot: () => repositoryRoot,
   });
   const sessions = new AgentSessionManager(
     logger,

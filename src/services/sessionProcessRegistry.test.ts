@@ -42,6 +42,10 @@ describe("SessionProcessRegistry", () => {
       directory: dir,
       logger: log.logger,
       now: () => "2026-08-26T10:00:00.000Z",
+      // The registry is machine-global, so a record carries the repository whose
+      // window wrote it and the sweep only reaps its own — see
+      // `SessionProcessRecord.repositoryRoot`.
+      repositoryRoot: () => "C:/Dev/repo",
       kill: over.kill ?? ((pid) => killed.push(pid)),
       probe: over.probe ?? (async (pids) => pids.map((pid) => ({ pid, alive: true, osStartedAt: "2026-08-26T10:00:00.000Z" }))),
     });

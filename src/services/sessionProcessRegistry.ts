@@ -5,10 +5,12 @@ import * as path from "path";
 import { Logger } from "../logging/logger";
 import {
   decideSessionProcesses,
+  normalizeRepositoryRoot,
   ProbedProcess,
   SessionProcessRecord,
   summariseSessionProcesses,
 } from "../domain/sessionProcesses";
+import { killProcessTree } from "../utilities/processTree";
 
 /**
  * Durable record of the agent processes this machine started, and the activation
@@ -42,6 +44,12 @@ export interface SessionProcessRegistryOptions {
   probe?: (pids: readonly number[]) => Promise<ProbedProcess[]>;
   kill?: (pid: number) => void;
   now?: () => string;
+  /**
+   * The repository this window is open on, read lazily because it is resolved after
+   * activation has already built this. Stamped on each record and used to scope the
+   * sweep -- see `SessionProcessRecord.repositoryRoot`.
+   */
+  repositoryRoot?: () => string | undefined;
 }
 
 const FILE = "agent-processes.json";
@@ -60,8 +68,13 @@ export class SessionProcessRegistry {
       const records = await this.read();
       // Replace any record for the same pid: a recycled pid we spawned ourselves is
       // the current one, and two records for one pid would decide it twice.
+      const root = this.options.repositoryRoot?.();
       const next = records.filter((record) => record.pid !== entry.pid);
-      next.push({ ...entry, startedAt: at });
+      next.push({
+        ...entry,
+        startedAt: at,
+        ...(root ? { repositoryRoot: normalizeRepositoryRoot(root) } : {}),
+      });
       await this.write(next);
     } catch (error) {
       this.options.logger.warn(`Harness could not record agent process ${entry.pid}: ${error}`);
@@ -97,11 +110,16 @@ export class SessionProcessRegistry {
 
       const probe = this.options.probe ?? probeProcesses;
       const probes = await probe(records.map((record) => record.pid));
-      const decisions = decideSessionProcesses(records, probes, activeSubtaskIds);
+      const decisions = decideSessionProcesses(
+        records,
+        probes,
+        activeSubtaskIds,
+        this.options.repositoryRoot?.(),
+      );
 
       for (const decision of decisions.filter((d) => d.action === "kill")) {
         try {
-          (this.options.kill ?? killProcess)(decision.record.pid);
+          (this.options.kill ?? killProcessTree)(decision.record.pid);
           this.options.logger.warn(
             `Harness killed agent process ${decision.record.pid} ` +
               `(task ${decision.record.taskId}): ${decision.reason}`,
@@ -220,15 +238,4 @@ function windowsStartTimes(pids: readonly number[]): Promise<Map<number, string>
       resolve(found);
     }, 5_000).unref?.();
   });
-}
-
-function killProcess(pid: number): void {
-  if (process.platform === "win32") {
-    // The CLI spawns tool and subagent processes of its own, and `process.kill` on
-    // Windows terminates only the named process — so a stage that had delegated would
-    // leave its children behind. /T takes the tree.
-    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
-    return;
-  }
-  process.kill(pid, "SIGTERM");
 }
