@@ -363,6 +363,90 @@ describe("gate wait in the report", () => {
   });
 });
 
+describe("failures in the report", () => {
+  const failed = (over: Partial<TaskPipeline> = {}): TaskPipeline =>
+    ({
+      ...pipeline([stage()]),
+      failures: [
+        {
+          stageId: "sc-deploy-dev-preview",
+          stageName: "Preview the deployment",
+          subtaskId: "p-1",
+          at: "2026-09-07T10:00:00.000Z",
+          reason: "Verification failed (exit 2): 2 of 18 commits are not on origin/UAT.",
+          exitCode: 2,
+          round: 0,
+          disposition: "repaired",
+          dispositionAt: "2026-09-07T10:01:00.000Z",
+        },
+      ],
+      ...over,
+    }) as TaskPipeline;
+
+  it("gives the stage report a history of the failures it has had", () => {
+    const report = formatStageReport("NMGB-2814", stage(), failed());
+    expect(report).toContain("## How this stage has failed");
+    expect(report).toContain("**Attempt 1**");
+    expect(report).toContain("check exited 2");
+    expect(report).toContain("repaired the stage the route says owed it");
+  });
+
+  it("says nothing in a stage report about a stage that has not failed", () => {
+    expect(formatStageReport("NMGB-2814", stage(), pipeline([stage()]))).not.toContain(
+      "How this stage has failed",
+    );
+  });
+
+  it("keeps a long reason to a headline and says it abridged it", () => {
+    // Output that simply stops reads as the check having stopped.
+    const long = failed({
+      failures: [
+        {
+          stageId: "sc-deploy-dev-preview",
+          stageName: "Preview the deployment",
+          subtaskId: "p-1",
+          at: "2026-09-07T10:00:00.000Z",
+          reason: `Verification failed (exit 4): ${"a commit is missing. ".repeat(40)}`,
+          round: 1,
+          disposition: "reverted",
+        },
+      ],
+    } as Partial<TaskPipeline>);
+    const report = formatStageReport("NMGB-2814", stage(), long);
+    expect(report).toContain("**Attempt 2**");
+    expect(report).toContain(" …");
+    expect(report).not.toContain("a commit is missing. ".repeat(20));
+  });
+
+  it("puts the route's failure count in the task report", () => {
+    const report = formatTaskReport("NMGB-2814", failed());
+    expect(report).toContain("**Failures:** 1 — 1 repaired");
+  });
+
+  it("names failures nobody answered, which is a route that stopped", () => {
+    const report = formatTaskReport(
+      "NMGB-2814",
+      failed({
+        failures: [
+          {
+            stageId: "sc-deploy-dev-preview",
+            stageName: "Preview the deployment",
+            subtaskId: "p-1",
+            at: "2026-09-07T10:00:00.000Z",
+            reason: "exit 2",
+            round: 0,
+          },
+        ],
+      } as Partial<TaskPipeline>),
+    );
+    expect(report).toContain("1 never answered");
+  });
+
+  it("leaves the line off a route that has not failed", () => {
+    expect(formatTaskReport("NMGB-2814", pipeline([stage()]))).not.toContain("**Failures:**");
+  });
+});
+
 describe("formatTaskReport", () => {
   it("summarises stages that ran and merely lists those that have not", () => {
     // A report mostly made of "pending" hides the part worth reading.

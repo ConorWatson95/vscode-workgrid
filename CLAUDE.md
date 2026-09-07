@@ -1503,6 +1503,114 @@ Eleventh false stop of that family and the third to arrive through the *label*; 
 the rule the handoff already follows — a failed stage's conclusion is not a conclusion —
 applied per subtask, so the surviving rounds of a corrected stage keep their findings.
 
+### Every mechanism that answered a failure destroyed the record of it
+
+`TaskPipeline.failures` + `domain/failureHistory.ts`, 7 Sep 2026. The question was
+whether the runtime's repair loops converge — a stage that always needs two passes has a
+defect in its intent, one that re-fails identically has a defect in its signal, and those
+have opposite fixes. It is unanswerable, and the reason is the finding.
+
+Measured on `qubeautoapp`'s state file, 18 tasks, 16 pipelines, 352 stages:
+
+| | count |
+|---|---|
+| failed subtasks | **0** |
+| subtasks carrying a `failureReason` | **0** |
+| non-zero verification exit codes | **1** |
+| `retry` interventions | 14 |
+| discards recorded "re-run by hand" | 165 |
+
+So roughly 179 failures had happened and the reason for **none** of them survived.
+`failureReason` lives for exactly one instant: `retryStage` and `revertSubtask` both set
+it to `undefined`, `reopenAfter` discards the reply beside it, and `TaskStage.verification`
+is overwritten by the next run of the same check. Every mechanism that responds to a
+failure erases the evidence of it. The single surviving non-zero exit —
+`rc-uat-promote` exit 2, 19 Aug — survives only because that stage was never re-run, and
+it is the pre-fix RU-550 disease.
+
+**Exactly the erasure `TaskPipeline.discarded` was added for, one field over.** That
+ledger exists because re-opening a stage cleared `activity`, so every send-back also
+erased what the previous attempt had cost and a task sent back six times reported the
+price of its last attempt and looked calm. Nobody noticed the same hole beside it.
+
+Worth separating from the markers, which it superficially resembles. There the model
+asserts an outcome no parser can check. Here nothing was asserted and nothing misread:
+the fact was recorded correctly and then deliberately cleared by the code responding to
+it. **A record destroyed by the mechanism that acts on it is not a parsing problem, and
+no amount of instructing the model reaches it.**
+
+Rules, each load-bearing:
+
+- **One write site, because there is one origin.** Every failure reaches
+  `finishSubtask(..., "failed")` — a failing `verify` overrides `reply.ok` first, so it
+  arrives there too. A ledger appended from the four responders instead would be written
+  by none of the three that clear the reason first, and four sites are four chances to
+  forget one: `normalizePipeline` has already taught this codebase what a single
+  forgotten field costs.
+- **The disposition is patched in, and absence means undecided rather than none.** A
+  stage that failed and was walked away from is the row most worth finding, so it must
+  not be defaulted into looking answered. The rule an unmeasured wait already follows.
+- **`"held"` is deliberately not a disposition.** `recordStageBlocked` has many callers
+  with no failed run behind them — a `BLOCKED` marker, a declined correction,
+  `stageProductivity` — so patching there would attribute a marker hold to a failure it
+  never touched.
+- **The transient path appends its own entry with the disposition already set.** It
+  *reverts* the subtask rather than failing it, so `finishSubtask` never runs and there
+  is nothing to patch. "Reverted, never judged" is right about the stage and wrong as a
+  reason to keep no record: an outage that burned a whole retry budget is the only thing
+  `transientRetryAttempts` can be tuned against.
+- **`round` is derived at write time from the subtasks.** A counter on the pipeline would
+  be a second source of truth for a fact they already carry, and one `retryStage`
+  invalidates every time it empties a splittable stage.
+- **`exitCode` keeps a failing check apart from a dead session.** Both arrive as
+  `ok: false`; one is evidence about the work and the other about the transport, and the
+  convergence question is meaningless if they are summed.
+- **A revert answers every undecided failure on a stage it re-opens**, not just the
+  target's — the failure prompting a revert is routinely on a *later* stage, which is
+  what makes a revert expensive.
+- **A revert never prunes the ledger.** `dropRepairs` clears repairs because they are
+  predicated on output that moved; a failure is predicated on nothing. It happened.
+
+**And `retryStage` now carries the reason forward.** `checkFailureRepair` concedes what
+the cold re-open costs in its own header — *"the re-run reaches the same exit code for
+the same reasons"* — which is a retry rather than a loop, with the operator as the only
+thing carrying the failure across. Filed as **stage-scoped guidance**, for the reason
+the re-run reason already gives: guidance is cumulative, handed to the stage and stated
+in the prompt to outrank the brief, so a second channel with the same meaning is one the
+prompts cannot rank against the first. The note is *narrowing*, like `correctionPrompt` —
+a failure is a thing to get past, not an invitation to re-approach the stage. And it
+carries the **latest** failure, not the first: a stage that failed, was corrected and
+failed again holds two reasons, and handing the new run an account of a version already
+repaired is the failure `guidanceFor`'s scoping exists to prevent one level up. That one
+was caught by a test rather than by reading, which is the argument for writing them.
+
+**Rendered, because a ledger nothing renders is one nobody re-reads** — which is the
+mistake `discarded` made for three weeks after it was added, and the reason this
+measurement had to be taken by hand against the state file. `formatFailureLine` sits
+under the churn lines in the whole-task report, since those say money was thrown away and
+neither says whether the route is *failing*; the unanswered count is stated separately
+and last. `formatStageReport` gains **How this stage has failed**, listing only the
+*answered* entries — the complement is exact rather than convenient, since every
+responder that records a disposition also clears the subtask's reason, so an undecided
+entry is the live failure the report already shows under "Failed". A long reason is
+headlined through `deferralHeadline` and the abridgement announced, the rule truncated
+output follows.
+
+**Nothing here is retrospective, and it must not pretend otherwise.** The 179 failures
+already gone stay gone; the ledger is worth exactly what fails after it shipped. Which
+also means the convergence question stays open — this makes it askable, and answers it
+in a few weeks.
+
+**Found on the way, and not fixed here:** the discard ledger has lost about a third of
+itself. 2 Sep measured 17 pipelines / 353 entries / $570; on 7 Sep it reads 16 / 252 /
+$306, and `state.json.bak-before-task-restore` from that morning held 9 tasks and 79
+entries — so the restore recovered most but not all. The primary waste metric is missing
+~100 entries and ~$264, which is worth knowing before anyone reads a trend off it.
+
+Coverage measured at the same time, for the record: **39 of 248 passed stages are backed
+by a process exit code**, 16%. Every stage that declared a check has a record of it
+running, so nothing is silently skipping; the other 209 declare none.
+
 ### Two ways a stopped stage looked like a running one
 
 Both found on 24 Aug 2026, from one failure: `winget upgrade --all` moved Claude Code from

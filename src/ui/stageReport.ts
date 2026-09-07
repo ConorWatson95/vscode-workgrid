@@ -21,6 +21,12 @@ import {
 import { correctionCost } from "../domain/correctionCost";
 import { roundHeading, stageRounds, summariseStageHistory } from "../domain/stageHistory";
 import { hasGateWait, summariseGateWait } from "../domain/gateWait";
+import {
+  answeredFailures,
+  describeDisposition,
+  summariseFailures,
+} from "../domain/failureHistory";
+import { deferralHeadline, isAbridged } from "../domain/deferralText";
 
 /**
  * Renders what a stage did, as markdown, for a read-only document.
@@ -266,6 +272,39 @@ export function formatCorrectionCostLine(pipeline: TaskPipeline): string | undef
   );
 }
 
+/**
+ * How often this route has failed, and what was done about it.
+ *
+ * Under the churn lines because it answers what they cannot: `discarded` says money was
+ * thrown away and `correctionCost` says how much of that was collateral, and neither
+ * says whether the route is *failing*. A repair that worked and a stage abandoned at a
+ * red check are the same absence in both of those figures.
+ *
+ * The unanswered count is stated separately and last, which is the whole reason this
+ * line exists rather than a total: a failure nobody responded to is a route that
+ * stopped, and until the ledger shipped a report had no way to say so.
+ */
+export function formatFailureLine(pipeline: TaskPipeline): string | undefined {
+  const summary = summariseFailures(pipeline);
+  if (!summary) return undefined;
+
+  const answered = summary.answered
+    .map((entry) => `${entry.times} ${entry.disposition}`)
+    .join(", ");
+  const worst = summary.worst
+    .map((entry) => `${entry.stageName} ×${entry.times}`)
+    .join(", ");
+
+  return (
+    `**Failures:** ${summary.total}` +
+    (answered ? ` — ${answered}` : "") +
+    (summary.unanswered > 0
+      ? `${answered ? " ·" : " —"} ${summary.unanswered} never answered`
+      : "") +
+    (worst ? ` · ${worst}` : "")
+  );
+}
+
 /** One stage's report. */
 /**
  * Hard ceiling on a rendered report, in characters.
@@ -396,6 +435,31 @@ export function formatStageReport(
       );
     }
     lines.push("", "_What it did before failing is below._");
+  }
+
+  // Every failure this stage has already had an answer to. Distinct from the block
+  // above, which is the failure standing *now*: a responder that records a disposition
+  // also clears the subtask's own reason, so these are precisely the runs whose account
+  // exists nowhere else. Which is the point — a reader looking at a stage on its fourth
+  // attempt could previously see that it had been repaired three times and not what any
+  // of it was for, the gap `stageHistory` closes for corrections and this closes for
+  // the failures that caused them.
+  const answered = answeredFailures(pipeline, stage);
+  if (answered.length > 0) {
+    lines.push("", "## How this stage has failed", "");
+    for (const entry of answered) {
+      const reason = redactSecrets(entry.reason);
+      const headline = deferralHeadline(reason, 200);
+      lines.push(
+        `- **Attempt ${entry.round + 1}**` +
+          (entry.exitCode !== undefined ? ` · check exited ${entry.exitCode}` : "") +
+          `: ${headline}` +
+          // Said, not silent: a reason that simply stops reads as the check having
+          // stopped, the rule truncated command output already follows.
+          (isAbridged(reason, 200) ? " …" : "") +
+          `  \n  → ${describeDisposition(entry.disposition!)}`,
+      );
+    }
   }
 
   if (stage.subtasks.length === 0) {
@@ -765,6 +829,10 @@ export function formatTaskReport(
   // rather than just alarming.
   const collateral = formatCorrectionCostLine(pipeline);
   if (collateral) parts.push("", collateral);
+  // Under both, because the churn lines say money was thrown away and neither says
+  // whether the route is failing — and an unanswered failure is a route that stopped.
+  const failing = formatFailureLine(pipeline);
+  if (failing) parts.push("", failing);
   // The proportion, which no per-stage line can give: "how much of this route
   // actually proved anything?" Omitted entirely when the answer is "all of it",
   // because a reassurance printed every time stops being read.
