@@ -2,6 +2,42 @@
 
 All notable changes to Task Workspaces are documented here.
 
+## 0.121.0
+
+The runtime kept no record of any failure, which was found while trying to answer whether
+its repair loops converge.
+
+- **`TaskPipeline.failures`** — every failure, and what was done about it. Measured on a
+  real state file: **0** failed subtasks and **0** failure reasons across 352 stages,
+  against 14 retry interventions and 165 discards reading "re-run by hand". Roughly 179
+  failures had happened and the reason for none of them survived, because `failureReason`
+  lives for one instant and every mechanism that responds to a failure clears it —
+  `retryStage` and `revertSubtask` both blank it, `reopenAfter` discards the reply beside
+  it, and a stage's `verification` is overwritten by the next run of the same check.
+  Exactly the erasure `discarded` was added for, one field over.
+
+  Written from `finishSubtask` alone, since that is the only place a failure is judged.
+  The disposition — repaired, retried, reverted, transient — is patched in by whichever
+  responder ran, and a failure nobody answered keeps none, which is deliberately
+  distinguishable: a stage that failed and was walked away from is the row most worth
+  finding. A check's exit code is kept apart from a dead session, because one is evidence
+  about the work and the other about the transport.
+
+- **A retry carries the failure forward.** `retryStage` re-opened cold, so the re-run
+  reached the same exit code for the same reasons — a retry rather than a loop, with the
+  operator as the only thing carrying the failure across. The reason is now filed as
+  stage-scoped guidance, narrowing rather than inviting a fresh approach, and it is the
+  *latest* failure: a stage corrected between two failures would otherwise hand its new
+  run an account of a version already repaired.
+
+- **Both reports show it.** A failure count with the unanswered ones named separately in
+  the whole-task report, under the re-run cost lines — those say money was thrown away and
+  neither says whether the route is failing. Per stage, **How this stage has failed**: what
+  each attempt reported and what was done about it, which is the gap stage history already
+  closes for corrections.
+
+Nothing here is retrospective. The ledger is worth exactly what fails after it ships.
+
 ## 0.117.1
 
 Runtime hardening against Claude Code releases up to 2.1.258. No architectural change —
