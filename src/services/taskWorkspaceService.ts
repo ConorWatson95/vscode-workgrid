@@ -13,6 +13,12 @@ import { Result, ok, err } from "../utilities/result";
 import { buildBranchName, slugify } from "../utilities/branchName";
 import { buildWorktreePath } from "../utilities/pathUtilities";
 import {
+  BranchCreation,
+  BaseCommitRefusal,
+  mayRecordBaseCommit,
+  parseBranchCreation,
+} from "../domain/baseCommitProposal";
+import {
   reconcileTasks,
   ReconciliationResult,
 } from "./taskReconciliationService";
@@ -30,6 +36,29 @@ export interface ServiceClock {
 export const defaultClock: ServiceClock = {
   now: () => new Date().toISOString(),
   newId: () => randomUUID(),
+};
+
+/** A recoverable base commit, with the commit set it would establish. */
+export interface BaseCommitProposal extends BranchCreation {
+  /** Commits the branch carries since it, newest first. For the operator to eyeball. */
+  subjects: string[];
+}
+
+/**
+ * Why a base commit was not recorded, said in the terms of the remedy.
+ *
+ * Each names what to do rather than what was wrong, because every one of these reaches
+ * a person standing at a dialog with the task in front of them.
+ */
+const BASE_COMMIT_REFUSALS: Record<BaseCommitRefusal, (branch: string) => string> = {
+  "already-recorded":
+    () =>
+      "This task already records a base commit. Changing it would silently re-scope " +
+      "every check that enumerates the task's commits, so it is not done from here.",
+  "not-in-reflog": () => "No commit was given, and the reflog proposed none.",
+  "not-an-ancestor": (branch) =>
+    `That commit is not on ${branch}. Recording it would make a check enumerating ` +
+    "this task's commits return the branch's entire history instead.",
 };
 
 export interface ProposeTaskInput {
@@ -279,6 +308,83 @@ export class TaskWorkspaceService {
     await this.repository.save(task);
     this.logger.info(`Adopted worktree "${worktreePath}" as task "${task.name}".`);
     return ok(task);
+  }
+
+  /**
+   * What the reflog says this task's branch was cut from, and what that would enumerate.
+   *
+   * For tasks recorded before `baseCommit` was kept. Returns the commits the proposal
+   * yields as well as the commit itself, because a hash is unreadable and the *set* is
+   * the thing being agreed to — on NMGB-2533 that is what made it checkable by eye:
+   * twelve commits, all plainly the task's own.
+   */
+  async proposeBaseCommit(
+    task: TaskWorkspace,
+    signal?: AbortSignal,
+  ): Promise<Result<BaseCommitProposal, ServiceError>> {
+    if (task.baseCommit) {
+      return err({ kind: "validation", message: "This task already records a base commit." });
+    }
+    const branch = task.intendedBranch ?? task.branchName;
+    const reflog = await this.status.getBranchReflog(task.worktreePath, branch, signal);
+    const creation = parseBranchCreation(reflog);
+    if (!creation) {
+      return err({
+        kind: "validation",
+        message:
+          `The reflog for ${branch} does not say where it was cut from. Reflogs are ` +
+          "local to a clone and expire, so this is an ordinary answer on an older " +
+          "branch — the commit can still be entered by hand.",
+      });
+    }
+    const subjects = await this.status.getCommitSubjectsSince(
+      task.worktreePath,
+      branch,
+      creation.commit,
+      signal,
+    );
+    return ok({
+      ...creation,
+      subjects: subjects.ok ? subjects.value : [],
+    });
+  }
+
+  /**
+   * Records the commit this task's branch was cut from.
+   *
+   * Refuses to overwrite one already recorded, the rule origin linking follows: a task
+   * quietly moved from one base to another is a change nobody could see afterwards. And
+   * refuses a commit that is not an ancestor of the branch, which is the check that
+   * makes a typo harmless — `rev-list <branch> ^<non-ancestor>` does not fail, it
+   * returns the whole history.
+   */
+  async recordBaseCommit(
+    task: TaskWorkspace,
+    commit: string,
+    signal?: AbortSignal,
+  ): Promise<Result<TaskWorkspace, ServiceError>> {
+    const candidate = commit.trim();
+    const branch = task.intendedBranch ?? task.branchName;
+    const ancestor = candidate
+      ? await this.status.isAncestor(task.worktreePath, candidate, branch, signal)
+      : false;
+    const refusal = mayRecordBaseCommit({
+      existing: task.baseCommit,
+      candidate,
+      ancestor,
+    });
+    if (refusal) {
+      return err({ kind: "validation", message: BASE_COMMIT_REFUSALS[refusal](branch) });
+    }
+
+    const updated: TaskWorkspace = {
+      ...task,
+      baseCommit: candidate,
+      updatedAt: this.clock.now(),
+    };
+    await this.repository.save(updated);
+    this.logger.info(`Recorded base commit ${candidate} for task "${task.name}".`);
+    return ok(updated);
   }
 
   /** Loads tasks for a repository, reconciling against live git worktrees. */

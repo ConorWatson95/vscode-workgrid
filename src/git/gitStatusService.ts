@@ -65,6 +65,84 @@ export class GitStatusService {
     return ok(Number.isFinite(n) ? n : 0);
   }
 
+  /**
+   * The branch's reflog, newest entry first, as `<full sha><tab><reflog subject>`.
+   *
+   * For recovering the commit a branch was cut from on a task recorded before that was
+   * kept — see `domain/baseCommitProposal.ts` for why no other source answers it. Read
+   * raw and parsed in the domain, so the shape is testable without a repository.
+   *
+   * A branch with no reflog makes git print usage text and exit non-zero; that is an
+   * ordinary answer here rather than a failure, because "the reflog does not say" is
+   * exactly what the caller is asking about. The parser matches nothing in it.
+   */
+  async getBranchReflog(
+    worktreePath: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const result = await this.git.run(
+      ["reflog", "show", "--format=%H%x09%gs", branch],
+      { cwd: worktreePath, signal },
+    );
+    return result.ok ? result.value.stdout : "";
+  }
+
+  /**
+   * Whether `commit` is an ancestor of `branch`.
+   *
+   * The check that makes a stale or mistyped base commit harmless. `rev-list <branch>
+   * ^<commit>` against a commit that is not on the branch does not fail — it returns
+   * the branch's entire history, so a check meant to enumerate one task's commits would
+   * demand every commit in the repository be promoted.
+   *
+   * A failure to run is reported as *not* an ancestor. The caller uses this to decide
+   * whether recording is allowed, and the safe direction is to withhold: an unrecorded
+   * base commit falls back to existing behaviour, while a wrongly recorded one is
+   * silently wrong forever.
+   */
+  async isAncestor(
+    worktreePath: string,
+    commit: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const result = await this.git.run(
+      ["merge-base", "--is-ancestor", commit, branch],
+      { cwd: worktreePath, signal },
+    );
+    return result.ok;
+  }
+
+  /**
+   * Subjects of the commits `branch` carries since `commit`, newest first.
+   *
+   * Shown to the operator before a base commit is recorded, because the commit hash
+   * itself is unreadable and the *set it yields* is the thing being agreed to. On
+   * NMGB-2533 this is what made the proposal checkable by eye: twelve commits, all
+   * plainly the task's own.
+   */
+  async getCommitSubjectsSince(
+    worktreePath: string,
+    branch: string,
+    commit: string,
+    signal?: AbortSignal,
+  ): Promise<Result<string[], GitError>> {
+    const result = await this.git.run(
+      ["log", "--format=%h %s", `${branch}`, `^${commit}`],
+      { cwd: worktreePath, signal },
+    );
+    if (!result.ok) return result;
+    return ok(
+      result.value.stdout
+        // Split on newlines and trim rather than matching CRLF here: git's line
+        // ending varies by platform and the trim below settles it either way.
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  }
+
   async getDiffSummary(
     worktreePath: string,
     baseBranch: string,

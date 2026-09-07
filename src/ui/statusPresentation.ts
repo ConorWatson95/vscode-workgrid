@@ -112,6 +112,8 @@ export function buildContextValue(
   hasChecklist = false,
   /** True when the task records which suggestion it is for. */
   linkedToSuggestion = false,
+  /** True when the task records the commit its branch was cut from. */
+  baseCommitRecorded = false,
 ): string {
   const tokens = ["task"];
   const { startable, stoppable } = agentControls(agentStatus);
@@ -138,5 +140,9 @@ export function buildContextValue(
   // Only when there is a link to break. An "Unlink" on an unlinked task is a menu entry
   // that does nothing, and this is also what tells the two states apart on the row.
   if (linkedToSuggestion) tokens.push("linkedToSuggestion");
+  // The inverse of the rule above, and for the same reason. Recording a base commit is
+  // offered only where there is none, because it cannot be changed once set — a task
+  // quietly re-based would silently re-scope every check that enumerates its commits.
+  if (baseCommitRecorded) tokens.push("baseCommitRecorded");
   return tokens.join(" ");
 }

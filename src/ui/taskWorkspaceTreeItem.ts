@@ -105,6 +105,7 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
       denied > 0,
       outstanding > 0,
       task.origin !== undefined,
+      task.baseCommit !== undefined,
     );
 
     const descriptionParts = [statusLabel];

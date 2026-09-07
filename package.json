@@ -222,6 +222,12 @@
         "icon": "$(tag)"
       },
       {
+        "command": "taskWorkspaces.recordBaseCommit",
+        "title": "Record Base Commit…",
+        "category": "Task Workspaces",
+        "icon": "$(git-commit)"
+      },
+      {
         "command": "taskWorkspaces.setReferences",
         "title": "Governing Documents…",
         "category": "Task Workspaces",
@@ -472,6 +478,11 @@
           "command": "taskWorkspaces.setTicketReference",
           "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/ && !(viewItem =~ /linkedToSuggestion/)",
           "group": "9_link@0"
+        },
+        {
+          "command": "taskWorkspaces.recordBaseCommit",
+          "when": "view == taskWorkspaces.tree && viewItem =~ /(^|\\s)task(\\s|$)/ && !(viewItem =~ /baseCommitRecorded/)",
+          "group": "9_link@1"
         },
         {
           "command": "taskWorkspaces.setReferences",

@@ -5,6 +5,7 @@ import {
   isDeclaredRepair,
 } from "../domain/checkFailureRepair";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
+import { recordBaseCommitCommand } from "./recordBaseCommitCommand";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
 import {
@@ -133,6 +134,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       linkSuggestionToTaskCommand(ctx, arg),
     ),
     register("taskWorkspaces.unlinkTaskOrigin", (arg) => unlinkTaskOriginCommand(ctx, arg)),
+    register("taskWorkspaces.recordBaseCommit", (arg) =>
+      recordBaseCommitCommand(ctx, arg),
+    ),
     register("taskWorkspaces.setTicketReference", (arg) =>
       setTicketReferenceCommand(ctx, arg),
     ),
