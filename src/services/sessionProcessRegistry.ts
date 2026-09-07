@@ -56,40 +56,73 @@ const FILE = "agent-processes.json";
 
 export class SessionProcessRegistry {
   private readonly file: string;
+  /**
+   * Serialises every mutation, because they were losing each other.
+   *
+   * Read-modify-write with no ordering is the defect `nodeStateFileIo` was written to
+   * avoid, and this had it: `record()` is fire-and-forget from `create()`, so two
+   * stage sessions starting close together both read the same array and the second
+   * write dropped the first. The sweep was worse — it read, then probed the OS for up
+   * to five seconds, then wrote back what it had decided to keep, erasing every record
+   * written during the probe.
+   *
+   * Measured 7 Sep 2026: **four live stage sessions, one record.** So the durable
+   * backstop had nothing to act on for three of them, which is indistinguishable from
+   * the sweep being switched off.
+   */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: SessionProcessRegistryOptions) {
     this.file = path.join(options.directory, FILE);
   }
 
+  /**
+   * Read-modify-write, one at a time.
+   *
+   * `change` sees whatever is on disk at its turn, never a value read earlier — which
+   * is the whole point: a caller holding a stale array is how records went missing.
+   */
+  private mutate(
+    change: (records: SessionProcessRecord[]) => SessionProcessRecord[],
+    describe: string,
+  ): Promise<void> {
+    const run = this.queue.then(async () => {
+      try {
+        await this.write(change(await this.read()));
+      } catch (error) {
+        this.options.logger.warn(`Harness could not ${describe}: ${error}`);
+      }
+    });
+    // The chain must never reject, or every later mutation is skipped.
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
   /** Records a spawned session. Never throws: losing a record must not fail a stage. */
   async record(entry: Omit<SessionProcessRecord, "startedAt">): Promise<void> {
-    try {
-      const at = this.options.now?.() ?? new Date().toISOString();
-      const records = await this.read();
-      // Replace any record for the same pid: a recycled pid we spawned ourselves is
-      // the current one, and two records for one pid would decide it twice.
-      const root = this.options.repositoryRoot?.();
-      const next = records.filter((record) => record.pid !== entry.pid);
-      next.push({
-        ...entry,
-        startedAt: at,
-        ...(root ? { repositoryRoot: normalizeRepositoryRoot(root) } : {}),
-      });
-      await this.write(next);
-    } catch (error) {
-      this.options.logger.warn(`Harness could not record agent process ${entry.pid}: ${error}`);
-    }
+    const at = this.options.now?.() ?? new Date().toISOString();
+    const root = this.options.repositoryRoot?.();
+    await this.mutate(
+      (records) => [
+        // Replace any record for the same pid: a recycled pid we spawned ourselves is
+        // the current one, and two records for one pid would decide it twice.
+        ...records.filter((record) => record.pid !== entry.pid),
+        {
+          ...entry,
+          startedAt: at,
+          ...(root ? { repositoryRoot: normalizeRepositoryRoot(root) } : {}),
+        },
+      ],
+      `record agent process ${entry.pid}`,
+    );
   }
 
   /** Drops a record once its process has been stopped cleanly. */
   async forget(pid: number): Promise<void> {
-    try {
-      const records = await this.read();
-      const next = records.filter((record) => record.pid !== pid);
-      if (next.length !== records.length) await this.write(next);
-    } catch (error) {
-      this.options.logger.warn(`Harness could not clear agent process ${pid}: ${error}`);
-    }
+    await this.mutate(
+      (records) => records.filter((record) => record.pid !== pid),
+      `clear agent process ${pid}`,
+    );
   }
 
   /**
@@ -132,10 +165,19 @@ export class SessionProcessRegistry {
       }
 
       // Killed and forgotten records both leave; kept ones stay for the next sweep.
-      const kept = decisions
-        .filter((decision) => decision.action === "keep")
-        .map((decision) => decision.record);
-      await this.write(kept);
+      //
+      // Expressed as a filter over what is on disk *now*, not as a write of the kept
+      // list: the probe above can take five seconds, and a session spawned during it
+      // has a record this sweep has never seen. Writing the decided list would erase
+      // it — a live stage session made unreapable by the very sweep that exists to
+      // reap it.
+      const gone = new Set(
+        decisions.filter((decision) => decision.action !== "keep").map((d) => d.record.pid),
+      );
+      await this.mutate(
+        (records) => records.filter((record) => !gone.has(record.pid)),
+        "update the agent process registry",
+      );
 
       const summary = summariseSessionProcesses(decisions);
       if (summary) this.options.logger.info(`Harness ${summary}.`);
@@ -165,7 +207,13 @@ export class SessionProcessRegistry {
 
   private async write(records: readonly SessionProcessRecord[]): Promise<void> {
     await fs.mkdir(this.options.directory, { recursive: true });
-    await fs.writeFile(this.file, JSON.stringify(records, null, 2), "utf8");
+    // Temp plus rename, the rule `nodeStateFileIo` follows: the point of the record is
+    // to survive a process that did not get to flush anything, and a host that dies
+    // mid-`writeFile` leaves a truncated array that `read()` discards entirely — which
+    // loses every live session at once, in exactly the crash this exists to cover.
+    const temp = `${this.file}.${process.pid}.tmp`;
+    await fs.writeFile(temp, JSON.stringify(records, null, 2), "utf8");
+    await fs.rename(temp, this.file);
   }
 }
 

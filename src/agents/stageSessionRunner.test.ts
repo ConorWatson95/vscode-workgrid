@@ -321,7 +321,10 @@ describe("required MCP servers", () => {
     sessions.session.settle("waiting");
 
     expect((await promise).ok).toBe(true);
-    expect(sessions.stopped).toEqual([]);
+    // A subtask that finishes releases its session. It used to live until the next
+    // `create()` reaped it, which leaks at every point a route stops -- there is no
+    // next create at a gate, a hold or the last subtask of a run.
+    expect(sessions.stopped).toEqual(["t1"]);
   });
 
   /**
@@ -401,6 +404,9 @@ describe("required MCP servers", () => {
     sessions.session.settle("waiting");
 
     expect((await promise).ok).toBe(true);
-    expect(sessions.stopped).toEqual([]);
+    // A subtask that finishes releases its session. It used to live until the next
+    // `create()` reaped it, which leaks at every point a route stops -- there is no
+    // next create at a gate, a hold or the last subtask of a run.
+    expect(sessions.stopped).toEqual(["t1"]);
   });
 });

@@ -161,4 +161,47 @@ describe("SessionProcessRegistry", () => {
     await registry.sweep(new Set(["new"]));
     expect(killed).toEqual([]);
   });
+
+  it("keeps both of two sessions recorded at once", async () => {
+    const { registry } = make();
+    // `create()` fires these off without awaiting, so they routinely overlap. Both
+    // used to read the same array and the second write dropped the first — measured
+    // as four live stage sessions against one record.
+    await Promise.all([
+      registry.record({ pid: 11, taskId: "t1", subtaskId: "a" }),
+      registry.record({ pid: 12, taskId: "t2", subtaskId: "b" }),
+    ]);
+    const written = JSON.parse(
+      await fs.readFile(path.join(dir, "agent-processes.json"), "utf8"),
+    ) as { pid: number }[];
+    expect(written.map((r) => r.pid).sort()).toEqual([11, 12]);
+  });
+
+  it("does not erase a session recorded while the sweep was probing", async () => {
+    let releaseProbe: () => void = () => undefined;
+    const probing = new Promise<void>((r) => {
+      releaseProbe = r;
+    });
+    const { registry, killed } = make({
+      probe: async (pids) => {
+        await probing;
+        return pids.map((pid) => ({ pid, alive: true, osStartedAt: "2026-08-26T10:00:00.000Z" }));
+      },
+    });
+    await registry.record({ pid: 21, taskId: "t1", subtaskId: "gone" });
+
+    const swept = registry.sweep(new Set());
+    // A real probe is a PowerShell spawn taking seconds; a session spawned inside that
+    // window has a record the sweep has never seen, and writing back its decided list
+    // erased it — leaving a live stage session no later sweep could ever reap.
+    await registry.record({ pid: 22, taskId: "t2", subtaskId: "started-meanwhile" });
+    releaseProbe();
+    await swept;
+
+    const written = JSON.parse(
+      await fs.readFile(path.join(dir, "agent-processes.json"), "utf8"),
+    ) as { pid: number }[];
+    expect(killed).toEqual([21]);
+    expect(written.map((r) => r.pid)).toEqual([22]);
+  });
 });

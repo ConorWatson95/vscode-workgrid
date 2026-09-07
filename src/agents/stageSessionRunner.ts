@@ -257,6 +257,20 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
         // The CLI has gone, so anything still holding is holding for nothing —
         // and a row the user could click but never satisfy is worse than none.
         const unanswered = gateSession ? (this.gate?.release(task.id) ?? 0) : 0;
+        // And now make that first sentence true, which it was not on the normal path.
+        // Nothing stopped a session that *finished*: `stop()` was called only on the
+        // timeout and MCP-readiness aborts, and otherwise the process lived until the
+        // next subtask's `create()` reaped it. Fine mid-stage, and a leak at exactly
+        // the moments a route stops — a gate, a hold, a failure, the last subtask of a
+        // run — because there is no next `create()` to do it. Measured 7 Sep 2026:
+        // four resident stage sessions against zero active subtasks, one of them idle
+        // for four hours, each holding an MCP server and a grandchild of its own.
+        //
+        // Safe because a subtask is a fresh session by construction: `create()` stops
+        // any existing one precisely so nothing is carried over, so releasing it here
+        // rather than there reuses nothing. Last, so `release` and the failure log
+        // still see the session they are describing.
+        this.sessions.stop(task.id);
         // A question outstanding at session end was never answered by anyone: the CLI's
         // tool timeout fired, and the agent carried on having answered itself. Nothing
         // downstream can see that — the reply parses, the session exited tidily, and
@@ -320,7 +334,8 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           `Harness [${task.name}] ${label} hit the ${minutes}-minute limit; stopping it. ` +
             `Raise taskWorkspaces.stageTimeoutMinutes if stages here legitimately take longer.`,
         );
-        this.sessions.stop(task.id);
+        // `finish` stops the session -- one site, so no path can be added that
+        // leaves a process behind.
         // Keep whatever it produced. The stage still fails — an interrupted
         // stage has not done its job — but discarding the reply threw away tens
         // of minutes of investigation and left nothing to diagnose from.
@@ -400,7 +415,6 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           `Harness [${task.name}] ${label} cannot start: ${readiness.reason}. ` +
             "Check the project's MCP config and the route's requiredMcpServers.",
         );
-        this.sessions.stop(task.id);
         finish({
           ok: false,
           text: "",
