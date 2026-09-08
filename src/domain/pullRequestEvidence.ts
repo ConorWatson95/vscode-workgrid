@@ -114,12 +114,56 @@ export function reportedPullRequestUrls(text: string): string[] {
  */
 export function missingPullRequestUrl(stage: TaskStage): boolean {
   if (!stage.requiresPullRequest) return false;
-  const replies = stage.subtasks
+  const sources = pullRequestEvidenceText(stage);
+  // Nothing to read is not evidence of nothing reported.
+  if (sources.length === 0) return false;
+  return sources.every((text) => reportedPullRequestUrls(text).length === 0);
+}
+
+/**
+ * Everywhere a stage may have put a pull request URL.
+ *
+ * Replies **and checklist items**, and the second half was missing. Found on NMGB-2533,
+ * where `ec-live-publish` sat blocked saying its report contained no pull request URL
+ * while the URL was in its own checklist:
+ *
+ *     [ ] Open the LIVE_SingleMarket pull request:
+ *         https://bitbucket.org/…/pull-requests/new?source=promote/nmgb-2533-navigator-live-sm&dest=LIVE_SingleMarket
+ *
+ * The persisted reply carried **no URL at all** — the link was reported as the operator
+ * action it implies rather than in the report prose, which is a reasonable thing for a
+ * stage to do and one this parser could not see. So a stage was held for not reporting
+ * something it had reported, and the merge gate, reading the same place, would have let
+ * that live promotion past with nothing waiting for the merge.
+ *
+ * The same disease as every marker this codebase has had to widen, with the twist that
+ * the model complied and the *channel* defeated the match — the lesson `replyMarkers`
+ * learned from a heading. What a stage owes is the URL where a human can click it, and a
+ * checklist item is exactly that.
+ *
+ * An `action` item is not treated differently from a `verify` one. A URL in either is
+ * still a URL the stage reported, and classifying which kinds may carry evidence would
+ * be a second thing to get wrong.
+ */
+export function pullRequestEvidenceText(stage: TaskStage): string[] {
+  const texts = stage.subtasks
     .map((subtask) => subtask.reply)
     .filter((reply): reply is string => typeof reply === "string" && reply.trim() !== "");
-  // Nothing to read is not evidence of nothing reported.
-  if (replies.length === 0) return false;
-  return replies.every((reply) => reportedPullRequestUrls(reply).length === 0);
+  for (const item of stage.checklist ?? []) {
+    if (item.text.trim()) texts.push(item.text);
+  }
+  return texts;
+}
+
+/** Every pull request URL a stage reported, wherever it put it. */
+export function stagePullRequestUrls(stage: TaskStage): string[] {
+  const found: string[] = [];
+  for (const text of pullRequestEvidenceText(stage)) {
+    for (const url of reportedPullRequestUrls(text)) {
+      if (!found.includes(url)) found.push(url);
+    }
+  }
+  return found;
 }
 
 /** How the hold explains itself, in the stage's `blocked` line. */

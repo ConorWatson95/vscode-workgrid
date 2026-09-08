@@ -65,7 +65,7 @@ import { PullRequestWait } from "../domain/pullRequestWait";
 import {
   MISSING_PULL_REQUEST_REASON,
   missingPullRequestUrl,
-  reportedPullRequestUrls,
+  stagePullRequestUrls,
 } from "../domain/pullRequestEvidence";
 import { producesChecklist, StageKind } from "../domain/taskRoute";
 import { handoffsSuppressed } from "../domain/pipelineExperiment";
@@ -2533,9 +2533,10 @@ export class PipelineRunner {
         // Recorded from every subtask's reply rather than the last, because a corrected
         // stage reports the link in the round that opened it and a split one in whichever
         // subtask did the pushing. `recordPullRequests` deduplicates on the URL.
-        const urls = settled.subtasks.flatMap((sub) =>
-          reportedPullRequestUrls(sub.reply ?? ""),
-        );
+        // Read from everywhere the stage may have put it, not the replies alone: on
+        // NMGB-2533 the live promotion's only pull request URL was in a checklist item,
+        // so recording from replies would have let it past with nothing waiting.
+        const urls = stagePullRequestUrls(settled);
         const before = pipeline.pullRequests?.length ?? 0;
         pipeline = recordPullRequests(
           pipeline,

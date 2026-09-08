@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { missingPullRequestUrl, stagePullRequestUrls } from "./pullRequestEvidence";
 import {
   pullRequestBranches,
   pullRequestState,
@@ -169,5 +170,70 @@ describe("shouldAskForPullRequest", () => {
         waits: [{ url: "u", stageId: "elsewhere", at: "t0" }],
       }),
     ).toBe(true);
+  });
+});
+
+describe("stagePullRequestUrls", () => {
+  const stage = (over: Record<string, unknown>) =>
+    ({
+      id: "ec-live-publish",
+      name: "Publish to live",
+      kind: "deployment",
+      status: "awaiting-approval",
+      requiresPullRequest: true,
+      subtasks: [],
+      ...over,
+    }) as never;
+
+  // NMGB-2533. The stage sat blocked saying its report contained no pull request URL
+  // while the URL was in its own checklist -- the persisted reply carried none at all,
+  // because the link was reported as the operator action it implies rather than in the
+  // report prose. So it was held for not reporting what it had reported, and the merge
+  // gate reading the same place would have let a LIVE promotion past with nothing
+  // waiting for the merge.
+  it("finds a URL a stage put in a checklist item", () => {
+    const s = stage({
+      subtasks: [{ id: "s1", status: "done", reply: "## Publish to live: done\nNo links here." }],
+      checklist: [
+        {
+          id: "c1",
+          kind: "action",
+          checked: false,
+          text:
+            "Open the LIVE_SingleMarket pull request: https://bitbucket.org/org/repo/" +
+            "pull-requests/new?source=promote/nmgb-2533-navigator-live-sm&dest=LIVE_SingleMarket",
+        },
+      ],
+    });
+    expect(stagePullRequestUrls(s)).toHaveLength(1);
+    expect(missingPullRequestUrl(s)).toBe(false);
+  });
+
+  it("still finds one in a reply", () => {
+    const s = stage({
+      subtasks: [
+        { id: "s1", status: "done", reply: "PR: https://host/repo/pull-requests/new?source=a&dest=b" },
+      ],
+    });
+    expect(stagePullRequestUrls(s)).toHaveLength(1);
+  });
+
+  it("does not report the same URL twice when both carry it", () => {
+    const url = "https://host/repo/pull-requests/new?source=a&dest=b";
+    const s = stage({
+      subtasks: [{ id: "s1", status: "done", reply: `see ${url}` }],
+      checklist: [{ id: "c1", checked: false, text: `Open ${url}` }],
+    });
+    expect(stagePullRequestUrls(s)).toEqual([url]);
+  });
+
+  // Still holds a stage that reported one nowhere at all -- the check's whole point.
+  it("holds a stage that reported none anywhere", () => {
+    const s = stage({
+      subtasks: [{ id: "s1", status: "done", reply: "## done\nPushed the branch." }],
+      checklist: [{ id: "c1", checked: false, text: "Check the load ran" }],
+    });
+    expect(stagePullRequestUrls(s)).toEqual([]);
+    expect(missingPullRequestUrl(s)).toBe(true);
   });
 });
