@@ -49,6 +49,54 @@ describe("recordPullRequests", () => {
     expect(twice.pullRequests).toHaveLength(1);
   });
 
+  // Found by running the live replies through this. RU-550's rc-uat-promote reported
+  // BOTH forms of the same pull request in one reply -- the create link it was told to
+  // end with, and /pull-requests/89 once it existed. Recorded as two waits, only one
+  // could ever be resolved: an id carries no branch names, so git has nothing to compare
+  // and the route would hold on the second until somebody cleared it by hand.
+  it("keeps the resolvable link when a reply carries both forms", () => {
+    const result = recordPullRequests(
+      pipeline([]),
+      "rc-uat-promote",
+      [
+        "https://bitbucket.org/org/repo/pull-requests/new?source=promote/RU-550-uat&dest=UAT",
+        "https://bitbucket.org/org/repo/pull-requests/89",
+      ],
+      "t0",
+    );
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests?.[0].target).toBe("UAT");
+  });
+
+  // Not a general preference for create links. A project whose stages report the pull
+  // request itself must not silently lose the gate -- that failure direction is the one
+  // this whole area guards against.
+  it("still records an id-only link when that is all there is", () => {
+    const result = recordPullRequests(
+      pipeline([]),
+      "s",
+      ["https://bitbucket.org/org/repo/pull-requests/89"],
+      "t0",
+    );
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests?.[0].source).toBeUndefined();
+  });
+
+  // Per stage, not globally: a live publish opens one per target, and two create links
+  // for different targets are two real waits.
+  it("keeps every link that names branches", () => {
+    const result = recordPullRequests(
+      pipeline([]),
+      "rc-live-publish",
+      [
+        "https://host/pr/new?source=promote/RU-544-live-mm&dest=LIVE_MultiMarket",
+        "https://host/pr/new?source=promote/RU-544-live-sm&dest=LIVE_SingleMarket",
+      ],
+      "t0",
+    );
+    expect(result.pullRequests).toHaveLength(2);
+  });
+
   it("leaves the pipeline untouched when a stage reported none", () => {
     const before = pipeline([]);
     expect(recordPullRequests(before, "s", [], "t0")).toBe(before);

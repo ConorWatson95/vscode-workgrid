@@ -143,11 +143,32 @@ export function recordPullRequests(
 ): TaskPipeline {
   const existing = pipeline.pullRequests ?? [];
   const known = new Set(existing.map((wait) => wait.url));
+  const candidates = urls
+    .filter((url) => url && !known.has(url))
+    .map((url) => ({ url, ...pullRequestBranches(url) }));
+
+  // A link naming its branches wins over one that does not, and only when both are
+  // present for the same stage. Found by running the live replies through this:
+  // `rc-uat-promote` on RU-550 reported BOTH forms of the same pull request in one
+  // reply — the create link it was told to end with, and `/pull-requests/89` once it
+  // existed. Deduplicating on the URL made those two waits, and only one of them can
+  // ever be resolved: an id carries no branch names, so git has nothing to compare and
+  // the route would hold on the second until somebody cleared it by hand. Every
+  // promotion reporting both forms would have done that.
+  //
+  // Not a general preference for create links. Where a stage reports *only* an id form,
+  // it is still recorded and still holds — a project whose stages report the pull
+  // request itself must not silently lose the gate, which is the failure direction this
+  // whole area keeps guarding against. The rule is only that a resolvable link makes an
+  // unresolvable one redundant for the same stage.
+  const named = candidates.filter((entry) => entry.source && entry.target);
+  const chosen = named.length > 0 ? named : candidates;
+
   const added: PullRequestWait[] = [];
-  for (const url of urls) {
-    if (!url || known.has(url)) continue;
-    known.add(url);
-    added.push({ url, stageId, at, ...pullRequestBranches(url) });
+  for (const entry of chosen) {
+    if (known.has(entry.url)) continue;
+    known.add(entry.url);
+    added.push({ ...entry, stageId, at });
   }
   if (added.length === 0) return pipeline;
   return { ...pipeline, pullRequests: [...existing, ...added] };
