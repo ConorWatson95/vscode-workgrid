@@ -6,6 +6,11 @@ import {
 } from "../domain/checkFailureRepair";
 import { ApprovalScope } from "../domain/permissionGatePolicy";
 import { recordBaseCommitCommand } from "./recordBaseCommitCommand";
+import {
+  missingPullRequestUrl,
+  reportedPullRequestUrls,
+} from "../domain/pullRequestEvidence";
+import { shouldAskForPullRequest } from "../domain/pullRequestWait";
 import { changeRows, changeSummary } from "../ui/changeList";
 import { ok } from "../utilities/result";
 import {
@@ -16,6 +21,7 @@ import {
   undoableCorrection,
   outstandingPullRequests,
   settlePullRequest,
+  recordPullRequests,
 } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
 import {
@@ -1661,6 +1667,8 @@ async function approveStageCommand(
     if (settled.ok) approved = settled.value;
   }
 
+  approved = await capturePullRequest(ctx, arg.stage, approved, task.name);
+
   await ctx.repository.save({
     ...task,
     pipeline: approved,
@@ -2407,6 +2415,90 @@ async function markPullRequestMergedCommand(
   void vscode.window.showInformationMessage(
     `Recorded as merged. Advance "${task.name}" to carry on.`,
   );
+}
+
+/**
+ * Offers to record a pull request when a stage that owed one is approved without it.
+ *
+ * The hole this closes was opened by the merge gate itself, one day after it shipped.
+ * `missingPullRequestUrl` holds a stage whose report carries no pull-request URL, and
+ * approving past that hold is a legitimate act — the operator has usually opened the
+ * pull request by hand, and a live publish may genuinely open none for a tenant the
+ * change does not touch. But the merge gate is fed by URLs found in the report, so no
+ * URL means no wait, which means **nothing holds the route for the merge**: it carries
+ * on to the next stage whose check reads the target branch and does not find the work
+ * there. Which is precisely the failure the gate was built to end, reached through the
+ * one door left open.
+ *
+ * Observed twice on `RenaultGB - MyRewards Summary`, where `rc-uat-promote` and
+ * `rc-live-publish` were both approved past that hold.
+ *
+ * Optional, and the skip is **announced**. This is the rule a discarded file and
+ * truncated output both follow: a protection that quietly does not apply is
+ * indistinguishable from one that is not there, and this is the moment — with the
+ * report just read — when the operator can tell which they meant.
+ */
+async function capturePullRequest(
+  ctx: CommandContext,
+  stage: TaskStage,
+  pipeline: TaskPipeline,
+  taskName: string,
+): Promise<TaskPipeline> {
+  // `missingPullRequestUrl` is the same predicate that raised the hold, so what is
+  // asked for here and what the hold complained about are the same thing.
+  const ask = shouldAskForPullRequest({
+    requiresPullRequest: stage.requiresPullRequest,
+    reportedNone: missingPullRequestUrl(stage),
+    stageId: stage.id,
+    waits: pipeline.pullRequests,
+  });
+  if (!ask) return pipeline;
+
+  const typed = await vscode.window.showInputBox({
+    title: `Pull request for "${stage.name}"`,
+    prompt:
+      "This stage reported no pull request URL. Paste it and the route will wait for " +
+      "the merge; leave blank if there is nothing to merge.",
+    placeHolder: "https://bitbucket.org/…/pull-requests/new?source=promote/…&dest=UAT",
+    ignoreFocusOut: true,
+  });
+
+  const url = typed?.trim();
+  if (!url) {
+    // Said out loud, because the alternative is a route that advances onto a target
+    // branch which may not have the work, with nothing anywhere saying why nothing
+    // stopped it.
+    void vscode.window.showWarningMessage(
+      `No pull request recorded for "${stage.name}", so nothing will hold this route ` +
+        "for a merge. If one is open, the next check that reads the target branch will " +
+        "report the work as missing.",
+    );
+    return pipeline;
+  }
+
+  // Validated with the same reader the runner uses, so what is accepted here and what
+  // a stage's report would have contributed are the same thing. A Jira link or the
+  // repository URL is refused rather than recorded as a pull request nobody can merge.
+  const recognised = reportedPullRequestUrls(url);
+  if (recognised.length === 0) {
+    void vscode.window.showWarningMessage(
+      "That does not look like a pull request URL, so it was not recorded. Nothing " +
+        "will hold this route for a merge.",
+    );
+    return pipeline;
+  }
+
+  const updated = recordPullRequests(
+    pipeline,
+    stage.id,
+    recognised,
+    new Date().toISOString(),
+  );
+  ctx.logger.info(
+    `Harness [${taskName}] pull request recorded at approval of "${stage.name}": ` +
+      recognised.join(", "),
+  );
+  return updated;
 }
 
 async function settleDeferralsCommand(

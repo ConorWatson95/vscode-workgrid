@@ -180,3 +180,35 @@ export function pullRequestAdvice(
       );
   }
 }
+
+/**
+ * Whether approving this stage should ask for a pull request URL.
+ *
+ * The hole the merge gate opened one day after it shipped. `missingPullRequestUrl`
+ * holds a stage whose report carries no pull-request URL, and approving past that hold
+ * is legitimate — the operator has usually opened it by hand, and a live publish may
+ * genuinely open none for a tenant the change does not touch. But the gate is fed by
+ * URLs found in the report, so no URL means no wait, which means **nothing holds the
+ * route for the merge**: it carries on to the next stage whose check reads the target
+ * branch and does not find the work. Precisely the failure the gate exists to end,
+ * reached through the one door left open. Observed twice on the same task.
+ *
+ * Three conditions, and the third is the one that is easy to leave out: a stage may
+ * already have a wait recorded — by the runner from its reply, or by a previous
+ * approval — and asking again would offer to record a second wait for one pull request,
+ * which is the double-count `recordPullRequests` was just corrected for.
+ *
+ * `reportedNone` is passed in rather than computed, because reading a stage's replies
+ * belongs to `pullRequestEvidence` and duplicating that here would make two answers to
+ * one question.
+ */
+export function shouldAskForPullRequest(input: {
+  requiresPullRequest?: boolean;
+  reportedNone: boolean;
+  stageId: string;
+  waits?: readonly PullRequestWait[];
+}): boolean {
+  if (!input.requiresPullRequest) return false;
+  if (!input.reportedNone) return false;
+  return !(input.waits ?? []).some((wait) => wait.stageId === input.stageId);
+}

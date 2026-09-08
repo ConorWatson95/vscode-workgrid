@@ -5,6 +5,7 @@ import {
   pullRequestAdvice,
   isOutstanding,
   PullRequestWait,
+  shouldAskForPullRequest,
 } from "./pullRequestWait";
 
 // The link NMGB-2533's promote stage actually reported.
@@ -126,5 +127,47 @@ describe("pullRequestAdvice", () => {
 
   it("asks for an approval when nothing local can tell", () => {
     expect(pullRequestAdvice(wait(), "unknowable")).toContain("approve");
+  });
+});
+
+describe("shouldAskForPullRequest", () => {
+  const base = { requiresPullRequest: true, reportedNone: true, stageId: "promote" };
+
+  // Observed twice on RenaultGB - MyRewards Summary, where rc-uat-promote and
+  // rc-live-publish were both approved past the missing-URL hold. No URL means no wait,
+  // which means nothing holds the route for the merge.
+  it("asks when a stage that owed a pull request reported none", () => {
+    expect(shouldAskForPullRequest(base)).toBe(true);
+  });
+
+  it("does not ask a stage that never owed one", () => {
+    expect(
+      shouldAskForPullRequest({ ...base, requiresPullRequest: false }),
+    ).toBe(false);
+  });
+
+  it("does not ask when the stage reported one", () => {
+    expect(shouldAskForPullRequest({ ...base, reportedNone: false })).toBe(false);
+  });
+
+  // The condition easiest to leave out. A wait may already exist -- recorded by the
+  // runner, or by a previous approval -- and asking again would offer a second wait for
+  // one pull request, which is the double-count recordPullRequests was corrected for.
+  it("does not ask when this stage already has a wait", () => {
+    expect(
+      shouldAskForPullRequest({
+        ...base,
+        waits: [{ url: "u", stageId: "promote", at: "t0" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("still asks when the only waits belong to another stage", () => {
+    expect(
+      shouldAskForPullRequest({
+        ...base,
+        waits: [{ url: "u", stageId: "elsewhere", at: "t0" }],
+      }),
+    ).toBe(true);
   });
 });
