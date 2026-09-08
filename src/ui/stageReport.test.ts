@@ -760,3 +760,69 @@ describe("a stage repaired many times, held at a gate", () => {
     expect(md).not.toContain("Findings, revision 5");
   });
 });
+
+describe("checklist kinds in the report", () => {
+  // The two items that found this, verbatim in shape, from ec-live-publish on NMGB-2533.
+  // Both are correctly `kind: "action"` -- no stage holds live `sa` or SFTP credentials,
+  // so only the operator can take either step -- and the report rendered them under
+  // "Verification items raised" with a tick box, which says the harness is asking for a
+  // verification by doing. The tree row has distinguished them since the field was added.
+  const withBoth = () =>
+    stage({
+      checklist: [
+        { id: "c1", text: "Open the Navigator report and check the Total column", checked: false },
+        {
+          id: "c2",
+          text: "Run migration/005-add-navigator-ftpcontrol.sql by hand as sa on live",
+          kind: "action" as const,
+          checked: false,
+        },
+        {
+          id: "c3",
+          text: "Confirm with the SFTP administrator that the remote directory exists",
+          kind: "action" as const,
+          checked: false,
+        },
+      ],
+    });
+
+  it("does not file work the operator must do under verification", () => {
+    const report = formatStageReport("Task", withBoth(), undefined);
+    const verifyAt = report.indexOf("## Verification items raised");
+    const actionsAt = report.indexOf("## Steps only you can take");
+    expect(verifyAt).toBeGreaterThan(-1);
+    expect(actionsAt).toBeGreaterThan(verifyAt);
+    // The migration must appear after the actions heading, not under verification.
+    expect(report.indexOf("005-add-navigator-ftpcontrol")).toBeGreaterThan(actionsAt);
+    expect(report.indexOf("SFTP administrator")).toBeGreaterThan(actionsAt);
+    expect(report.indexOf("Total column")).toBeLessThan(actionsAt);
+  });
+
+  it("says what the section is, since the distinction is the point", () => {
+    expect(formatStageReport("Task", withBoth(), undefined)).toContain(
+      "Not verification",
+    );
+  });
+
+  // A stage with only verifications renders exactly as it did before -- the rule every
+  // declaration here follows.
+  it("raises no actions heading when there are none", () => {
+    const only = stage({
+      checklist: [{ id: "c1", text: "Check the Total column", checked: false }],
+    });
+    const report = formatStageReport("Task", only, undefined);
+    expect(report).toContain("## Verification items raised");
+    expect(report).not.toContain("## Steps only you can take");
+  });
+
+  it("raises no verification heading when every item is work", () => {
+    const only = stage({
+      checklist: [
+        { id: "c1", text: "Run it by hand on live", kind: "action" as const, checked: false },
+      ],
+    });
+    const report = formatStageReport("Task", only, undefined);
+    expect(report).toContain("## Steps only you can take");
+    expect(report).not.toContain("## Verification items raised");
+  });
+});

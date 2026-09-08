@@ -1,4 +1,6 @@
-import { Subtask, SubtaskActivity, TaskStage, TaskPipeline } from "../domain/taskPipeline";
+import { Subtask, SubtaskActivity, TaskStage, TaskPipeline,
+  ChecklistItem,
+} from "../domain/taskPipeline";
 import {
   findingsOfSubtasks,
   formatFindings,
@@ -557,22 +559,55 @@ export function formatStageReport(
 
   const checklist = stage.checklist ?? [];
   if (checklist.length > 0) {
-    lines.push("", "## Verification items raised", "");
     // The gate an item is destined for, named where it is scoped. Named rather than left
     // implicit because the two verifications ask different questions — does it behave,
     // versus does it work where it is served — and an item read at the wrong one is a
     // false pass. Unscoped items carry nothing, so a route that declares no scopes
     // renders exactly as before.
     const gates = pipeline ? checklistGates(pipeline) : [];
-    for (const item of checklist) {
+    const render = (item: ChecklistItem) => {
       const destination =
         item.scope && gates.length > 0
           ? gateFor(gates, item.scope)?.stageName
           : undefined;
-      lines.push(
+      return (
         `- [${item.checked ? "x" : " "}] ${item.text}` +
-          (destination ? `  _(${destination})_` : ""),
+        (destination ? `  _(${destination})_` : "")
       );
+    };
+
+    // Split by kind, which this did not do and had to. `ChecklistItem.kind` exists
+    // because "a step only the operator can take" and "something to exercise and judge"
+    // are different asks — the tree row has said so since the field was added, with
+    // "for you to DO" against "for you to verify" — and the report put both under
+    // *Verification items raised* with a tick box.
+    //
+    // The complaint that found it is the right one: a live publish raised "run this
+    // migration by hand as sa against QubeFTPService on live" and "confirm with the SFTP
+    // administrator that the remote directory exists", and reading those under a
+    // verification heading says the harness is asking the operator to verify by doing.
+    // Both are correctly classified — no stage holds live `sa` or SFTP credentials, so
+    // only the operator can take either step — and the heading was simply lying about
+    // what they were.
+    const verifications = checklist.filter((item) => item.kind !== "action");
+    const actions = checklist.filter((item) => item.kind === "action");
+
+    if (verifications.length > 0) {
+      lines.push("", "## Verification items raised", "");
+      for (const item of verifications) lines.push(render(item));
+    }
+
+    if (actions.length > 0) {
+      lines.push("", "## Steps only you can take", "");
+      // Said once, above the list. These gate the stage that raised them whatever its
+      // kind, and unlike a verification they are not a judgement about risk: the step
+      // either happened or it did not, which is also why a bulk tick cannot reach them.
+      lines.push(
+        "_Not verification — work the runtime cannot do, usually because it needs a" +
+          " credential or a person. This stage cannot pass until each is done._",
+        "",
+      );
+      for (const item of actions) lines.push(render(item));
     }
   }
 
