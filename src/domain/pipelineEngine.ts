@@ -1252,10 +1252,10 @@ export function narrowAmendments(
   const stages = pipeline.stages.map((stage, i) => {
     if (i <= index) return stage;
     const amendment = stage.subtasks.find(withdrawable);
-    if (!amendment || !amendmentIsUnreachable(stage, paths)) return stage;
+    const undo = amendment?.correction?.undo;
+    if (!amendment || !amendmentIsUnreachable(stage, paths, undo)) return stage;
 
     narrowed = true;
-    const undo = amendment.correction!.undo;
     return {
       ...stage,
       subtasks: stage.subtasks.filter((sub) => sub.id !== amendment.id),

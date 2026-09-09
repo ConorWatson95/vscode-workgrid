@@ -70,4 +70,14 @@ describe("amendmentIsUnreachable", () => {
     expect(amendmentIsUnreachable({ status: "pending" }, RAZOR_FIX)).toBe(false);
     expect(amendmentIsUnreachable(SQL_REVIEW, undefined)).toBe(false);
   });
+
+  it("never withdraws a block, whose subject is routinely outside the pattern", () => {
+    expect(amendmentIsUnreachable(SQL_REVIEW, RAZOR_FIX, { verdict: "block" })).toBe(false);
+    expect(amendmentIsUnreachable(SQL_REVIEW, RAZOR_FIX, { blocked: "no plan" })).toBe(false);
+  });
+
+  it("still withdraws a pass, which is what the reach rule was measured on", () => {
+    expect(amendmentIsUnreachable(SQL_REVIEW, RAZOR_FIX, { verdict: "pass" })).toBe(true);
+    expect(amendmentIsUnreachable(SQL_REVIEW, RAZOR_FIX, {})).toBe(true);
+  });
 });

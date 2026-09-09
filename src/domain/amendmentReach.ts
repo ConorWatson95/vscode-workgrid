@@ -44,6 +44,19 @@
  * - **Never a stage that is running, failed or held.** This narrows a *pending*
  *   amendment nobody has spent anything on yet. A stage doing something has a reason
  *   to be doing it that no path list can see.
+ * - **Never a stage whose standing conclusion is a block.** The header's claim —
+ *   nothing matched, so the stage's subject is untouched and its previous conclusion
+ *   still stands — holds for a *pass* and fails for a block, because a blocking
+ *   finding is routinely about a path outside the stage's own pattern. Measured on
+ *   `Correct incorrect Focus Group turnover/unit figures`, 8 Sep 2026: a SQL object
+ *   review declared over `tools/sql/(apps|manufacturers|bootstrap)` blocked on a
+ *   parse error in `tools/sql/projects/.../rollback/003`, naming the owning stage in
+ *   its own report. The correction wrote only `projects/` paths, so the amendment was
+ *   withdrawn and `verdict: "block"` restored from the undo snapshot — leaving a gate
+ *   blocking on a critical that had been fixed twenty minutes earlier, with every
+ *   send-back reproducing the fix and the withdrawal. The status check above cannot
+ *   see this: it reads the post-reopen status, which `reopenAfter` has already set to
+ *   `pending`, never the settlement about to be restored.
  * - **Matched on the same normalisation as the rules themselves** — forward slashes,
  *   case-insensitive — because these paths come from `SubtaskActivity.pathsWritten`,
  *   which on Windows are absolute and backslashed, and a rule pattern is written
@@ -52,7 +65,7 @@
  *   than the saving.
  */
 
-import { TaskStage } from "./taskPipeline";
+import { CorrectionUndo, TaskStage } from "./taskPipeline";
 
 /** A path as a rule would see it: forward slashes, lower case. */
 function normalise(path: string): string {
@@ -104,7 +117,16 @@ export function correctionReaches(
 export function amendmentIsUnreachable(
   stage: Pick<TaskStage, "addedByRule" | "rulePaths" | "status">,
   pathsWritten: readonly string[] | undefined,
+  /**
+   * The settlement this withdrawal would restore, from the amendment's own `undo`.
+   * A blocking one is never narrowed: the correction was answering that block, and a
+   * block is routinely about a path the stage's rule pattern does not cover. Absent
+   * means the settlement was not captured, which `narrowAmendments` already refuses
+   * to withdraw on — passing `undefined` therefore changes nothing.
+   */
+  undo?: Pick<CorrectionUndo, "verdict" | "blocked">,
 ): boolean {
   if (stage.status !== "pending") return false;
+  if (undo?.verdict === "block" || undo?.blocked) return false;
   return correctionReaches(stage, pathsWritten) === false;
 }
