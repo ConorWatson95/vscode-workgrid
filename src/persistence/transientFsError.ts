@@ -64,7 +64,13 @@ export async function retryOnTransientFsError<T>(
   operation: () => Promise<T>,
   options: RetryOptions = {},
 ): Promise<T> {
-  const attempts = options.attempts ?? 5;
+  // Calibrated against the size of the thing being replaced, because that is what
+  // decides how long somebody else holds it. Five attempts at 40ms is a 400ms budget,
+  // set when the state file was ~3MB; at 11.8MB a Defender scan of the freshly written
+  // file routinely outlasts it, and `correctStage` then failed with the raw EPERM after
+  // the in-memory transition had already happened. Twelve attempts is ~2.6s, which is
+  // the same trade one size up rather than a new one.
+  const attempts = options.attempts ?? 12;
   const delayMs = options.delayMs ?? 40;
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
 

@@ -2803,6 +2803,58 @@ cannot tell a script path from any other argument without parsing shell syntax f
 shells, and rewriting a command it half-understands is worse than the hole. So the
 placeholder exists, the route author uses it, and `taskRoute.ts` says why.
 
+**And it redirected the script without redirecting its subject** — 8 Sep 2026, found on
+RU-553's `rc-implement-sql`. The stage did everything asked, wrote five procedures, five
+smoke scripts and a paired rollback each, executed them against DEV, and failed its verify
+with **five problems naming procedures it had never touched**:
+`p_Bespoke_Dashboard_MechanicalSalesInAOR`, `sp_TradeCampaigns` and three more, all
+`nissangb/trade`, none in the branch's diff.
+
+`Test-SqlSmokeExecution.ps1` defaults its own `-RepoRoot` from `$PSScriptRoot`, so
+`-File "${repoRoot}/tools/sql/..."` made the *main checkout* the thing being diffed. The
+five flagged procedures were uncommitted work sitting in `C:/Dev/qubeautoapp` on `DEV`, and
+`git -C $RepoRoot diff --name-only DEV` reported them faithfully. `cwd` was the worktree
+throughout, which is what made it invisible: only the script path had moved.
+
+**Two independent quantities wearing one placeholder.** `${repoRoot}` answers *which copy of
+the check runs* — a branch must not edit the script that certifies it. It says nothing about
+*what the check reads*, and for any script deriving its root from its own location the
+answer silently became the wrong tree. Which is the RU-550 shape one turn on: a check
+reporting a confident wrong fact rather than an error, and the operator arbitrating.
+`Test-WorkPromoted` said "not promoted" about promoted work; this said "no smoke script"
+about procedures the task had never seen.
+
+Worst in the place nobody was looking. Three of `qubeautoapp`'s verifies name
+`Invoke-SolutionBuild.ps1`, which defaults `$Solution` from `$PSScriptRoot` too — so the
+**Build stage was compiling the main checkout**, and a build certifying code the task never
+changed passes exactly when it should fail. The stage that settles compilation by exit code
+was settling somebody else's.
+
+Fixed in both halves, and the second is the one that generalises:
+
+- **The call sites pass the subject explicitly.** Seven verifies in `harness.json` gain
+  `-RepoRoot "${worktreePath}"` or, for the build, `-Solution "${worktreePath}/…sln"`.
+- **The scripts default to the checkout the caller is standing in**, via
+  `git rev-parse --show-toplevel`, falling back to the script's own tree outside a
+  checkout. That closes the class rather than the instance: `Test-SqlProjectConventions.ps1`
+  carried the identical default and was correct only *by accident*, because it is named in
+  stage intents rather than a verify and so is invoked relatively with the worktree as cwd.
+  A route promoting it to a `verify` would have reproduced this exactly, and nothing would
+  have said so.
+
+The rule, and it is the one the unquoted hook command and the backslashed spawn path teach
+from the other side: **a placeholder that redirects where a check comes from must be paired
+with one that states what it reads.** Where a script can infer its own subject, `${repoRoot}`
+is not a fix, it is a silent change of subject — and the check goes on exiting non-zero for
+a reason that has nothing to do with the work.
+
+**Found on the way, and pre-existing:** `tools/sql/tests` reports **0 passed / 121 failed**
+under the Pester 6.1.0 now installed, on untouched code — the suite defines its helpers at
+file scope, which Pester 5+ does not expose inside `It`. Under 4.10.1 it is 145 passed / 0
+failed. So the `sql-tooling` route's `Invoke-Pester … -EnableExit` verify currently fails for
+everyone, for a reason that is neither the work nor the tests. A verify that names a test
+runner and not a version is a check whose subject the machine chooses.
+
 ### Suggested work, and what a scan costs
 
 `domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`

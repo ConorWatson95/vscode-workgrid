@@ -105,4 +105,20 @@ describe("retryOnTransientFsError", () => {
     );
     expect(waits).toEqual([10, 20, 30]);
   });
+
+  /**
+   * Pins the budget rather than the attempt count, because what has to outlast the
+   * hold is the total wait. The state file has grown from ~3MB to ~12MB, and the
+   * 400ms this used to allow is shorter than a Defender scan of the file just
+   * written -- which surfaced as a raw EPERM on the click that corrects a stage.
+   */
+  it("allows the destination to be held for over two seconds", async () => {
+    let total = 0;
+    await expect(
+      retryOnTransientFsError(async () => { throw fsError("EPERM"); }, {
+        sleep: async (ms) => { total += ms; },
+      }),
+    ).rejects.toMatchObject({ code: "EPERM" });
+    expect(total).toBeGreaterThan(2000);
+  });
 });
