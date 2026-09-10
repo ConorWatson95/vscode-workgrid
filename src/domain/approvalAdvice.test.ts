@@ -56,6 +56,30 @@ describe("approvalAdvice", () => {
     expect(advice.suggestion).toContain("sendBackTo");
   });
 
+  it("does not offer a held stage as one that reported nothing outstanding", () => {
+    // A held stage is `awaiting-approval` with `blocked` set, so the advice fell
+    // through to the clean-gate branch: the report said "this stage did not do its
+    // work: worktree conflict" and the box under it said the stage "finished and
+    // reported nothing outstanding. Approve to continue."
+    const merge = stage({
+      id: "rc-devmerge",
+      name: "Deploy the code to DEV (merge)",
+      kind: "deployment",
+      blocked: "worktree conflict: C:/Dev/tmp-ru553-devmerge is detached from any branch",
+      subtasks: [
+        { id: "rc-devmerge-1", title: "Merge", prompt: "p", status: "done", reply: "Merge done and pushed." },
+      ],
+    });
+    const advice = approvalAdvice(pipe([implement, merge]), merge);
+
+    expect(advice.action).toBe("decide");
+    expect(advice.headline).toContain("did not do its work");
+    expect(advice.headline).toContain("worktree conflict");
+    expect(advice.suggestion).not.toContain("Approve to continue");
+    // Recorded by the harness, so the "read out of the reply" caveat would be false.
+    expect(formatApprovalAdvice(advice)).not.toContain("read out of the reply");
+  });
+
   it("marks an inferred conclusion as inferred", () => {
     // A stated verdict and one read out of prose warrant different confidence: the
     // inference has been wrong in both directions.

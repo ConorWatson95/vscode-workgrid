@@ -1,6 +1,7 @@
 import { outstandingDeferrals } from "./pipelineEngine";
 import { ReviewFinding, findingsOfSubtasks, summariseFindings } from "./reviewFindings";
 import { citesStageByName } from "./deferralOwnership";
+import { deferralHeadline, isAbridged } from "./deferralText";
 import { sendBackTargets } from "./stageRefresh";
 import { StageEvidence, stageEvidence } from "./stageEvidence";
 import { RatifiedEvidence, ratifiedEvidence, summariseRatified } from "./ratifiedEvidence";
@@ -167,6 +168,38 @@ function verdictAdvice(
       findings: summary,
       outstanding,
       stated: false,
+    };
+  }
+
+  // Before the findings, because a stage that did not do its work has no output for
+  // findings to be about. A held stage is `awaiting-approval` with `blocked` set —
+  // the same status a clean gate reaches — and nothing here read that field, so the
+  // one place the report states "this stage did not do its work" sat directly above
+  // a box saying it "finished and reported nothing outstanding. Approve to continue."
+  // The two lines were about the same stage, in the same report, and the box is the
+  // half that carries a recommendation. `holdStageForFindings` sets no reason on the
+  // findings path, so `blocked` being set is unambiguously the block hold.
+  const blockedFor = stage.blocked?.trim();
+  if (blockedFor) {
+    const headline = deferralHeadline(blockedFor, 200);
+    return {
+      headline:
+        `This stage did not do its work: ${headline}` +
+        (isAbridged(blockedFor, 200) ? " …" : ""),
+      // Names the remedies rather than a button, because which one applies depends on
+      // the block: a missing prerequisite is fixed and retried, an output that is
+      // wrong in a way no edit reaches is a re-run. Approving is admissible — the
+      // operator may have done the work themselves — so it is stated as a choice
+      // being made rather than offered as the obvious next click.
+      suggestion:
+        "Fix the cause and retry this stage, or re-run it. Approving accepts the " +
+        "route continuing without the work this stage was for.",
+      action: "decide",
+      findings: summary,
+      outstanding,
+      // Recorded by the harness, not inferred from prose, so the "read out of the
+      // reply" caveat would be false here.
+      stated: true,
     };
   }
 

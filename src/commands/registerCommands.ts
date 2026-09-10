@@ -2162,12 +2162,18 @@ async function advanceRouteCommand(
       // "Send Findings Back…" keeps its ellipsis: the command deliberately asks which
       // stage even when only one matches, because reaching further back discards
       // everything after it and that cost is not visible in a stage's name.
+      // A held stage puts the report first. Everywhere else the recommended action
+      // leads, and for a block the recommendation is to read why the work did not
+      // happen — offering Approve first invites ratifying a stage whose own report
+      // says it did nothing.
       const buttons =
         advice.action === "sendBack"
           ? ["Send Findings Back…", "Approve", "Show What It Did"]
           : advice.action === "verify"
             ? ["Show What It Did"]
-            : ["Approve", "Show What It Did"];
+            : held.blocked
+              ? ["Show What It Did", "Approve"]
+              : ["Approve", "Show What It Did"];
 
       const choice = await vscode.window.showInformationMessage(
         `"${task.name}" is waiting at "${outcome.stageName}" — ` +
