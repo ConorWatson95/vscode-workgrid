@@ -1016,6 +1016,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Answered from git rather than a hosting API: *merged* means the source's commits
     // are on the target, so no token and no webhook — see `PullRequestWaitService`.
     (task, waits) => pullRequestWaits.merged(task, waits),
+    // Only so a failed check can say whether the branch has already fixed the check --
+    // see `domain/staleChecker.ts`. A git failure yields no paths and therefore no
+    // note, which is the same direction every other optional dependency here chooses.
+    async (task, signal) => {
+      const changed = await statusService.getChangedPaths(
+        task.worktreePath,
+        task.baseBranch,
+        signal,
+      );
+      return changed.ok ? changed.value : undefined;
+    },
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

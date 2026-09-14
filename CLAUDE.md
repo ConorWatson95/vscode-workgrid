@@ -144,6 +144,34 @@ worth doing. Complexity is a cost and tokens are a cost; optimise the larger one
 is *the minimum set of verified engineering facts required to execute a stage*, not
 everything the model might want to know.
 
+**Every issue is fixed through the harness or as a change to the harness — never by
+hand, twice.** When a route stops and the operator resolves it by reading the code,
+comparing two copies of a file, or remembering which commit is where, the diagnosis is
+the finding. The route stopping was correct; what failed is that the *reason* was
+invisible, and an operator who has to supply it is one the harness has quietly
+conscripted into being part of the runtime. That cost is paid again on every task, by
+every person, forever — which is the KPI attacked directly, since supervising several
+concurrent tasks is exactly what a diagnosis-per-failure makes impossible.
+
+So there are two admissible answers to any recurring failure and one inadmissible one:
+
+- **Through the harness** — an existing command, gate, declaration or config edit
+  already expresses it. Most are this, and a config change has retired more measured
+  waste here than any runtime change (`ec-uat-promote`, $22.65).
+- **A change to the harness** — it does not, and the fix is a new derivation, note or
+  declaration. The test for admissibility is the one everything else here uses: *is the
+  explanation derivable from facts the harness already holds?* Where it is, deriving it
+  is cheap and the operator's time is not.
+- **"I'll fix it by hand this time"** — which is neither, and is how a runtime accretes
+  an oral tradition that a new operator cannot read and a cold session cannot inherit.
+
+The disposition is a separate question from the derivation, and usually the answer is
+**say more, not stop more**. A failing check that fails for the right reason must go on
+failing; what it owes is the sentence that turns a confident wrong fact into a legible
+one. Deciding it is the ratio the admission test already asks for — what a false
+positive costs against a false negative — and an annotation beside a failure that was
+going to happen anyway costs nothing at all.
+
 **Skills are where execution protocol belongs — and a skill is per *engine*, not per
 project.** The runtime has two interfaces, not one: harness → engine is `StageContext`
 (verified engineering facts), engine → harness is the reply contract (`VERDICT`,
@@ -2854,6 +2882,63 @@ file scope, which Pester 5+ does not expose inside `It`. Under 4.10.1 it is 145 
 failed. So the `sql-tooling` route's `Invoke-Pester … -EnableExit` verify currently fails for
 everyone, for a reason that is neither the work nor the tests. A verify that names a test
 runner and not a version is a check whose subject the machine chooses.
+
+### And the branch had already fixed the script that certified it
+
+`domain/staleChecker.ts`, 14 Sep 2026. The third failure of the `${repoRoot}` rule, and
+the first where the rule was working exactly as designed.
+
+On NMDESD-511 a SQL stage failed
+`Test-DeployedObjectMatchesRepo.ps1`, reporting that `dbo.p_Overnight_Refresh` differed
+from the body deployed to NissanDE DEV. True, and nothing to do with the work: that
+object legitimately carries a different set of quarter blocks in DEV, UAT and live, so a
+whole-body compare can never pass for it. The branch had already established that and
+fixed it three days earlier — `e3eb38e12`, replacing the compare with a delta check that
+asks whether *this branch's* added lines are present — and the base branch had not taken
+the commit. Run from the worktree the same check reports `LANDED … 4 changed line(s)
+present, 1 anchored to a block this environment does not have`, exit 0.
+
+So the answer sat 278 lines away in the same worktree, and the check that ran knew
+nothing about it. Everything else in the chain behaved correctly, which is what makes
+this worth recording: `${repoRoot}` exists precisely so a branch cannot choose the
+command that certifies it, and its sharp failure is a branch editing its checker to
+`exit 0`. **Its benign failure is staleness, and staleness has now cost three
+mornings** — the promotion check cut before two fixes, the `Test-SqlSmokeExecution`
+subject redirect, and this.
+
+Nothing here relaxes the rule and nothing changes the exit code. The stage still fails,
+because the root's copy is authoritative by construction. What was missing is that the
+*reason* was invisible while being wholly derivable: the harness holds the declared
+command, so it knows which script `${repoRoot}` names, and it holds the branch's changed
+paths, so it knows whether that script is one of them. Nobody needed to diff anything.
+
+Five rules:
+
+- **An annotation, never a disposition.** A false positive — a branch that touched the
+  script whose work is *also* broken — costs a paragraph beside a failure that was going
+  to happen anyway; a false negative costs the diagnosis by hand. There is no reading
+  under which passing the stage is right, so the ratio does not need computing.
+- **Failure only.** A stale checker that *passes* is what `${repoRoot}` is for rather
+  than a defect, so noting it on every green stage of every branch that touched tooling
+  is the noise that teaches people to stop reading these.
+- **Read from the declared command, not the substituted one.** After substitution the
+  root is an ordinary absolute path, and telling a script it names from an argument that
+  merely mentions the repository would mean guessing. A bare `${repoRoot}` yields
+  nothing: that form is the check's *subject* — the distinction the smoke-execution
+  failure turned on — and the two quantities merely share a placeholder.
+- **Exact paths, never a directory prefix.** `${repoRoot}/tools/sql` covering everything
+  beneath it would fire on any branch that touched a tooling folder, which is how a note
+  like this stops being read. The same narrowness `namedByFindings` refuses fuzzy
+  matching for.
+- **The note says which remedy is unavailable.** Reaching for the worktree's copy is the
+  obvious move and it is the one thing that defeats the check, so the note names the
+  base branch and says to land the fix there. Absence of a changed-path source yields no
+  note rather than a reassurance, the rule an unmeasured wait already follows.
+
+It lands in the check's *output*, which is what becomes `failureReason` — so it reaches
+the report, the failure ledger and, through `checkFailureRepair`, the stage-scoped
+guidance a retry carries forward. A note reaching only the log is one nobody reading the
+failure can connect to it, which is the rule a discarded file already follows.
 
 ### Suggested work, and what a scan costs
 

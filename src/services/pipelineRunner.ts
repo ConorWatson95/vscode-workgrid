@@ -83,8 +83,14 @@ import {
 import {
   CommandOutcome,
   VerificationCommandRunner,
+  annotateOutcome,
   describeVerification,
 } from "./verificationRunner";
+import {
+  rootNamedPaths,
+  staleCheckerNote,
+  staleCheckers,
+} from "../domain/staleChecker";
 import {
   hasBlockingFindings,
   parseReviewFindings,
@@ -477,6 +483,18 @@ export class PipelineRunner {
       task: TaskWorkspace,
       waits: readonly PullRequestWait[],
     ) => Promise<{ url: string; merged: boolean }[]>,
+    /**
+     * The paths this task has changed relative to its base branch.
+     *
+     * Read only when a check has already failed, and only to say whether the check's
+     * own script is one of them - see `domain/staleChecker.ts`. Optional like the rest,
+     * and absence means no note is written rather than a note claiming nothing is
+     * stale: a runner built without it behaves exactly as it did before.
+     */
+    private readonly changedPaths?: (
+      task: TaskWorkspace,
+      signal?: AbortSignal,
+    ) => Promise<readonly string[] | undefined>,
   ) {}
 
   /**
@@ -549,6 +567,34 @@ export class PipelineRunner {
         "nothing to respond to.",
     );
     return undone.pipeline;
+  }
+
+  /**
+   * Whether this check's own script is one this branch has changed.
+   *
+   * The question is asked only after a check has failed, which is what keeps it cheap:
+   * a `git diff` per failure rather than per stage. A git failure, or a runner built
+   * with no source of changed paths, yields no note — absence of a measurement is not
+   * evidence that the check was current, and inventing a reassurance here would be
+   * worse than saying nothing.
+   */
+  private async staleCheckerNote(
+    task: TaskWorkspace,
+    declared: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    if (!this.changedPaths) return undefined;
+    // Asked before git is: a command naming no script through ${repoRoot} can have no
+    // stale one, and most commands name none.
+    if (rootNamedPaths(declared).length === 0) return undefined;
+    let paths: readonly string[] | undefined;
+    try {
+      paths = await this.changedPaths(task, signal);
+    } catch {
+      return undefined;
+    }
+    if (!paths) return undefined;
+    return staleCheckerNote(staleCheckers(declared, paths), task.baseBranch);
   }
 
   private async runVerification(
@@ -658,6 +704,17 @@ export class PipelineRunner {
         (used.length > 0 ? ` (substituted ${used.join(", ")})` : ""),
     );
     const outcome = await this.verifier!.run(command, task.worktreePath, signal);
+    // Only on a failure. A stale checker that *passes* is what `${repoRoot}` is for
+    // rather than a defect -- the root's copy is the authoritative one -- so saying so
+    // on every green stage of every branch that touched tooling is the noise that
+    // teaches people to stop reading these.
+    const stale =
+      outcome.exitCode === 0
+        ? undefined
+        : await this.staleCheckerNote(task, declared, signal);
+    if (stale) {
+      this.logger.warn(`Harness [${task.name}] "${stage.name}": ${stale}`);
+    }
     if (outcome.exitCode === 0) {
       this.logger.info(`Harness [${task.name}] "${stage.name}" verified (exit 0).`);
     } else {
@@ -673,9 +730,7 @@ export class PipelineRunner {
       // Carried into the recorded output, so the stage report shows it beside the check
       // it enabled. A discard visible only in the log is one nobody reading the report
       // can connect to the file that is no longer changed.
-      outcome: discarded
-        ? { ...outcome, output: `${discarded}\n\n${outcome.output}` }
-        : outcome,
+      outcome: annotateOutcome(outcome, [discarded, stale]),
       ...(discarded ? { discarded } : {}),
     };
   }

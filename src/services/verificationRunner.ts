@@ -72,3 +72,23 @@ export function prepareOutput(text: string): string {
     body.slice(-MAX_VERIFY_OUTPUT)
   );
 }
+
+/**
+ * An outcome with context prepended to its output.
+ *
+ * The output is what becomes the stage's failure reason and what the report shows, so
+ * anything the harness knows about *why* a check reported what it did has to travel
+ * with it rather than only reaching the log. A note visible only in the output channel
+ * is one nobody reading the report can connect to the failure in front of them — the
+ * rule a discarded file already follows.
+ *
+ * Absent and empty notes are dropped, so a caller need not decide whether it has one.
+ */
+export function annotateOutcome(
+  outcome: CommandOutcome,
+  notes: readonly (string | undefined)[],
+): CommandOutcome {
+  const kept = notes.filter((note): note is string => !!note && note.trim() !== "");
+  if (kept.length === 0) return outcome;
+  return { ...outcome, output: `${kept.join("\n\n")}\n\n${outcome.output}` };
+}

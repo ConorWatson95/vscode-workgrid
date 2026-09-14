@@ -219,6 +219,12 @@ function makeRunner(
       async (ms) => {
         events.push(`wait:${ms > 0}`);
       },
+      undefined,
+      undefined,
+      undefined,
+      // The same changed paths the rules engine is given: a failed check asks whether
+      // its own script is among them.
+      async () => options.paths ?? [],
     ),
     verified,
     events,
@@ -1488,6 +1494,88 @@ describe("declared verification", () => {
     const build = saved?.pipeline?.stages.find((s) => s.id === "build");
     expect(build?.status).toBe("failed");
     expect(build?.subtasks[0].failureReason).toContain("CS1002");
+  });
+
+  describe("a check its own branch has already fixed", () => {
+    /**
+     * The NMDESD-511 shape. `${repoRoot}` points a check at the root's copy so a branch
+     * cannot choose the command that certifies it — right, and its benign failure is
+     * that a branch which *fixed* the check is judged by the old one. The operator
+     * diagnosed it by hand: the exit code named the work, and the remedy was a commit
+     * sitting in the same worktree.
+     */
+    const CHECKER = "tools/sql/Test-Deployed.ps1";
+    const DECLARED = 'pwsh -File "${repoRoot}/' + CHECKER + '"';
+    const RAN = 'pwsh -File "C:/repos/app/' + CHECKER + '"';
+
+    const fixedTheChecker = (): RouteDefinition => ({
+      id: "test",
+      label: "Test",
+      description: "d",
+      stages: [
+        {
+          id: "build",
+          label: "Build",
+          kind: "implementation",
+          intent: "Build it.",
+          splittable: false,
+          gate: "auto",
+          verify: DECLARED,
+        },
+      ],
+    });
+
+    it("says so in the failure reason, where the operator already is", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN]: { exitCode: 1, output: "1 object(s) differ." } },
+        paths: [CHECKER, "tools/sql/work.sql"],
+      });
+      const subject = { ...task(), pipeline: createPipeline(fixedTheChecker()) };
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      const saved = await repo.get(subject.id);
+      const reason = saved?.pipeline?.stages[0].subtasks[0].failureReason ?? "";
+      // The check's own account survives: the note explains the failure, never replaces
+      // it, because the exit code may also be about the work.
+      expect(reason).toContain("1 object(s) differ.");
+      expect(reason).toContain(CHECKER);
+      expect(reason).toContain("Land the change");
+    });
+
+    it("still fails the stage — the root's copy is the authoritative one", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN]: { exitCode: 1, output: "1 object(s) differ." } },
+        paths: [CHECKER],
+      });
+      const subject = { ...task(), pipeline: createPipeline(fixedTheChecker()) };
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(report.outcome.kind).toBe("blocked");
+      const saved = await repo.get(subject.id);
+      expect(saved?.pipeline?.stages[0].status).toBe("failed");
+    });
+
+    it("says nothing when the branch has not touched the check", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN]: { exitCode: 1, output: "1 object(s) differ." } },
+        paths: ["tools/sql/work.sql"],
+      });
+      const subject = { ...task(), pipeline: createPipeline(fixedTheChecker()) };
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      const saved = await repo.get(subject.id);
+      const reason = saved?.pipeline?.stages[0].subtasks[0].failureReason ?? "";
+      expect(reason).not.toContain("Land the change");
+    });
   });
 
   describe("a failed check the route names an owner for", () => {
