@@ -1041,6 +1041,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return base.ok && base.value.length > 0 ? base.value : undefined;
     },
+    // One fetch per advance, so every comparison against a base ref below is answered
+    // against what the remote says now rather than whenever this clone last looked.
+    async (task, signal) => statusService.fetchRemotes(task.worktreePath, signal),
     // Which suspect paths carry content already committed on another branch. Asked only
     // about files no stage of the task is recorded as writing, so this runs rarely and
     // over a handful of paths -- see `domain/branchContamination.ts` for why the

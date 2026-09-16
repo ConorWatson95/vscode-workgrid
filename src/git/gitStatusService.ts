@@ -274,6 +274,30 @@ export class GitStatusService {
   }
 
   /**
+   * Brings the remote-tracking refs up to date, for the questions that ask what the
+   * base branch says *now*.
+   *
+   * A remote-tracking ref is only as fresh as the last fetch, and on a busy base branch
+   * stale is the normal state rather than the edge case — this repository's own `DEV`
+   * was 28 commits behind while a check was comparing against it. A check reading a
+   * stale ref reports a branch as current when somebody has just landed the very change
+   * it exists to notice, which is the silent miss that is indistinguishable from the
+   * check being absent.
+   *
+   * Reported rather than thrown. The refs already here are a worse answer than fresh
+   * ones and a much better answer than none, so a momentary network failure must not
+   * stop a route — the direction `WorktreeDiscardService` and the unmeasured-wait rule
+   * both choose.
+   */
+  async fetchRemotes(worktreePath: string, signal?: AbortSignal): Promise<boolean> {
+    const result = await this.git.run(["fetch", "--quiet", "origin"], {
+      cwd: worktreePath,
+      signal,
+    });
+    return result.ok;
+  }
+
+  /**
    * The lines this branch added to one file, relative to where it diverged.
    *
    * Against the merge base rather than the base branch's tip, for `${mergeBase}`'s

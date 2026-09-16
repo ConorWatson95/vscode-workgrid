@@ -523,6 +523,20 @@ export class PipelineRunner {
      * is recorded as writing -- on most changes, none. Optional like the rest: a runner
      * built without it holds nothing, the rule an unmeasured wait already follows.
      */
+    /**
+     * Brings remote-tracking refs up to date, once per advance.
+     *
+     * Here rather than in each check that needs it, because freshness of a ref the
+     * harness hands out through `${mergeBase}` is the harness's to guarantee — a check
+     * reading a stale `origin/DEV` reports a branch as current when somebody has just
+     * landed the change it exists to notice, and the next check written is the next one
+     * to forget. Optional and non-fatal like the rest: absence, or a failure, leaves
+     * every read using the refs already here.
+     */
+    private readonly fetchRemotes?: (
+      task: TaskWorkspace,
+      signal?: AbortSignal,
+    ) => Promise<boolean>,
     private readonly foreignContent?: (
       task: TaskWorkspace,
       paths: readonly string[],
@@ -1127,6 +1141,25 @@ export class PipelineRunner {
     // Per-advance, so a summary reflects this run rather than accumulating.
     this.denied = [];
     let current = task;
+
+    // Before anything reads a ref. Every question about what the base branch says now —
+    // the staleness of an object about to be deployed, a promotion check, a placeholder
+    // derived from the base — is answered against a remote-tracking ref, and one that
+    // has not been fetched answers for whenever it last was. Once per advance rather
+    // than per check: it is the same answer for all of them, and a fetch per check on a
+    // 29-stage route is 29 network calls for one fact.
+    if (this.fetchRemotes) {
+      try {
+        if (!(await this.fetchRemotes(current, signal))) {
+          this.logger.debug(
+            `Could not fetch before advancing "${current.name}"; comparisons will use ` +
+              "the refs already here, which may be behind.",
+          );
+        }
+      } catch {
+        // Non-fatal by construction: a route must not stop because the network did.
+      }
+    }
 
     // Cleared before anything runs, so a recorded stop is never a stale explanation of
     // a run that has since moved on. Written back only if it was set: an advance must
