@@ -2940,6 +2940,68 @@ the report, the failure ledger and, through `checkFailureRepair`, the stage-scop
 guidance a retry carries forward. A note reaching only the log is one nobody reading the
 failure can connect to it, which is the rule a discarded file already follows.
 
+### And the base it compared against was moving
+
+`${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it
+reads* — and the one that turned out to be causing every check failure in the repository
+at once.
+
+Two SQL checkers asked git `diff --name-only $ChangedSince`, a **two-dot** diff against
+the tip of `DEV`. That answers *how does this branch differ from DEV right now*; the
+question is *what did this branch change*. DEV moves, so every file anyone else lands
+after a branch is cut becomes that branch's work. Measured on `qubeautoapp`:
+
+| branch | vs DEV tip | from merge base | DEV moved |
+|---|---|---|---|
+| `feature/ru-563` | 77 files | 40 | 22 commits |
+| a task worktree with no SQL of its own | 31 `.sql` | **0** | 51 commits |
+| `fix/correct-incorrect-focus-group-…` | 67 | **0** | 50 commits |
+
+The last row is the whole disease in one line: a branch that had changed **nothing** spent
+six days and five retries failing, because the comparison handed it two procedures other
+people had landed and one of them — `p_Overnight_Refresh` — is the object the section
+above already documents as unable to pass a whole-body compare. Two separate defects
+stacked, and neither was about the work.
+
+**Nine of the nine entries in that repository's failure ledger were checks failing. None
+was the work failing** — across 21 pipelines and 468 stages, of which 312 had passed and
+one was failed. That is the measurement worth keeping: when an operator says the runtime
+feels fundamentally wrong, the ledger is what distinguishes a runtime that is failing from
+one whose *checks* are, and those have opposite remedies.
+
+**The harness's own diffing was never wrong.** `getChangedPaths` uses `<base>...HEAD` plus
+a working-tree diff, so the review-rules engine has always asked the right question. Only
+the project's scripts had it backwards, which is why nothing in the extension's own
+behaviour looked suspect while every route was stopping.
+
+The fix is `${mergeBase}`, following `${repoRoot}`'s rule exactly — the placeholder
+exists, the route author uses it, and the harness never rewrites a command it half
+understands. Derived per run rather than read from `baseCommit`: a task that merges its
+base in moves the divergence point, and diffing from the recorded cut would then report
+everything merged in as the branch's own.
+
+Four rules:
+
+- **Refused, never defaulted.** No merge base means the check is *not run*, through the
+  same path `${ticket}` already uses: falling back to the base's tip is the identical
+  wrong comparison wearing a different spelling, and it reports its wrong answers as
+  findings about the work.
+- **Computed only when the command names it**, because it costs a git call and the
+  overwhelming majority of verifies do not diff at all.
+- **The remedy is per placeholder** (`remediesFor`). The refusal message named the ticket
+  remedy whichever name was missing, so a check that could not find a merge base would
+  have sent its operator to the ticket picker — a pre-existing defect that only became
+  visible once a second name could go missing for an unrelated reason.
+- **Absence of the source means unchanged**, the rule every optional dependency here
+  follows: a runner built without it refuses only the checks that name the placeholder,
+  and there are none until a route opts in.
+
+The scripts were fixed too (`qubeautoapp` 80dbf771a), and the two compose rather than
+conflict: `merge-base <commit> HEAD` on a commit that is already an ancestor returns that
+commit. Belt and braces is right here — the script fix repairs every existing route
+without a config edit, and the placeholder is what stops the next script inventing its own
+answer.
+
 ### Suggested work, and what a scan costs
 
 `domain/taskSuggestion.ts` + `domain/suggestionSourceFile.ts` + `services/suggestionScanService.ts`

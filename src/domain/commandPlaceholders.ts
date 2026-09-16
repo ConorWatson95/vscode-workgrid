@@ -39,6 +39,31 @@ export interface CommandPlaceholders {
    * keeps it verbatim so the failure names its own cause.
    */
   baseCommit?: string;
+  /**
+   * The commit this branch diverged from its base at, or undefined when git cannot say.
+   *
+   * For a check that asks *what did this branch change*. `${baseBranch}` names a moving
+   * ref, and a script diffing against its tip answers a different question — how this
+   * branch differs from the base **right now** — so every file anyone else lands after
+   * the branch was cut is reported as this branch's work.
+   *
+   * Measured on `qubeautoapp`, 15 Sep 2026: a smoke-script check run that way demanded
+   * scripts for procedures across four manufacturers the task had never touched, all of
+   * them landed on the base that same day by two other people. On one task branch it saw
+   * 31 changed SQL files where the branch had changed none; on a second, 77 against the
+   * tip and 40 from here; a third spent six days and five retries failing on two
+   * procedures it did not own. Nine of the nine entries in that repository's failure
+   * ledger were checks failing, and none was the work failing.
+   *
+   * Derived per run, never the recorded `baseCommit`: a task that merges its base in —
+   * normal on anything long-running — moves the divergence point forward, and diffing
+   * from the original cut would then report everything merged in as the branch's own.
+   *
+   * Undefined is a real answer, and it stops the check rather than running it: a check
+   * that cannot establish what this branch changed must not run comparing against
+   * something else, which is the failure above with the base merely spelled differently.
+   */
+  mergeBase?: string;
   /** Absolute path of the task's worktree. */
   worktreePath: string;
   /**
@@ -75,7 +100,35 @@ const KNOWN = [
   "repoRoot",
   "ticket",
   "baseCommit",
+  "mergeBase",
 ] as const;
+
+/**
+ * What to do about a placeholder this knows and has no value for.
+ *
+ * Kept beside the names rather than at the call site because the remedies are not
+ * interchangeable: the message used to tell anyone reading it to link a ticket,
+ * whichever name was missing, so a check that could not find a merge base would have
+ * sent its operator to the ticket picker.
+ */
+const REMEDY: Partial<Record<(typeof KNOWN)[number], string>> = {
+  ticket:
+    "Link the task to its ticket (Set Ticket Reference…), or put the reference in the " +
+    "task's name.",
+  baseCommit:
+    "This task predates the base commit being recorded. Re-create it from its branch, " +
+    "or change the check to name ${mergeBase}, which is derived per run.",
+  mergeBase:
+    "Git could not find where this branch diverged from its base. Check the task's base " +
+    "branch exists in the repository and shares history with the branch.",
+};
+
+/** The remedy lines for names that had no value, in the order given. */
+export function remediesFor(missing: readonly string[]): string[] {
+  return missing
+    .map((name) => REMEDY[name as (typeof KNOWN)[number]])
+    .filter((line): line is string => line !== undefined);
+}
 
 export interface Substitution {
   command: string;

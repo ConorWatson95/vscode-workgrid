@@ -1027,6 +1027,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return changed.ok ? changed.value : undefined;
     },
+    // Where the branch diverged, for a check that names `${mergeBase}` so it can ask
+    // what *this branch* changed rather than how it differs from a moving base. A git
+    // failure yields no value, which refuses the check rather than running it against
+    // the base's tip -- the comparison whose wrong answers this placeholder exists to
+    // stop being reported as findings about the work.
+    async (task, signal) => {
+      const base = await statusService.getMergeBase(
+        task.worktreePath,
+        task.baseBranch,
+        signal,
+      );
+      return base.ok && base.value.length > 0 ? base.value : undefined;
+    },
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

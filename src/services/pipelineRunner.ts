@@ -72,7 +72,7 @@ import { handoffsSuppressed } from "../domain/pipelineExperiment";
 import { BranchMismatch, branchMismatch } from "../domain/branchGuard";
 import { redactSecrets } from "../domain/secretRedaction";
 import { summariseIntent } from "../domain/routeSummary";
-import { substitutePlaceholders } from "../domain/commandPlaceholders";
+import { remediesFor, substitutePlaceholders } from "../domain/commandPlaceholders";
 import { taskTicket } from "../domain/ticketReference";
 import { describeDiscard, DiscardSelection } from "../domain/worktreeDiscard";
 import {
@@ -495,6 +495,21 @@ export class PipelineRunner {
       task: TaskWorkspace,
       signal?: AbortSignal,
     ) => Promise<readonly string[] | undefined>,
+    /**
+     * Where this branch diverged from its base, for a check that names `${mergeBase}`.
+     *
+     * Derived per run rather than read from `baseCommit`, because a task that merges its
+     * base in moves the divergence point and the recorded cut does not follow it.
+     *
+     * Optional like the rest, and absence means the placeholder has no value — so a
+     * check naming it is refused rather than run against something else, and a check
+     * that does not name it is entirely unaffected. A runner built without this behaves
+     * exactly as it did before.
+     */
+    private readonly mergeBase?: (
+      task: TaskWorkspace,
+      signal?: AbortSignal,
+    ) => Promise<string | undefined>,
   ) {}
 
   /**
@@ -637,10 +652,22 @@ export class PipelineRunner {
     // A check written once for a route could not name the task it was certifying, so a
     // script that had to reject a worktree parked on *another* ticket degraded into an
     // existence check — one that passes in exactly the case that matters.
+    // Only when the check asks for it: it costs a git call, and the overwhelming
+    // majority of verifies do not diff at all.
+    const divergedAt = /\$\{mergeBase\}/.test(declared)
+      ? await this.mergeBase?.(task, signal)
+      : undefined;
+
     const { command, used, unknown, missing } = substitutePlaceholders(declared, {
       taskName: task.name,
       branch: task.branchName,
       baseBranch: task.baseBranch,
+      // So a check can ask what *this branch* changed. `${baseBranch}` is a moving ref,
+      // and a script diffing against its tip reports every file anyone else landed since
+      // the branch was cut as this branch's work — which on one repository was the cause
+      // of every check failure in its ledger, including a branch with no changes at all
+      // being asked for smoke scripts covering four manufacturers.
+      mergeBase: divergedAt,
       // So a check can enumerate this task's own commits, as
       // `rev-list <branch> ^<baseCommit>`, rather than inferring the set from commit
       // subjects across the base branch. Undefined on a task created before it was
@@ -682,10 +709,12 @@ export class PipelineRunner {
           output:
             `The check declares ${named}, and nothing about this task establishes ` +
             `${missing.length > 1 ? "them" : "it"}.\n\n` +
-            "It was not run: a check scoped by ticket must never run unscoped, and a " +
-            "failure from running it anyway reads as the work not being done.\n\n" +
-            "Link the task to its ticket (Set Ticket Reference…), or put the reference " +
-            "in the task's name.",
+            "It was not run: a check that cannot be scoped must never run unscoped, and " +
+            "a failure from running it anyway reads as the work not being done.\n\n" +
+            // Per name, because the remedies are not interchangeable — this said "link
+            // the task to its ticket" whichever placeholder was missing, so a check that
+            // could not find a merge base sent its operator to the ticket picker.
+            remediesFor(missing).join("\n\n"),
         },
       };
     }

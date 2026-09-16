@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { substitutePlaceholders } from "./commandPlaceholders";
+import { remediesFor, substitutePlaceholders } from "./commandPlaceholders";
 
 const VALUES = {
   taskName: "NMGB-2792",
@@ -53,6 +53,50 @@ describe("${baseCommit}", () => {
     expect(result.command).toBe("git rev-list feature/NMGB-2792-ev-share ^${baseCommit}");
     expect(result.missing).toEqual(["baseCommit"]);
     expect(result.unknown).toEqual([]);
+  });
+});
+
+describe("${mergeBase}", () => {
+  // The whole reason the placeholder exists. `${baseBranch}` names a moving ref, so a
+  // script diffing against its tip answers "how does this branch differ from the base
+  // right now" rather than "what did this branch change" -- and every file anyone else
+  // lands after the cut becomes this branch's work. Measured on qubeautoapp, 15 Sep
+  // 2026: one task branch showed 31 changed SQL files having changed none.
+  it("gives a check a fixed commit rather than a moving ref", () => {
+    const result = substitutePlaceholders(
+      "Test-SqlSmokeExecution.ps1 -ChangedSince ${mergeBase}",
+      { ...VALUES, mergeBase: "60ed516d9" },
+    );
+    expect(result.command).toBe("Test-SqlSmokeExecution.ps1 -ChangedSince 60ed516d9");
+    expect(result.missing).toEqual([]);
+  });
+
+  // Refused rather than run, which is the half that matters: a check that cannot
+  // establish what this branch changed must not fall back to comparing against the
+  // base's tip. That is the same wrong comparison wearing a different spelling, and it
+  // reports its wrong answers as findings about the work.
+  it("is left verbatim and reported when git cannot say", () => {
+    const result = substitutePlaceholders(
+      "Test-SqlSmokeExecution.ps1 -ChangedSince ${mergeBase}",
+      VALUES,
+    );
+    expect(result.command).toBe("Test-SqlSmokeExecution.ps1 -ChangedSince ${mergeBase}");
+    expect(result.missing).toEqual(["mergeBase"]);
+    expect(result.unknown).toEqual([]);
+  });
+});
+
+describe("remediesFor", () => {
+  // The message used to name the ticket remedy whichever placeholder was missing, so a
+  // check that could not find a merge base sent its operator to the ticket picker.
+  it("gives each missing name its own remedy", () => {
+    expect(remediesFor(["mergeBase"])[0]).toMatch(/diverged from its base/);
+    expect(remediesFor(["ticket"])[0]).toMatch(/Set Ticket Reference/);
+    expect(remediesFor(["ticket", "mergeBase"])).toHaveLength(2);
+  });
+
+  it("says nothing about a name it has no remedy for", () => {
+    expect(remediesFor(["branch"])).toEqual([]);
   });
 });
 
