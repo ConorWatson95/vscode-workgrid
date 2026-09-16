@@ -3389,6 +3389,57 @@ re-run reason. Nothing said so, because nothing counted the rounds.
   Absence of an activity record counts as unmeasured, the rule an unmeasured wait
   already follows.
 
+### Another ticket's work in this branch's diff
+
+`domain/branchContamination.ts`, 16 Sep 2026. On NMGB-2822 the worktree's
+`sp_TradeCampaigns.sql` carried 52 changed lines of which 3 were the task's own. The
+rest were NMGB-2832's campaign-conflict engine, referencing `CampaignPriority` and
+`ConflictGroupId` — columns no baseline table has, created only by that project's
+migration. So the branch could never deploy: a missing column on an *existing* table
+fails at CREATE, unlike a missing table, which deferred name resolution waves through.
+The task sat stopped for six days and the diagnosis was made by hand — a grep for the
+columns, another project's README, and finally `git log --all -S` to find the commit.
+
+Every input to that was a fact the harness holds or can get in one git call.
+
+**The conjunction is the whole design, and the naive half was measured and rejected.**
+The obvious check is "a changed file no stage is recorded as writing", since
+`pathsWritten` is kept verbatim. Measured on the live case that is **1 true positive and
+2 false**: the task changed four procedures and the watcher recorded one, the other
+three having been written through a shell heredoc — the same gap that made `rc-plan`'s
+plan document invisible to `changedNothing`. A flag firing on three files in four is the
+noise that teaches an operator to stop reading it.
+
+So the unattributed set is the **filter**, deciding which files are worth a git call and
+usually naming none, and the **confirmation** is `git log --all --not HEAD -S<line>`:
+content in the diff that already exists on a ref this branch cannot reach. That second
+half is what turns a suspicion into a diagnosis — it names the ticket, which is the
+sentence the operator otherwise writes themselves.
+
+Rules:
+
+- **Held, never failed**, and the ratio is not close: a false positive costs one click,
+  a false negative cost six days. A branch may carry another ticket's commit
+  deliberately, so the note names what it found and asks, the line
+  `stagedEnvironmentPaths` already draws — the paths are named, which of them belongs is
+  not.
+- **Against the merge base, including the working tree.** `${mergeBase}`'s reason for the
+  first; the second because contamination arrives uncommitted at least as often — on
+  NMGB-2822 nothing was committed at all.
+- **Comments are searched, not skipped.** The instinct is to drop them as not-really-code,
+  and a contaminating change brings its own with it: `-- Love2Shop overlap suppression is
+  handled inline` is the most distinctive line in that hunk. A line the task wrote itself
+  matches no foreign commit, so including it costs nothing.
+- **One confirmed line ends the search for that file.** Each `-S` is a history scan, and a
+  second hit only lengthens the same finding.
+- **Implementation stages only, on settle.** The question is about the *branch*, so asking
+  it per settled stage would re-derive one answer twenty-nine times on a real route.
+- **`pathsWritten` is read across every stage**, not the settling one: a file another
+  stage of the same task wrote is that task's work wherever it was written.
+
+Verified against the live worktree: the shipped query returns `d2ffbaf7c` — NMGB-2832 —
+first.
+
 ### The operator was the scheduler, and the evidence was already recorded
 
 `domain/stageAuthority.ts` + `domain/repairProposal.ts`, 1 Sep 2026. Two halves of one

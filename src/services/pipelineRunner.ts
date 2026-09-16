@@ -92,6 +92,11 @@ import {
   staleCheckers,
 } from "../domain/staleChecker";
 import {
+  Contamination,
+  contaminationNote,
+  unattributedPaths,
+} from "../domain/branchContamination";
+import {
   hasBlockingFindings,
   parseReviewFindings,
   summariseFindings,
@@ -510,6 +515,19 @@ export class PipelineRunner {
       task: TaskWorkspace,
       signal?: AbortSignal,
     ) => Promise<string | undefined>,
+    /**
+     * Which of these changed paths carry content already committed on another branch.
+     *
+     * The confirming half of `domain/branchContamination.ts`; the filtering half is
+     * pure and runs here first, so this is asked only about files no stage of the task
+     * is recorded as writing -- on most changes, none. Optional like the rest: a runner
+     * built without it holds nothing, the rule an unmeasured wait already follows.
+     */
+    private readonly foreignContent?: (
+      task: TaskWorkspace,
+      paths: readonly string[],
+      signal?: AbortSignal,
+    ) => Promise<readonly Contamination[]>,
   ) {}
 
   /**
@@ -610,6 +628,45 @@ export class PipelineRunner {
     }
     if (!paths) return undefined;
     return staleCheckerNote(staleCheckers(declared, paths), task.baseBranch);
+  }
+
+  /**
+   * Files in this branch's diff that no stage wrote and that exist elsewhere.
+   *
+   * Two halves, and the order is what keeps it cheap: the pure filter decides which
+   * paths are worth a git call, and on most changes that is none, so the confirming
+   * query never runs. A git failure yields no note -- absence of a measurement is not
+   * evidence the branch is clean, and a reassurance invented here would be worse than
+   * silence.
+   *
+   * `pathsWritten` is read across every stage of the pipeline, not this one: a file
+   * another stage of the same task wrote is that task's work wherever it was written.
+   */
+  private async contaminationNote(
+    task: TaskWorkspace,
+    pipeline: TaskPipeline,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    if (!this.changedPaths || !this.foreignContent) return undefined;
+    let changed: readonly string[] | undefined;
+    try {
+      changed = await this.changedPaths(task, signal);
+    } catch {
+      return undefined;
+    }
+    if (!changed || changed.length === 0) return undefined;
+
+    const written = pipeline.stages.flatMap((stage) =>
+      stage.subtasks.flatMap((subtask) => subtask.activity?.pathsWritten ?? []),
+    );
+    const suspect = unattributedPaths(changed, written);
+    if (suspect.length === 0) return undefined;
+
+    try {
+      return contaminationNote(await this.foreignContent(task, suspect, signal));
+    } catch {
+      return undefined;
+    }
   }
 
   private async runVerification(
@@ -2503,6 +2560,33 @@ export class PipelineRunner {
             `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
               "no files. Holding rather than passing: read what it did before approving.",
           );
+        }
+      }
+    }
+
+    // Work in the branch's diff that belongs to another ticket.
+    //
+    // Beside `changedNothing` and on the same trigger, because an implementation stage
+    // settling is the moment the diff has just changed and the earliest point anyone
+    // could act. Restricted to the same stage kinds for the same reason: this asks a
+    // question about the *branch*, so asking it once per settled stage of a 29-stage
+    // route would spend a `git diff` to re-derive one answer twenty-nine times.
+    if (reply.ok && this.foreignContent && this.changedPaths) {
+      const settled = pipeline.stages.find((s) => s.id === stage.id);
+      if (
+        settled &&
+        settled.kind === "implementation" &&
+        !settled.subtasks.some((s) => s.status === "pending" || s.status === "active")
+      ) {
+        const note = await this.contaminationNote(task, pipeline, signal);
+        if (note) {
+          pipeline = recordStageBlocked(pipeline, stage.id, note);
+          const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+          if (held.ok) {
+            pipeline = held.value;
+            steps.push(`"${stage.name}" — this branch carries another ticket's work; held for you.`);
+            this.logger.warn(`Harness [${task.name}] ${stage.name}: ${note}`);
+          }
         }
       }
     }

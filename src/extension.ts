@@ -70,6 +70,7 @@ import { nextAnnouncements } from "./domain/permissionGatePolicy";
 import { nodeGateFileSystem } from "./services/gateFileSystem";
 import { AskUserService, PendingAsk } from "./services/askUserService";
 import { ASK_TOOL_ALLOW_RULE } from "./agents/askUserProtocol";
+import { Contamination, distinctiveLines } from "./domain/branchContamination";
 import { recordInterjection, recordQuestion } from "./domain/pipelineEngine";
 import {
   CommandContext,
@@ -1039,6 +1040,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         signal,
       );
       return base.ok && base.value.length > 0 ? base.value : undefined;
+    },
+    // Which suspect paths carry content already committed on another branch. Asked only
+    // about files no stage of the task is recorded as writing, so this runs rarely and
+    // over a handful of paths -- see `domain/branchContamination.ts` for why the
+    // unattributed set is a filter and never a finding on its own.
+    async (task, paths, signal) => {
+      const found: Contamination[] = [];
+      for (const path of paths) {
+        const added = await statusService.getAddedLines(
+          task.worktreePath,
+          task.baseBranch,
+          path,
+          signal,
+        );
+        for (const line of distinctiveLines(added)) {
+          const commits = await statusService.findForeignCommits(
+            task.worktreePath,
+            path,
+            line,
+            3,
+            signal,
+          );
+          // One confirmed line is the answer. Searching the rest would only lengthen
+          // the same finding, and each search is a history scan.
+          if (commits.length > 0) {
+            found.push({ path, commits });
+            break;
+          }
+        }
+      }
+      return found;
     },
   );
 

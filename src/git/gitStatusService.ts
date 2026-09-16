@@ -274,6 +274,75 @@ export class GitStatusService {
   }
 
   /**
+   * The lines this branch added to one file, relative to where it diverged.
+   *
+   * Against the merge base rather than the base branch's tip, for `${mergeBase}`'s
+   * reason: DEV moves, and diffing from its tip would report every file anyone else
+   * landed since the cut as this branch's own work.
+   *
+   * Includes the working tree, because contamination arrives as an uncommitted edit at
+   * least as often as a commit — on NMGB-2822 nothing was committed at all.
+   */
+  async getAddedLines(
+    worktreePath: string,
+    baseBranch: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
+    const base = await this.getMergeBase(worktreePath, baseBranch, signal);
+    if (!base.ok) return [];
+    const result = await this.git.run(
+      ["diff", "--unified=0", base.value, "--", path],
+      { cwd: worktreePath, signal },
+    );
+    if (!result.ok) return [];
+    return result.value.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => line.slice(1));
+  }
+
+  /**
+   * Commits outside this branch's history that already contain `line` in `path`.
+   *
+   * `--all --not HEAD` is the whole question: a commit reachable from this branch is
+   * this branch's own history and says nothing, while one reachable only from some
+   * other ref is work that exists elsewhere. `-S` counts occurrences rather than
+   * matching a pattern, so the line is taken literally and needs no escaping.
+   *
+   * Capped, because the note names commits for a human to read and a line that turns
+   * out to be common would otherwise print a history.
+   */
+  async findForeignCommits(
+    worktreePath: string,
+    path: string,
+    line: string,
+    limit = 3,
+    signal?: AbortSignal,
+  ): Promise<{ sha: string; subject: string }[]> {
+    const result = await this.git.run(
+      [
+        "log",
+        "--all",
+        "--not",
+        "HEAD",
+        `--max-count=${limit}`,
+        "--format=%H%x00%s",
+        `-S${line}`,
+        "--",
+        path,
+      ],
+      { cwd: worktreePath, signal },
+    );
+    if (!result.ok) return [];
+    return result.value.stdout
+      .split(/\r?\n/)
+      .map((row) => row.split("\0"))
+      .filter((parts) => parts.length === 2 && parts[0].length > 0)
+      .map(([sha, subject]) => ({ sha, subject }));
+  }
+
+  /**
    * One file's contents at a revision, or undefined when it does not exist there.
    *
    * A missing path is reported as absence rather than a failure: it is the normal
