@@ -117,6 +117,7 @@ export class ReportContentProvider
       task.name,
       withLiveActivity(stage, live?.stageId === stage.id ? live : undefined),
       task.pipeline,
+      task.worktreePath,
     );
   }
 

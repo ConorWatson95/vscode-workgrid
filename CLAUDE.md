@@ -629,6 +629,19 @@ sessions are invisible":
   reason for opening the report — with the detail one click away on the stage row.
   `MAX_REPORT_CHARS` is the backstop for a single stage, announced rather than silent,
   since output that simply stops reads as the command having stopped.
+- **A listed file is a link, and the link has to open the worktree's copy**
+  (`ui/reportLinks.ts`). The paths were plain code, so reviewing a stage meant reading
+  a path, copying it and finding the file by hand, dozens of times over. They are
+  recorded verbatim already, so nothing new is captured. The load-bearing part is
+  *which copy* opens: a stage session runs with the worktree as its cwd, so a relative
+  path it recorded means the worktree's file, and a link resolved against the main
+  checkout opens the same path on the base branch — a file that looks almost identical,
+  is not the one under review, and says nothing on screen about which it is. Made
+  absolute against the worktree, per-segment encoded so a profile directory with a
+  space in it survives, and **left as plain text when there is no worktree to resolve
+  against** rather than linked to a guess. The visible text stays the path exactly as
+  recorded, since a reader matching the report against a diff is matching those
+  strings.
 - **`agents/stageActivity.ts` + `ui/stageReport.ts`** — a stage session's reply used
   to be parsed for a marker and discarded, so a deployment preview that printed
   pages of output left nothing behind. `StageActivityWatcher` (fed from the same

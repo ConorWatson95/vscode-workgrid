@@ -1,3 +1,4 @@
+import { fileLink } from "./reportLinks";
 import { Subtask, SubtaskActivity, TaskStage, TaskPipeline,
   ChecklistItem,
 } from "../domain/taskPipeline";
@@ -355,6 +356,10 @@ export function formatStageReport(
   taskName: string,
   stage: TaskStage,
   pipeline: TaskPipeline | undefined,
+  // Optional: absence means the file lists render as plain code, exactly as before.
+  // A task whose worktree has gone still opens its report, and linking those paths
+  // into a directory that is not there would be worse than not linking them.
+  worktreePath?: string,
 ): string {
   // Redacted again at the end of this function, not only at capture. Capture-time
   // masking cannot help a task recorded by an earlier build, and this document is
@@ -662,7 +667,7 @@ export function formatStageReport(
   );
   for (const subtask of stage.subtasks) {
     if (superseded.has(subtask.id)) continue;
-    const detail = formatSubtaskDetail(subtask);
+    const detail = formatSubtaskDetail(subtask, worktreePath);
     if (detail.length === 0) continue;
     const heading = `What ${stage.subtasks.length > 1 ? `"${subtask.title}"` : "it"} did — tools, commands and output`;
     lines.push(
@@ -737,7 +742,7 @@ function formatSubtaskReply(subtask: Subtask, headed: boolean): string[] {
  * Returns an empty list when there is nothing to show, so the caller can omit the
  * section rather than render an empty one.
  */
-function formatSubtaskDetail(subtask: Subtask): string[] {
+function formatSubtaskDetail(subtask: Subtask, worktreePath?: string): string[] {
   const lines: string[] = [];
   if (subtask.startedAt) lines.push(`Started: ${subtask.startedAt}  `);
   if (subtask.finishedAt) lines.push(`Finished: ${subtask.finishedAt}  `);
@@ -768,7 +773,9 @@ function formatSubtaskDetail(subtask: Subtask): string[] {
 
   if ((activity.pathsWritten ?? []).length > 0) {
     lines.push("", "### Files changed", "");
-    for (const path of activity.pathsWritten ?? []) lines.push(`- \`${path}\``);
+    for (const path of activity.pathsWritten ?? []) {
+      lines.push(`- ${fileLink(path, worktreePath)}`);
+    }
   }
 
   if ((activity.commands ?? []).length > 0) {
@@ -798,7 +805,9 @@ function formatSubtaskDetail(subtask: Subtask): string[] {
       "<details><summary>Files read (" + (activity.pathsRead?.length ?? 0) + ")</summary>",
       "",
     );
-    for (const path of activity.pathsRead ?? []) lines.push(`- \`${path}\``);
+    for (const path of activity.pathsRead ?? []) {
+      lines.push(`- ${fileLink(path, worktreePath)}`);
+    }
     lines.push("", "</details>");
   }
 
