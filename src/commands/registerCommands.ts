@@ -41,6 +41,7 @@ import {
   syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
+import { briefFault, fatigueAdvice } from "../domain/correctionBrief";
 import { deferralHeadline, isAbridged } from "../domain/deferralText";
 import { rowTask } from "../ui/rowTask";
 import { HANDOFF_EXPERIMENT } from "../domain/pipelineExperiment";
@@ -801,8 +802,10 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
     placeHolder:
       'e.g. "Specified cast is not valid" opening the report — the grid reads TotalValue as int',
     ignoreFocusOut: true,
-    validateInput: (value) =>
-      value.trim().length === 0 ? "Say what is wrong, or press Escape." : undefined,
+    // The finding is not a label on the act, it is the whole brief the correction
+    // session gets — so a word that names no subject buys a session that changes
+    // nothing *and* every later stage re-opened on its account.
+    validateInput: briefFault,
   });
   if (!finding) return;
 
@@ -812,6 +815,7 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
   const queued = stage.subtasks.filter(
     (subtask) => subtask.correction && subtask.status === "pending",
   ).length;
+  const fatigue = fatigueAdvice(stage);
   const confirmed = await vscode.window.showWarningMessage(
     `Fix this in "${stage.name}"?`,
     {
@@ -824,11 +828,19 @@ async function correctStageCommand(ctx: CommandContext, arg: unknown): Promise<v
           : "No later stage has run yet, so nothing else is discarded.\n\n") +
         (queued > 0
           ? `${queued} correction(s) are already waiting on this stage; they all run on the next advance.`
-          : "Fix It queues it — add more corrections before advancing, and they run together."),
+          : "Fix It queues it — add more corrections before advancing, and they run together.") +
+        (fatigue ? `
+
+${fatigue}` : ""),
     },
     "Fix It & Advance",
     "Fix It",
+    ...(fatigue ? ["Re-run It Instead"] : []),
   );
+  if (confirmed === "Re-run It Instead") {
+    await vscode.commands.executeCommand("taskWorkspaces.revertToStage", arg);
+    return;
+  }
   if (confirmed !== "Fix It" && confirmed !== "Fix It & Advance") return;
 
   const corrected = correctStage(task.pipeline, stage.id, {

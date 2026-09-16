@@ -3327,6 +3327,55 @@ in flight pick it up at the next advance, and any whose plan document was never 
 the expected path will stop. That is the mechanism working and will read as breakage, which
 is the whole reason to see it happen on one short route first.
 
+### A correction whose whole brief was one word
+
+`domain/correctionBrief.ts`, 16 Sep 2026. On RU-563 `rc-implement-app` was corrected
+four times and amended six — $8.31, 16m 49s of session — and the tenth round's entire
+finding was `Incorrect.` The box accepted it, because the only thing it refused was an
+empty string. That subtask recorded no reply at all.
+
+`correctStage` works by handing the session the stage's own previous report and telling
+it to change only what the finding names, so the finding is not a label on the act, it
+is the **whole brief**. A word that asserts a conclusion and names no subject leaves a
+capable model nothing to narrow on — and the cost is not the wasted session, since
+filing the correction has already re-opened every stage behind it. Same shape as
+settling a deferral requiring a sentence, one command over, and for the same reason:
+what was missing is the thing silence cannot supply.
+
+**`briefFault` refuses two shapes**, and the first is the exact failure. A finding made
+of nothing but judgement words (`Incorrect.`, `still wrong`, `no, fix it again`) is a
+verdict, not a finding — enumerated rather than shape-tested, for `isNothingReported`'s
+reason: a guess at "sounds like a verdict" refuses real findings, and a refusal the
+operator cannot get past is worse than the session it saves. A verdict word *inside* a
+sentence is untouched, so "no total column on the export" passes. The second is a
+three-word floor, low on purpose — "tabs still hidden" is a real finding and shorter
+than the failure.
+
+**The second half is what the failure was really about.** Ten rounds in, the requirement
+had reversed three times (tabs hidden then not; the period range Detail-only then
+report-wide) and six of the ten rounds were amendments chasing an upstream stage
+changing its mind. Correcting preserves a stage's previous output *because that output
+is worth keeping*; where the requirement itself is moving there is nothing stable to
+preserve, and the honest move is `revertToStage` with the settled requirement as its
+re-run reason. Nothing said so, because nothing counted the rounds.
+
+`repairFatigue` counts them, and four rules:
+
+- **Advisory, never a refusal**, with the revert offered as a third button. One more
+  correction may be exactly right — the operator can see the finding and the runtime
+  cannot — and refusing would leave a stage with no admissible repair at all.
+- **Threshold 4**, which is where `stageHistory` measured a stage becoming unreadable.
+  Below it a repair is ordinary and a warning is the noise that teaches people to click
+  past the one that matters.
+- **Counted on repairs, not subtasks.** A split stage's parallel units are one round of
+  work done in several sessions, and counting them would fire on a stage nobody has
+  corrected once.
+- **A barren round is evidence and an unmeasured one is not.**
+  `correctionChangedNothing`'s `pathsWritten` read for a different question: a repair
+  that wrote no file is a round where the stage was talked at rather than corrected.
+  Absence of an activity record counts as unmeasured, the rule an unmeasured wait
+  already follows.
+
 ### The operator was the scheduler, and the evidence was already recorded
 
 `domain/stageAuthority.ts` + `domain/repairProposal.ts`, 1 Sep 2026. Two halves of one
