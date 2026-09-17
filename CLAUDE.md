@@ -2023,8 +2023,14 @@ nothing.
   server silently absent from both lists reads as ready, which is the exact failure the
   check exists to prevent. The most valuable of these by some distance.
   **Half of what this probe wanted now exists** (2.1.274): init rows carry a `source`, and
-  it was read live on 17 Sep — `project` for the two servers from `.mcp.json`, `claudeai`
-  for the Docs connector. So provenance is available and `mcpReadiness` could key on it
+  it was measured live on 17 Sep. The same two servers report **`project`** when loaded
+  ambiently from a worktree's `.mcp.json` and **`dynamic`** when passed through
+  `--mcp-config`, with `claudeai` for the Docs connector — so harness-supplied and ambient
+  are distinguishable on the CLI path, `dynamic` being the equivalent of the `sdk` value
+  the Agent SDK exposes. That is worth knowing because `claudeCliArgs` does **not** pass
+  `--strict-mcp-config` by default, so a worktree's own `.mcp.json` loads alongside ours
+  and a required server could be satisfied by the ambient copy rather than the one the
+  harness supplied. So provenance is available and `mcpReadiness` could key on it
   rather than matching names. Deliberately **not** done yet: the question the probe
   actually asks is *where a precedence-skipped server appears*, and that is still
   unanswered, so keying on provenance would harden the half that was never the risk. The
