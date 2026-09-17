@@ -1513,6 +1513,22 @@ away for a reason that was never about the work.
 - **A limit no backoff reaches the other side of is not transient**, checked first. A
   plan or credit limit arrives wearing 429's clothes, and retrying would spend the
   budget discovering that and then report the wrong reason.
+- **And excluding it from the retry was not the same as blaming it** — corrected 17 Sep
+  2026. A capacity limit fell through to `"stage"`, so it *failed* the stage, whose only
+  remedy is `revertToStage`: running out of plan capacity cost strictly more than a 529,
+  which is merely held. This module's own opening paragraph is the argument against that
+  — *a stage whose session died on someone else's capacity has told you nothing at all* —
+  and a plan limit is exactly that with a longer wait attached. `"capacity"` is a third
+  `FailureOrigin`, neither retried nor blamed, held on the path an exhausted retry budget
+  already takes. Kept apart from `transient` in the ledger because the remedies differ:
+  that one is tuned with `transientRetryAttempts` and this one is waited out or paid for,
+  so summing them would point the next investigation at a retry budget no retry could
+  have reached. **Authentication stays the stage's** — 401, 403 and an invalid key are
+  the one shape that resembles a capacity limit and must not be held waiting for a window
+  that never resets, since a permanent misconfiguration presented as a wait is worse than
+  a failure. The timing is why it was worth doing rather than filing: the weekly
+  allowance went from 150% to 125% of baseline on 14 Sep 2026, so this path is reached
+  more often than it was when it was written.
 - **The budget is in memory, not on the pipeline.** It exists to stop one advance looping
   forever on an outage; a reload or a fresh Advance Route is a human deciding to try
   again and should get a fresh budget rather than inherit an exhausted one from a state

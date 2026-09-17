@@ -41,7 +41,13 @@ export interface FailureSummary {
 }
 
 /** Dispositions in reading order: what the harness did, then what it gave up on. */
-const ORDER: readonly FailureDisposition[] = ["repaired", "retried", "reverted", "transient"];
+const ORDER: readonly FailureDisposition[] = [
+  "repaired",
+  "retried",
+  "reverted",
+  "transient",
+  "capacity",
+];
 
 /**
  * A route's failures, or nothing when it has had none.
@@ -129,5 +135,7 @@ export function describeDisposition(disposition: FailureDisposition): string {
       return "discarded this stage and everything after it";
     case "transient":
       return "gave up after the transport kept failing";
+    case "capacity":
+      return "ran out of plan capacity";
   }
 }

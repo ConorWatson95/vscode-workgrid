@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   backoffMs,
   classifyFailure,
+  isCapacityFailure,
   isTransientFailure,
   MAX_BACKOFF_MS,
 } from "./transientFailure";
@@ -41,12 +42,34 @@ describe("classifyFailure", () => {
 
   it("does not retry a limit no backoff reaches the other side of", () => {
     // Wears 429's clothes, and a retry would spend the budget discovering that
-    // and then report the wrong reason.
-    expect(classifyFailure("Claude usage limit reached (429). Resets at 3pm.")).toBe(
-      "stage",
+    // and then report the wrong reason. Capacity is checked before the transport
+    // vocabulary for exactly that reason.
+    expect(isTransientFailure("Claude usage limit reached (429). Resets at 3pm.")).toBe(
+      false,
     );
-    expect(classifyFailure("429: your credit balance is too low")).toBe("stage");
+    expect(isTransientFailure("429: your credit balance is too low")).toBe(false);
+  });
+
+  it.each([
+    "Claude usage limit reached (429). Resets at 3pm.",
+    "429: your credit balance is too low",
+    "you have exceeded your monthly quota",
+  ])("blames nobody for %s", (reason) => {
+    // Not the stage's: the session died on the plan's limit, which says as little
+    // about the work as an outage does. Blaming it fails the stage, and a failed
+    // stage's only remedy is `revertToStage` — so running out of capacity used to
+    // cost more than a 529, which is merely held.
+    expect(classifyFailure(reason)).toBe("capacity");
+    expect(isCapacityFailure(reason)).toBe(true);
+  });
+
+  it("still blames the stage for an authentication failure", () => {
+    // The one shape that resembles a capacity limit and must not be held waiting for
+    // a window: nothing resets, and a human has to go and fix a key. Held quietly, a
+    // permanent misconfiguration would present as a wait.
     expect(classifyFailure("API Error: 401 Unauthorized")).toBe("stage");
+    expect(classifyFailure("invalid api key")).toBe("stage");
+    expect(isCapacityFailure("API Error: 403")).toBe(false);
   });
 
   it("treats an unrecognised reason as the stage's, so nothing changes by accident", () => {

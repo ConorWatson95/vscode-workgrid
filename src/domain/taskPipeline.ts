@@ -839,7 +839,14 @@ export type FailureDisposition =
   /** `revertToStage` — this stage and everything after it. */
   | "reverted"
   /** The runner's own retry budget gave up. Never judged, so never blamed. */
-  | "transient";
+  | "transient"
+  /**
+   * The plan's capacity ran out. Never judged either, and kept apart from `transient`
+   * because the remedies differ: that one is tuned with `transientRetryAttempts`, this
+   * one is waited out or paid for, and a ledger that summed them would point at the
+   * retry budget for a failure no retry could ever have reached.
+   */
+  | "capacity";
 
 /**
  * One subtask's failure, and what was eventually done about it.

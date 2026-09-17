@@ -78,6 +78,7 @@ import { describeDiscard, DiscardSelection } from "../domain/worktreeDiscard";
 import {
   backoffMs,
   DEFAULT_TRANSIENT_ATTEMPTS,
+  isCapacityFailure,
   isTransientFailure,
 } from "../domain/transientFailure";
 import {
@@ -1891,6 +1892,50 @@ export class PipelineRunner {
     //
     // Reverted rather than judged, exactly as a stop and a question are: nothing has
     // been decided about this subtask, so the route must resume from it.
+    // Plan capacity, which is the same fact as a 529 with a longer wait attached: the
+    // session died on somebody else's limit and nothing about the stage is wrong. It
+    // used to fall through to an ordinary failure, so running out of weekly capacity
+    // cost a `revertToStage` — more than an outage does, for a reason that tells you
+    // even less. Held on the path an exhausted retry budget already takes, minus the
+    // retrying: no amount of backoff reaches the other side of a plan window.
+    if (!reply.ok && isCapacityFailure(reply.error)) {
+      const cause = reply.error ?? "the plan's capacity ran out";
+      const reverted = revertSubtask(pipeline, subtask.id);
+      if (reverted.ok) pipeline = reverted.value;
+      // Reverted rather than judged, and dropped from the owned set, exactly as the
+      // transport path does and for the same reason.
+      this.startedSubtasks.delete(subtask.id);
+      const saved = await this.recordAppearedWorktrees(
+        await this.save(task, pipeline),
+        claimsBefore,
+        stage,
+        steps,
+        reply.activity?.commands ?? [],
+      );
+      const reason =
+        `the plan's capacity ran out (${cause}). Nothing about the stage is wrong; ` +
+        "Advance Route runs it again once the window resets.";
+      this.logger.error(`Harness [${task.name}] "${stage.name}" held: ${reason}`);
+      steps.push(`"${stage.name}" is held: ${reason}`);
+      // Appended rather than patched, as the transport path is: this reverts the
+      // subtask, so `finishSubtask` never ran and there is no entry to attach a
+      // disposition to.
+      const ledgered = recordFailure(saved.pipeline!, {
+        stageId: stage.id,
+        stageName: stage.name,
+        subtaskId: subtask.id,
+        at: new Date().toISOString(),
+        reason: cause,
+        disposition: "capacity",
+        dispositionAt: new Date().toISOString(),
+      });
+      return {
+        task: await this.save(saved, recordStageBlocked(ledgered, stage.id, reason)),
+        failed: true,
+        reason,
+      };
+    }
+
     if (!reply.ok && isTransientFailure(reply.error)) {
       const attempt = (this.transientRetries.get(subtask.id) ?? 0) + 1;
       const budget = Math.max(0, this.transientAttempts());

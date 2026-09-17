@@ -18,6 +18,11 @@
 export type FailureOrigin =
   /** Somebody else's capacity, or the network. Nothing about the stage is wrong. */
   | "infrastructure"
+  /**
+   * The plan's own limit. Nothing about the stage is wrong either, but no amount of
+   * backoff reaches the other side of it, so it is neither retried nor blamed.
+   */
+  | "capacity"
   /** The stage, the prompt, the tools, the CLI's own limits. A human should read it. */
   | "stage";
 
@@ -52,14 +57,33 @@ const INFRASTRUCTURE = [
 /**
  * Phrases that look transient and are not, checked first.
  *
- * A plan or credit limit arrives wearing 429's clothes and no amount of backoff
- * reaches the other side of it — retrying would spend the budget discovering that,
- * then report the wrong reason. An authentication failure is the same shape.
+ * A plan or credit limit arrives wearing 429's clothes and no amount of backoff reaches
+ * the other side of it — retrying would spend the budget discovering that, then report
+ * the wrong reason. So it is excluded from the retry, which was always right; what was
+ * wrong for as long as this file has existed is that it then fell through to `"stage"`
+ * and *failed* the stage, whose only remedy is `revertToStage` — discarding the stage
+ * and everything after it. Running out of plan capacity therefore cost strictly more
+ * than a 529, which is held. This module's own opening paragraph is the argument
+ * against that: a session that died on somebody else's capacity has told you nothing
+ * about the work, and a plan limit is exactly that with a longer wait attached.
+ *
+ * Its own origin rather than a flag on the existing one, because the disposition
+ * differs in both directions: no retry, and no blame either.
  */
-const NOT_TRANSIENT = [
+const CAPACITY = [
   /\busage limit\b/i,
   /\bcredit balance\b/i,
   /\bquota\b/i,
+];
+
+/**
+ * Phrases that look transient and are genuinely the stage's, checked next.
+ *
+ * An authentication failure is the one shape that resembles a capacity limit and must
+ * not be held quietly waiting for a window to reset: nothing resets, and a human has
+ * to go and fix a key. Holding it would present a permanent misconfiguration as a wait.
+ */
+const NOT_TRANSIENT = [
   /\b(401|403)\b/,
   /\bunauthorized\b/i,
   /\binvalid api key\b/i,
@@ -75,6 +99,10 @@ const NOT_TRANSIENT = [
 export function classifyFailure(reason: string | undefined): FailureOrigin {
   const text = reason?.trim();
   if (!text) return "stage";
+  // Capacity first: a plan limit routinely arrives carrying 429 as well, and read the
+  // other way round it would be retried until the budget was spent proving it could not
+  // be.
+  if (CAPACITY.some((pattern) => pattern.test(text))) return "capacity";
   if (NOT_TRANSIENT.some((pattern) => pattern.test(text))) return "stage";
   return INFRASTRUCTURE.some((pattern) => pattern.test(text))
     ? "infrastructure"
@@ -84,6 +112,17 @@ export function classifyFailure(reason: string | undefined): FailureOrigin {
 /** Whether a failed session is worth simply running again. */
 export function isTransientFailure(reason: string | undefined): boolean {
   return classifyFailure(reason) === "infrastructure";
+}
+
+/**
+ * Whether a failed session ran out of plan capacity.
+ *
+ * Held rather than retried, and held rather than failed. The route needs another
+ * advance once the window resets, which is the same thing an exhausted retry budget
+ * needs — so it reuses that path exactly, minus the retrying.
+ */
+export function isCapacityFailure(reason: string | undefined): boolean {
+  return classifyFailure(reason) === "capacity";
 }
 
 /** How many times a transient failure is re-run before a human is told. */
