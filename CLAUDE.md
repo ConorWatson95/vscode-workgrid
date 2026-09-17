@@ -1846,6 +1846,33 @@ general-purpose surface. Declaring only the tools stages actually use halves it.
 | a six-tool guess | 7,764 |
 | none at all | 3,511 |
 
+**And the measurement excluded the project's own context** — re-measured 17 Sep 2026 on
+CLI 2.1.274. Both figures above were taken from an unrelated cwd, so neither carries
+`CLAUDE.md`, `.claude/agents`, `commands`, `skills`, git status or memory. Against a
+33-tool empty-directory control of **34,465** tokens, a `qubeautoapp` worktree costs
+**45,399** and the repository root **47,347** — root and worktree within 600 tokens of
+each other, so the branch-specific `CLAUDE.md` does not matter. The project layer is
+therefore **~11,000 tokens**, and a real stage prefix is closer to **28k** than to 16,695.
+The `--tools` decision is unchanged and so is every ratio in the table; what was wrong is
+that the figure the decision is recorded against is two thirds of the cost.
+
+**Project context is re-created on every session and never reused across them**, which is
+what makes that 11k a per-*subtask* cost rather than a per-route one. Two fresh sessions in
+this repository seconds apart created 98,572 and 96,071 tokens while reading 25,459 and
+27,966 — identical totals, no growth in reuse whatever. Only the static system/tool prefix
+is shared between sessions; the project layer lands in cache *creation* every time. So the
+lever is the size of a project's durable documentation, not the number of sessions, and the
+two repositories are far apart on it: 11k for `qubeautoapp` against **89,566** here, where
+a 257KB `CLAUDE.md` costs about **$0.64 a session before any work at all**. That is a cost
+on developing the extension, not on running routes — worth knowing before anyone reads the
+two numbers as comparable.
+
+**The MCP surface was the cheap half, against expectation.** Adding `qube-sftp` and
+`atlassian` takes the worktree from 33 tools to 85 for about **2,500 tokens**, and they
+arrive in the cache *read* rather than being created. The scan measurement's conclusion
+that "the remaining cost is the MCP tool surface" was true of that server set and must not
+be carried forward as general.
+
 **The list is measured, and guessing it broke things.** Every entry comes from
 `SubtaskActivity.toolCounts` across 160 real sessions — which is exactly why activity is
 recorded verbatim. The first list written from intuition (Bash, Read, Write, Edit, Glob,
@@ -1953,7 +1980,19 @@ Two checks that both exist because the failure they prevent is a stage *succeedi
 
 Every CLI fact above is a *result*, recorded so it is not re-derived. This is the other
 half: what is **not yet probed**. The validated baseline is **CLI 2.1.223** — everything
-asserted above holds there and nowhere else has been checked. Each item below is a
+asserted above holds there and nowhere else has been checked.
+
+**The installed CLI is 2.1.274 as of 17 Sep 2026, and the gap is the finding.** Stages had
+been running on 2.1.258 for weeks while this section claimed 223, so every fact above was
+asserted against a version nothing had executed in some time — the quoting table, the
+`timeout` field, `PermissionRequest` in print mode, `--tools` enforcement. None of them is
+known to be wrong and none has been re-checked; only the prefix measurement above was
+re-taken. `SubtaskActivity.cliVersion` exists precisely so the next version of this
+paragraph can be read off the state file instead of off somebody's memory of when they last
+installed a vsix. The dated probe records elsewhere in this file still say 2.1.223 because
+that is when they were run, and changing them would assert probes that never happened.
+
+Each item below is a
 behaviour a later release changed or introduced that can alter stage execution *without
 failing*, which is the only kind worth the startup cost of a probe. Run them when the
 baseline is next promoted, not before; a probe against a version no stage runs answers
@@ -1967,6 +2006,17 @@ nothing.
   `mcp_servers`, an entry in `mcp_server_errors`, or only a warning in neither. A required
   server silently absent from both lists reads as ready, which is the exact failure the
   check exists to prevent. The most valuable of these by some distance.
+  **Half of what this probe wanted now exists** (2.1.274): init rows carry a `source`, and
+  it was read live on 17 Sep — `project` for the two servers from `.mcp.json`, `claudeai`
+  for the Docs connector. So provenance is available and `mcpReadiness` could key on it
+  rather than matching names. Deliberately **not** done yet: the question the probe
+  actually asks is *where a precedence-skipped server appears*, and that is still
+  unanswered, so keying on provenance would harden the half that was never the risk. The
+  same release also stops awaiting settings-file and plugin servers on the first turn while
+  still awaiting `--mcp-config` ones, which is why the check survives it at all — a project
+  supplying a required server through settings rather than `--mcp-config` would now read as
+  `not configured`. That is an accident of a decision made for another reason, and the
+  probe stays open.
 - **`Write` may overwrite an unread file, on newer models only** (2.1.228). The one item
   that changes tool semantics rather than architecture: same stage, same file, different
   model, different admissible action. Probe is cheap and deterministic — existing file,
