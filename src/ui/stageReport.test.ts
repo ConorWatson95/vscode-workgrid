@@ -826,3 +826,30 @@ describe("checklist kinds in the report", () => {
     expect(report).not.toContain("## Verification items raised");
   });
 });
+
+describe("the plan a stage accounted for", () => {
+  const withSteps = (over: Partial<TaskStage> = {}) =>
+    stage({
+      planFile: "docs/plans/fix/wrong-from-period/rc-plan.md",
+      planSteps: [{ number: 1, title: "Fix the period", status: "done" }],
+      ...over,
+    } as Partial<TaskStage>);
+
+  it("links the plan against the worktree, like every other recorded path", () => {
+    const report = formatStageReport("T", withSteps(), undefined, "C:/Dev/worktrees/wg-fix");
+    expect(report).toContain(
+      "## Plan steps — [`docs/plans/fix/wrong-from-period/rc-plan.md`]" +
+        "(file:///C:/Dev/worktrees/wg-fix/docs/plans/fix/wrong-from-period/rc-plan.md)",
+    );
+  });
+
+  it("leaves it plain when there is no worktree to resolve against", () => {
+    const report = formatStageReport("T", withSteps(), undefined);
+    expect(report).toContain("## Plan steps — `docs/plans/fix/wrong-from-period/rc-plan.md`");
+  });
+
+  it("says 'its plan' when the stage declared none", () => {
+    const report = formatStageReport("T", withSteps({ planFile: undefined }), undefined, "C:/w");
+    expect(report).toContain("## Plan steps — its plan");
+  });
+});

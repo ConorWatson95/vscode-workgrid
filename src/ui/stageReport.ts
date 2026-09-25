@@ -550,7 +550,13 @@ export function formatStageReport(
   // steps actually happened, and the answer used to be nowhere at all.
   const planSteps = stage.planSteps ?? [];
   if (planSteps.length > 0) {
-    lines.push("", `## Plan steps — ${stage.planFile ?? "its plan"}`, "");
+    // The plan itself is a link, for the same reason the written and read paths are:
+    // this is the document the steps below are an account of, and reading the account
+    // without it means finding the file by hand. `fileLink` resolves it against the
+    // worktree — a plan path is recorded relative to the branch's own checkout, and the
+    // main checkout's copy is a different plan for different work.
+    const planLink = stage.planFile ? fileLink(stage.planFile, worktreePath) : "its plan";
+    lines.push("", `## Plan steps — ${planLink}`, "");
     for (const step of planSteps) {
       const state =
         step.status === "done"
