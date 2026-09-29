@@ -426,6 +426,56 @@ describe("parseChecklistReply", () => {
     ).toEqual([{ text: "Edit an existing customer" }, { text: "Run a dealer report" }]);
   });
 
+  it("stops at the section the stage wrote after its list", () => {
+    // The shape of a real reply, and the failure it produced: six items, then the
+    // stage explaining itself under a heading, and the explanation arrived at the
+    // gate as six more things for a person to go and observe.
+    expect(
+      parseChecklistReply(
+        [
+          "- Export with the default period and check the From row",
+          "- Choose Calendar YTD and check there is no From row",
+          "",
+          "Findings for this stage:",
+          "- I did not add checks. The manifest already held three.",
+          "- I haven't run or verified any of these checks.",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { text: "Export with the default period and check the From row" },
+      { text: "Choose Calendar YTD and check there is no From row" },
+    ]);
+  });
+
+  it("stops at a bold or markdown heading too", () => {
+    expect(
+      parseChecklistReply(["- Check the export", "", "**Notes:**", "- An aside"].join("\n")),
+    ).toEqual([{ text: "Check the export" }]);
+    expect(
+      parseChecklistReply(["- Check the export", "", "## Notes", "- An aside"].join("\n")),
+    ).toEqual([{ text: "Check the export" }]);
+  });
+
+  it("keeps going past a heading that precedes the list", () => {
+    // Guarded on having started: a reply opening with its own heading would otherwise
+    // parse to nothing, which is the failure direction that loses real items.
+    expect(parseChecklistReply(["Checklist:", "- Check the export"].join("\n"))).toEqual([
+      { text: "Check the export" },
+    ]);
+  });
+
+  it("does not end the list on a wrapped item", () => {
+    // An indented continuation is part of the item above it. Ending there would drop
+    // every item after a single wrapped line -- silently, which is the worse failure.
+    expect(
+      parseChecklistReply(
+        ["- Check the export carries:", "  the From and To periods", "- Check the CSV agrees"].join(
+          "\n",
+        ),
+      ),
+    ).toEqual([{ text: "Check the export carries:" }, { text: "Check the CSV agrees" }]);
+  });
+
   it("ignores bullets quoted inside a fenced block", () => {
     // They would be items nobody can tick, and an outstanding item holds a gate.
     expect(

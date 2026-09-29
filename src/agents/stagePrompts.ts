@@ -1333,6 +1333,32 @@ export function parseSubtaskPlan(text: string): SubtaskSpec[] {
   return specs;
 }
 
+/**
+ * Does this line start a section after the checklist, rather than continue it?
+ *
+ * The checklist had no end. Every bulleted line anywhere in the report became an item,
+ * so a stage that wrote its six items and then explained itself under
+ * "Findings for this stage:" produced **twelve**, the last six being sentences like
+ * "I did not add checks" and "I haven't run or verified any of these checks" — put to
+ * an operator as things to go and observe. The reply was well written; nothing had told
+ * the parser where the list stopped.
+ *
+ * Narrow, because the asymmetry is not close: ending the list too early drops a real
+ * verification item and a gate then asks for less than it should, silently. So only an
+ * unmistakable section opener counts — a markdown heading, or an unindented line whose
+ * last character is a colon, which is what introducing a new section looks like. An
+ * indented line is a wrapped item and never ends anything, and a marker line carries
+ * text after its colon so it is not one of these.
+ */
+function opensNewSection(raw: string): boolean {
+  if (/^\s/.test(raw)) return false;
+  const line = raw.trim();
+  if (!line) return false;
+  if (/^#{1,6}\s/.test(line)) return true;
+  // Emphasis stripped first: a section is as often "**Findings:**" as "Findings:".
+  return /:$/.test(line.replace(/^[*_]+/, "").replace(/[*_]+$/, ""));
+}
+
 /** Parses a checklist reply. "NONE" yields an empty list, which is a valid answer. */
 export function parseChecklistReply(
   text: string,
@@ -1348,6 +1374,9 @@ export function parseChecklistReply(
   for (const raw of unfencedLines(text)) {
     const line = raw.trim();
     const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
+    // Only once the list has actually started: a reply may open with "Checklist:" or a
+    // heading, and terminating on that would return nothing at all.
+    if (!bullet && items.length > 0 && opensNewSection(raw)) break;
     if (!bullet) continue;
     const body = bullet[1].trim();
     // A lone "NONE" bullet means the same as the bare word.
