@@ -856,27 +856,71 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
  * of gaps, which is the only way the number ever goes down — an untagged item is
  * otherwise indistinguishable from one nobody got round to automating.
  *
- * Deliberately no mention of where the ids live. That is a property of the project's
- * own tooling and belongs in the stage's intent; a harness that named a file here
- * would stop being generic, which is the line `StageContext` draws everywhere else.
+ * **The checklist is the source and a check implements one item of it**, which is the
+ * part that makes this cohere. Two weaker shapes were tried first and both leave the
+ * operator holding the join. Asked only to *tag*, a review can reach no further than
+ * the checks somebody already wrote, so prose and ids are matched up by hand, item by
+ * item — the *never by hand, twice* rule broken by the mechanism built to honour it.
+ * Asked to write checks *and* a checklist, it writes two lists in one reply, and
+ * nothing then holds them together: a check can cover no item, an item can name a
+ * check that nearly fits, and the tag reads as an answer while being an approximation.
+ *
+ * So the order is stated and it is not cosmetic. Decide what a person must observe;
+ * that is the checklist, and it is complete before any check exists. Then implement
+ * the items that a machine can answer, one check per item, each named after the item
+ * it answers. Under that rule a gap is not a judgement anybody makes — it is simply an
+ * item with no implementation, which is the only definition that stays true as the
+ * list changes.
+ *
+ * `summariseCoverage` counts the checks no item names, because the derivation is the
+ * one thing a reply cannot be trusted to have got right and it is invisible read from
+ * the items outwards.
+ *
+ * It works because of the order `pipelineRunner` already runs in: the session ends,
+ * *then* the stage's `verify` runs. A check written during the session is therefore a
+ * check that ran, so the item naming it ticks in the same advance.
+ *
+ * Deliberately no mention of where the checks live or what one looks like. That is a
+ * property of the project's own tooling and belongs in the stage's intent; a harness
+ * that named a file here would stop being generic, which is the line `StageContext`
+ * draws everywhere else. So the instruction is conditional on the project having said
+ * how — absent that, this asks for tagging only, exactly as before.
  */
 function coverageInstruction(recorded: boolean): string {
   if (!recorded) return "";
   return `
-This route runs automated checks, and it records which of them ran. Where an item is
-answered by one, end the line with the check's id in that form:
+This route runs automated checks, and it records which of them ran. Work in this
+order, because the checklist is the statement of what must be true and a check is one
+item's implementation — never a second list written beside it.
 
-  - The Excel export downloads and opens [check: some-check-id]
+**First** write the checklist, complete, without thinking about what can be automated.
+It is what a person must observe for this change to be believed.
 
-Then the harness ticks it off when that check passes, and nobody is asked to click
-through something a machine already did. Name only a check that exists — a made-up id
-is reported as an item nothing verified, which is worse than leaving the tag off.
+**Then** take each item in turn and ask whether a machine can answer it. Where it can,
+and this stage's instructions tell you how to add a check, write **one check for that
+item**, give it an id that names what the item asserts, and end the item's line with
+that id:
 
-Leave the tag off where no check can answer the item, and that is a normal answer, not
-a failure: whether a **number is right**, whether a layout reads well, whether the
-thing a person asked for is what they got — none of those have an exit code. Those
-untagged items are counted as gaps and shown at the gate, so the list is a record of
-what is genuinely left for a person rather than a pile nobody has sorted through.
+  - The Excel export carries the selected From period [check: export-carries-from]
+
+A check you write now runs before this stage settles, so the item it answers is ticked
+in this same pass and nobody is asked to click through it.
+
+Three rules, and each is about the two lists staying the same list:
+
+- **One check answers one item, and it answers the whole of it.** If a check would
+  establish only part of what the item says, either write the check that establishes
+  all of it or leave the item untagged. A tag is read as the item being done.
+- **Do not write a check no item names.** If you find yourself wanting one, the
+  checklist is missing an item — add the item.
+- **Name only a check you have written or that already exists.** A made-up id is
+  reported as an item nothing verified, which is worse than leaving the tag off.
+
+An item no check can answer stays untagged, and that is a normal answer, not a
+failure: whether a **number is right**, whether a layout reads well, whether the thing
+a person asked for is what they got — none of those have an exit code. Those items are
+counted as gaps and shown at the gate, so the list is a record of what is genuinely
+left for a person rather than a pile nobody has sorted through.
 `;
 }
 

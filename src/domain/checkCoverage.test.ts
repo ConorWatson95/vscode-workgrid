@@ -203,6 +203,49 @@ describe("formatCoverageLine", () => {
     expect(line).toContain("1 with no check behind it");
   });
 
+  it("counts a check that answers no item, since that is the two lists drifting", () => {
+    const p = pipeline([
+      stage({
+        id: "gate",
+        checklist: [item({ id: "1", coveredBy: "c" })],
+        checkOutcomes: [
+          { id: "c", passed: true },
+          { id: "stray", passed: true },
+          { id: "another", passed: false },
+        ],
+      }),
+    ]);
+    const summary = summariseCoverage(p, "gate")!;
+    expect(summary.orphans).toBe(2);
+    expect(formatCoverageLine(summary)!).toContain("2 checks ran that no item names");
+  });
+
+  it("says nothing about orphans when every check answers an item", () => {
+    const p = pipeline([
+      stage({
+        id: "gate",
+        checklist: [item({ id: "1", coveredBy: " C " })],
+        checkOutcomes: [{ id: "c", passed: true }],
+      }),
+    ]);
+    const summary = summariseCoverage(p, "gate")!;
+    expect(summary.orphans).toBe(0);
+    expect(formatCoverageLine(summary)!).not.toContain("no item names");
+  });
+
+  it("still counts a check as named once its item is ticked", () => {
+    // The tick is the mechanism working. If it turned the check into an orphan, the
+    // gate would report drift caused by its own success.
+    const p = pipeline([
+      stage({
+        id: "gate",
+        checklist: [item({ id: "1", coveredBy: "c", checked: true, checkedBy: "check" })],
+        checkOutcomes: [{ id: "c", passed: true }],
+      }),
+    ]);
+    expect(summariseCoverage(p, "gate")!.orphans).toBe(0);
+  });
+
   it("calls out an item naming a check that did not run", () => {
     const p = pipeline([
       stage({

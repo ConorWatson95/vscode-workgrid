@@ -264,6 +264,12 @@ function createStage(
     ...(definition.handoff ? { handoff: true } : {}),
     ...(definition.mayChangeBranch ? { mayChangeBranch: true } : {}),
     ...(definition.verify ? { verify: definition.verify } : {}),
+    // Beside `verify` because it is meaningless without one: the command says what to
+    // run and this says which checks it ran, which an exit code cannot. Left out here
+    // originally, so a freshly created pipeline carried no coverage at all and only a
+    // refresh pass backfilled it -- a check that silently does not fire, which is
+    // indistinguishable from the feature being absent.
+    ...(definition.checkResults ? { checkResults: definition.checkResults } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
     ...(definition.planOutput ? { planOutput: definition.planOutput } : {}),
     ...(definition.checklistScope

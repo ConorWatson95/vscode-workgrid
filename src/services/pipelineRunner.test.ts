@@ -3215,3 +3215,119 @@ describe("a planning stage that leaves questions in its plan", () => {
     ).toBe("passed");
   });
 });
+
+describe("checks that answer checklist items", () => {
+  /**
+   * One gate that runs a check suite and writes its own checklist.
+   *
+   * `checkResults` beside `verify` is the shape the whole mechanism turns on: the
+   * command says what to run, and the file it leaves behind says *which* checks ran,
+   * because an exit code cannot.
+   */
+  const CHECKED: RouteDefinition = {
+    id: "checked",
+    label: "Checked",
+    description: "d",
+    stages: [
+      {
+        id: "verify-locally",
+        label: "Verify locally",
+        kind: "humanVerification",
+        intent: "Run the checks and say what a person must still look at.",
+        splittable: false,
+        gate: "approval",
+        verify: "run-site-checks",
+        checkResults: ".taskworkspaces/site-checks-result.json",
+      },
+    ],
+  };
+
+  const results = (...ids: [string, boolean][]) =>
+    JSON.stringify({ checks: ids.map(([id, passed]) => ({ id, passed })) });
+
+  const checkedTask = () => ({ ...task(), pipeline: createPipeline(CHECKED) });
+
+  it("ticks an item the same session wrote, naming a check the same session added", async () => {
+    // The point of the whole change. The stage writes the check, the check runs
+    // because `verify` runs after the session, and the item naming it must not then
+    // be left for a person -- which is what happened while the tick ran before the
+    // reply was parsed.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: [
+          "Ran them.",
+          "- The Excel export carries the selected From period [check: export-carries-from]",
+          "- The figures on the summary row are right for this dealer",
+        ].join("\n"),
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        ".taskworkspaces/site-checks-result.json": results(["export-carries-from", true]),
+      },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))!.pipeline!.stages[0];
+    const items = stage.checklist!;
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ checked: true, checkedBy: "check" });
+    expect(items[0].text).toBe("The Excel export carries the selected From period");
+    // The one a machine cannot answer is left alone. That is the gap, and it is the
+    // number this is all judged on.
+    expect(items[1].checked).toBe(false);
+  });
+
+  it("leaves an item whose check failed for the person to look at", async () => {
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The Excel export carries the From period [check: export-carries-from]",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      // Exit 1, because a suite with a failing check fails. The stage does not settle,
+      // and the item must certainly not be ticked.
+      verify: { "run-site-checks": { exitCode: 1 } },
+      files: {
+        ".taskworkspaces/site-checks-result.json": results(["export-carries-from", false]),
+      },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))!.pipeline!.stages[0];
+    // No checklist at all: a failing check overrides the reply, so the stage did not
+    // settle and its account of itself is not recorded. The outcomes are, because they
+    // are evidence either way -- that is what lets the next run tick what passed.
+    expect(stage.checklist ?? []).toEqual([]);
+    expect(stage.checkOutcomes).toEqual([{ id: "export-carries-from", passed: false }]);
+  });
+
+  it("ticks nothing at all when the results file is unreadable", async () => {
+    // Absence of measurement is not permission to act: a tick asserts a verification
+    // happened, so a missing or malformed file must leave every item outstanding.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The Excel export carries the From period [check: export-carries-from]",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: { ".taskworkspaces/site-checks-result.json": "{ not json" },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))!.pipeline!.stages[0];
+    expect(stage.checklist?.[0].checked).toBe(false);
+    expect(stage.checkOutcomes ?? []).toEqual([]);
+  });
+});

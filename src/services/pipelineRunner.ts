@@ -2207,6 +2207,9 @@ export class PipelineRunner {
     // the stage is about to settle — the last unresolved subtask — because the check
     // certifies the stage's work, not each unit of it, and re-running a build once
     // per subtask would cost minutes to learn the same thing.
+    // Counted across both ticking passes and announced once. See the second pass below
+    // for why there are two.
+    let tickedByChecks = 0;
     const verification =
       reply.ok && stage.verify && this.verifier && isLastUnresolved(stage, subtask.id)
         ? await this.runVerification(task, stage, stage.verify, signal)
@@ -2241,12 +2244,7 @@ export class PipelineRunner {
         new Date().toISOString(),
       );
       pipeline = covered.pipeline;
-      if (covered.ticked.length > 0) {
-        steps.push(
-          `"${stage.name}": ${covered.ticked.length} checklist item(s) answered by checks ` +
-            "that passed.",
-        );
-      }
+      tickedByChecks += covered.ticked.length;
     }
     if (verification?.unresolved) {
       // Stops the stage exactly as a failed check does, but says why in the words of
@@ -2329,6 +2327,30 @@ export class PipelineRunner {
       steps.push(`Completed "${subtask.title}".`);
     } else {
       steps.push(`"${subtask.title}" failed: ${reply.error ?? "unknown error"}`);
+    }
+
+    // Ticked a second time, because the first pass ran before the reply was parsed.
+    //
+    // A stage that writes the check it needs and then writes the item naming it
+    // establishes both facts in one session, and the check really did run — the
+    // manifest was written before `runVerification`. But the checklist reaches the
+    // pipeline several blocks below where the outcomes were applied, so the first pass
+    // saw a gate whose checklist did not yet contain the item. Without this the tag is
+    // right, the check passed, and the operator is still asked to click it, which is
+    // the whole disjointedness this change exists to remove.
+    //
+    // Safe to run twice: `tickAnsweredItems` never unticks, and an item it already
+    // ticked is no longer outstanding, so the second pass returns only what is new.
+    if (reply.ok && stage.checkResults) {
+      const late = tickAnsweredItems(pipeline, stage.id, new Date().toISOString());
+      pipeline = late.pipeline;
+      tickedByChecks += late.ticked.length;
+    }
+    if (tickedByChecks > 0) {
+      steps.push(
+        `"${stage.name}": ${tickedByChecks} checklist item(s) answered by checks ` +
+          "that passed.",
+      );
     }
 
     const reason = reply.ok ? undefined : (reply.error ?? "the agent session failed");

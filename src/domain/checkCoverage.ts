@@ -256,6 +256,21 @@ export interface CoverageSummary {
   missing: number;
   gaps: number;
   total: number;
+  /**
+   * Checks that ran and that no item on this gate names.
+   *
+   * The checklist is the statement of what must be true, and a check is one item's
+   * implementation — so a check answering nothing is the two lists drifting apart,
+   * which is the state this whole mechanism exists to prevent. Counted and announced
+   * rather than failed, the rule an unmeasured wait already follows: a suite
+   * legitimately carries checks that are nobody's checklist item (a page loads at all,
+   * a sign-in works), and failing a gate over one would be a stop that means nothing.
+   *
+   * It is the only signal that the derivation went the wrong way. Every other state
+   * here is read from an item outwards, so a check nobody asked for is invisible from
+   * that direction by construction.
+   */
+  orphans: number;
 }
 
 export function summariseCoverage(
@@ -268,12 +283,23 @@ export function summariseCoverage(
   const count = (state: ItemCoverage["state"]) =>
     coverage.filter((entry) => entry.state === state).length;
 
+  const named = new Set(
+    coverage
+      .map((entry) => entry.item.coveredBy?.trim().toLowerCase())
+      .filter((id): id is string => Boolean(id)),
+  );
+  const gate = pipeline.stages.find((stage) => stage.id === stageId);
+  const orphans = (gate?.checkOutcomes ?? []).filter(
+    (outcome) => !named.has(outcome.id.trim().toLowerCase()),
+  ).length;
+
   return {
     answered: count("answered"),
     failed: count("failed"),
     missing: count("missing"),
     gaps: count("gap"),
     total: coverage.length,
+    orphans,
   };
 }
 
@@ -304,7 +330,16 @@ export function formatCoverageLine(summary: CoverageSummary | undefined): string
       `${summary.gaps} with no check behind ${summary.gaps === 1 ? "it" : "them"}`,
     );
   }
-  return parts.join(", ") + ".";
+  let line = parts.join(", ") + ".";
+  if (summary.orphans > 0) {
+    // A separate sentence, not another clause: the others count items and this counts
+    // checks, and summing two different units into one list is how a number stops
+    // meaning anything.
+    line +=
+      ` ${summary.orphans} check${summary.orphans === 1 ? "" : "s"} ran that no item ` +
+      `names${summary.orphans === 1 ? "" : ""}.`;
+  }
+  return line;
 }
 
 /**
