@@ -1137,10 +1137,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
    * not. Saves only when something actually differs, so a repository already in line
    * writes nothing.
    */
-  const syncGateDeclarations = async (): Promise<void> => {
-    if (!repositoryRoot) return;
+  const syncGateDeclarations = async (): Promise<string[]> => {
+    if (!repositoryRoot) return [];
     const source = currentHarness();
-    if (!source) return;
+    if (!source) return [];
     try {
       const tasks = await repository.getByRepository(repositoryRoot);
       const corrected: string[] = [];
@@ -1181,10 +1181,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             `task(s): ${corrected.join(" | ")}`,
         );
       }
+      return corrected;
     } catch (error) {
       // A repair's own failure must not take activation with it, exactly as the stale
       // subtask sweep does not.
       logger.warn(`Could not sync gate declarations: ${String(error)}`);
+      return [];
     }
   };
   /**
@@ -1234,6 +1236,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     configWatcher.onDidChange(() => void syncGateDeclarations());
     configWatcher.onDidCreate(() => void syncGateDeclarations());
     context.subscriptions.push(configWatcher);
+    // The same pass on demand, and reported rather than logged.
+    //
+    // The watcher above covers the case it was built for — you edit `harness.json` with
+    // the window open — and leaves two it cannot. An edit made while this window was
+    // closed reaches tasks only at the next activation, and a pass that runs silently
+    // and corrects nothing is indistinguishable from one that did not fire, which is
+    // exactly the question an operator has after editing a route: *did that land?*
+    // Answering it today means advancing a task and watching how a stage behaves.
+    //
+    // It reports what changed, and says so when nothing did. Nothing changing is the
+    // common and correct outcome — a repository already in line — and it is also what a
+    // broken config file looks like, so the two must not both be silence.
+    context.subscriptions.push(
+      vscode.commands.registerCommand("taskWorkspaces.syncRouteConfig", async () => {
+        const corrected = await syncGateDeclarations();
+        if (corrected.length === 0) {
+          void vscode.window.showInformationMessage(
+            "Every task already matches harness.json. Nothing changed.",
+          );
+          return;
+        }
+        const shown = await vscode.window.showInformationMessage(
+          `Reloaded route config into ${corrected.length} task(s).`,
+          "Show Details",
+        );
+        if (shown === "Show Details") logger.show();
+      }),
+    );
     // The tree rendered against no repository while this was resolving, so it has to be
     // told the root now exists — otherwise the view says "open a git repository" until
     // something else happens to refresh it.

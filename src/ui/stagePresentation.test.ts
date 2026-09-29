@@ -252,6 +252,30 @@ describe("stagePresentation", () => {
     expect(stagePresentation(uncorrected).contextValue).not.toContain("has-correction");
   });
 
+  // Keyed on the declaration, never on the status. The case it exists for is a *settled*
+  // gate whose recorded exit 0 certifies nothing, because the check ran before the thing
+  // it checks was declared — so a token gated on `failed` would be absent exactly where
+  // re-running is the only affordable remedy.
+  it("offers a check re-run wherever one is declared, whatever the stage is doing", () => {
+    for (const status of ["pending", "active", "awaiting-approval", "passed", "failed"] as const) {
+      const checked = stage({
+        status,
+        verify: "pwsh ./check.ps1",
+        subtasks: [{ ...subtask("a", status === "pending" ? "pending" : "done"), reply: "did it" }],
+      });
+      expect(stagePresentation(checked).contextValue).toContain("stage-checkable");
+    }
+  });
+
+  it("does not offer a check re-run on a stage that declares none", () => {
+    const unchecked = stage({
+      status: "passed",
+      subtasks: [{ ...subtask("a", "done"), reply: "did it" }],
+    });
+    expect(unchecked.verify).toBeUndefined();
+    expect(stagePresentation(unchecked).contextValue).not.toContain("stage-checkable");
+  });
+
   // A correction mid-flight has nothing to withdraw yet — stopping the task comes first.
   it("does not offer a withdrawal while the correction is running", () => {
     const running = stage({

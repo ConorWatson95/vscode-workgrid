@@ -1,3 +1,4 @@
+import { Result, ok, err } from "../utilities/result";
 import { certifyStage } from "../domain/stageAuthority";
 import {
   declaredRepair,
@@ -682,6 +683,83 @@ export class PipelineRunner {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Runs a settled stage's declared check again, in place.
+   *
+   * The gap this fills: a check runs once, when its stage's last subtask finishes, and
+   * from then on the only ways to run it again both cost the stage. `revertToStage`
+   * discards the run and everything after it, and **Retry This Stage** is offered on
+   * `stage-failed` only — so a gate sitting at `awaiting-approval` whose check passed
+   * *vacuously* has no way to ask the question again. That is not hypothetical: a
+   * browser-check verify wired onto the local gates exits 0 when a task declares no
+   * pages, and every task already past that stage when the wiring landed holds a
+   * recorded exit 0 that certifies nothing. Reverting a gate to re-ask is a discard
+   * paid to run a command.
+   *
+   * Nothing about the stage's work is touched — reply, activity, checklist, subtasks
+   * and status all stand. The check is evidence *about* that work, not part of it, so
+   * re-running it can only replace the evidence.
+   *
+   * Two rules:
+   *
+   * - **A failing re-run holds the stage, and never fails it.** Nothing has been judged
+   *   about the session, which ended cleanly and may have ended days ago; what the stage
+   *   needs is somebody to look, which is what a hold asks for. Failing it would leave
+   *   `revertToStage` as the only remedy, which is the cost this exists to avoid.
+   * - **A check that cannot be scoped is not run**, exactly as in the advance path, and
+   *   records nothing. `TaskStage.verification` means something other than the agent
+   *   certified this stage, so a command the runner declined to execute must not appear
+   *   there wearing an exit code.
+   */
+  async rerunVerification(
+    taskId: string,
+    stageId: string,
+    signal?: AbortSignal,
+  ): Promise<Result<{ command: string; exitCode: number; output: string }, string>> {
+    const task = await this.repository.get(taskId);
+    if (!task?.pipeline) return err("That task has no pipeline.");
+    const stage = task.pipeline.stages.find((candidate) => candidate.id === stageId);
+    if (!stage) return err("That stage is not in this task's pipeline.");
+    if (!stage.verify) return err(`"${stage.name}" declares no check to run.`);
+    if (!this.verifier) return err("This runner was built without a verifier.");
+
+    const verification = await this.runVerification(task, stage, stage.verify, signal);
+    if (!verification) return err(`"${stage.name}" could not be verified.`);
+    if (verification.unresolved) {
+      const named = verification.unresolved.map((name) => `\${${name}}`).join(", ");
+      return err(
+        `The check for "${stage.name}" names ${named}, which nothing about this task ` +
+          "establishes, so it was not run.",
+      );
+    }
+
+    let pipeline = task.pipeline;
+    const noted = recordVerification(pipeline, stage.id, {
+      command: verification.command,
+      exitCode: verification.outcome.exitCode,
+      at: new Date().toISOString(),
+    });
+    if (noted.ok) pipeline = noted.value;
+    if (verification.outcome.exitCode !== 0) {
+      pipeline = recordStageBlocked(
+        pipeline,
+        stage.id,
+        describeVerification(verification.command, verification.outcome),
+      );
+    }
+    await this.repository.save({
+      ...task,
+      pipeline,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return ok({
+      command: verification.command,
+      exitCode: verification.outcome.exitCode,
+      output: verification.outcome.output,
+    });
   }
 
   private async runVerification(

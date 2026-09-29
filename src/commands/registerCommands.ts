@@ -196,6 +196,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.showStageReport", (arg) => showStageReportCommand(ctx, arg)),
     register("taskWorkspaces.revertToStage", (arg) => revertToStageCommand(ctx, arg)),
     register("taskWorkspaces.retryStage", (arg) => retryStageCommand(ctx, arg)),
+    register("taskWorkspaces.rerunVerification", (arg) =>
+      rerunVerificationCommand(ctx, arg),
+    ),
     register("taskWorkspaces.correctStage", (arg) => correctStageCommand(ctx, arg)),
     register("taskWorkspaces.repairFromCheckFailure", (arg) =>
       repairFromCheckFailureCommand(ctx, arg),
@@ -1287,6 +1290,76 @@ async function retryStageCommand(ctx: CommandContext, arg: unknown): Promise<voi
   );
   if (next === "Advance Route") {
     await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+  }
+}
+
+/**
+ * Runs a stage's declared check again, without discarding its run.
+ *
+ * Offered wherever a stage declares a `verify`, settled or not. The two existing ways
+ * to run a check a second time both cost the stage — `revertToStage` discards it and
+ * everything after it, and **Retry This Stage** is offered on `stage-failed` only — so
+ * a gate parked at `awaiting-approval` holding a check that passed *vacuously* could
+ * not be asked again at any price short of a discard. That is the case it was built
+ * for: a browser-check verify exits 0 when a task declares no pages to check, and every
+ * task already past that stage when the wiring landed holds a recorded exit 0 that
+ * certifies nothing.
+ *
+ * No reason is asked for, unlike a re-run. A re-run asks because it is destroying a
+ * run whose account of itself goes with it; nothing is destroyed here.
+ */
+async function rerunVerificationCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof StageTreeItem)) return;
+  const task = await rowPipelineTask(ctx, arg, "re-run this stage's check");
+  if (!task) return;
+
+  // A check runs commands against the worktree and the advance may be doing the same.
+  // The same guard a retry uses, for a stronger reason: `runVerification` discards the
+  // declared local-environment paths first, and doing that under a live agent is the
+  // one thing `WorktreeDiscardService` is kept away from.
+  if (ctx.runner.isRunning(task.id)) {
+    void vscode.window.showInformationMessage(
+      `"${task.name}" is advancing. Stop the agent before re-running its check.`,
+    );
+    return;
+  }
+
+  const outcome = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Re-running the check for "${arg.stage.name}"…`,
+      cancellable: true,
+    },
+    (_progress, token) => {
+      const controller = new AbortController();
+      token.onCancellationRequested(() => controller.abort());
+      return ctx.runner.rerunVerification(task.id, arg.stage.id, controller.signal);
+    },
+  );
+
+  if (!outcome.ok) {
+    void vscode.window.showWarningMessage(outcome.error);
+    return;
+  }
+  ctx.tree.refresh();
+
+  if (outcome.value.exitCode === 0) {
+    void vscode.window.showInformationMessage(
+      `"${arg.stage.name}" passed its check (exit 0). Nothing else changed.`,
+    );
+    return;
+  }
+  // Held rather than failed, so the remedy is to look — and the report is where the
+  // output landed, which is the thing worth opening rather than a truncated toast.
+  const next = await vscode.window.showWarningMessage(
+    `"${arg.stage.name}" failed its check (exit ${outcome.value.exitCode}). The stage is held.`,
+    "Show What This Did",
+  );
+  if (next === "Show What This Did") {
+    await vscode.commands.executeCommand("taskWorkspaces.showStageReport", arg);
   }
 }
 

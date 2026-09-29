@@ -62,6 +62,12 @@ export function stagePresentation(
   // only offered on a stage that actually has one, and a stage can be correctable
   // without ever having been corrected.
   if (undoableCorrection(stage)) tokens.push("has-correction");
+  // Keyed on the stage having a check at all, never on its status. A check is evidence
+  // *about* the work rather than part of it, so re-running one replaces the evidence
+  // and touches nothing else — which makes it admissible wherever a check is declared,
+  // including on a settled stage whose recorded exit code certifies nothing because it
+  // ran before the thing it checks was declared.
+  if (stage.verify) tokens.push("stage-checkable");
   return tokens.length === 1 ? visual : { ...visual, contextValue: tokens.join(" ") };
 }
 
