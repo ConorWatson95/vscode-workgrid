@@ -3377,6 +3377,29 @@ describe("checks that answer checklist items", () => {
     expect((await repo.get(subject.id))!.pipeline!.stages[0].checkOutcomes ?? []).toEqual([]);
   });
 
+  it("says so when a check that ran recorded no outcomes", async () => {
+    // The observed failure, once the suite learned to clear the file up front: ten tests
+    // passed, the check exited 0, and the gate's coverage did not move -- because the
+    // reporter never wrote the outcomes. Silent, that reads as the checks being ignored,
+    // and the operator goes looking in the harness for a fault that is in the suite.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The Excel export carries the From period [check: export-carries-from]",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {},
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    const report = await runner.advance(subject);
+
+    expect(report.steps.join(" ")).toContain("found no check results at");
+    expect((await repo.get(subject.id))!.pipeline!.stages[0].checklist?.[0].checked).toBe(false);
+  });
+
   it("ticks nothing at all when the results file is unreadable", async () => {
     // Absence of measurement is not permission to act: a tick asserts a verification
     // happened, so a missing or malformed file must leave every item outstanding.

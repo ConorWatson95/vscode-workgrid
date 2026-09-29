@@ -762,7 +762,24 @@ export class PipelineRunner {
 
     const text = await this.readWorktreeFile(task.worktreePath, resultsPath);
     const run = parseCheckRun(text);
-    if (!run) return { pipeline, ticked: [] };
+    // Declared and absent is a fact worth stating, not a quiet nothing. A suite that
+    // exits 0 having run every test and still writes no outcomes -- its reporter never
+    // reached the file, its ids never matched -- leaves a gate whose coverage did not
+    // move for a reason nothing on screen explains, and the operator's own reading is
+    // that the checks were simply ignored. The same silence covered a file that was
+    // there and unreadable.
+    if (!run) {
+      return {
+        pipeline,
+        ticked: [],
+        skipped:
+          text === undefined
+            ? `found no check results at ${resultsPath}, so this run answered no ` +
+              "checklist items -- the check ran, but recorded no outcomes of its own."
+            : `the check results at ${resultsPath} could not be read, so nothing was ` +
+              "ticked from them.",
+      };
+    }
     // The file is written by another process into the worktree and read back here, so
     // nothing about reading it says it describes the run that just finished. A leftover
     // from an earlier run ticks items on evidence that no longer exists, which is what
