@@ -67,3 +67,50 @@ export function fileLink(path: string, worktreePath: string | undefined): string
   if (!absolute) return `\`${trimmed}\``;
   return `[\`${trimmed}\`](${fileUri(absolute)})`;
 }
+
+/**
+ * A path is worth linking when it is spelled like one, not when it is a bare name.
+ *
+ * Narrow on purpose, because a reply is full of backticked things that are not paths:
+ * `#ddlPeriodFrom`, `export-param`, `d-none`. Two requirements, and the separator is
+ * the load-bearing one — `dealerreviewsummary.js` is a real file and says nothing
+ * about *where* it is, so linking it would resolve against the worktree root and open
+ * nothing. A reader can still search for a bare name; a dead link teaches them the
+ * links do not work.
+ */
+function looksLikePath(candidate: string): boolean {
+  if (/\s/.test(candidate)) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) return false; // a URL, not a path
+  if (!/[\\/]/.test(candidate)) return false;
+  return /\.[A-Za-z0-9]{1,10}$/.test(candidate);
+}
+
+/**
+ * Turn backticked file paths inside a reply into links.
+ *
+ * `pathsWritten` and `pathsRead` are linked already, and that covers the files a
+ * session touched *through its own tools*. It misses the paths that matter most to a
+ * reader: the ones the stage names in prose — the plan it wrote, the view it matched,
+ * the file the finding is about. Worse, it misses them exactly where recording failed,
+ * since a stage writing its plan with a shell heredoc records no written path at all,
+ * so the only mention of that document anywhere in the report is the sentence naming
+ * it. That is the case this was reported on.
+ *
+ * Fenced blocks are left alone: markdown does not render a link inside one, and
+ * rewriting them would put syntax on screen instead of a path.
+ */
+export function linkifyPaths(markdown: string, worktreePath: string | undefined): string {
+  // Absence of a worktree means unchanged, the rule `fileLink` already follows.
+  if (!worktreePath) return markdown;
+
+  return markdown
+    .split(/(^```[\s\S]*?^```$)/m)
+    .map((section) =>
+      section.startsWith("```")
+        ? section
+        : section.replace(/(^|[^[`])`([^`\n]+)`(?!\]?\()/g, (whole, before: string, inner: string) =>
+            looksLikePath(inner) ? `${before}${fileLink(inner, worktreePath)}` : whole,
+          ),
+    )
+    .join("");
+}

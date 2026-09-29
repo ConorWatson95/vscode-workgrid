@@ -1,4 +1,4 @@
-import { fileLink } from "./reportLinks";
+import { fileLink, linkifyPaths } from "./reportLinks";
 import { Subtask, SubtaskActivity, TaskStage, TaskPipeline,
   ChecklistItem,
 } from "../domain/taskPipeline";
@@ -521,7 +521,7 @@ export function formatStageReport(
   const foldRepairs = rounds.some((round) => round.kind !== "run");
   for (const round of rounds) {
     const heading = roundHeading(round, rounds.length > 1);
-    const body = formatSubtaskReply(round.subtask, heading !== undefined);
+    const body = formatSubtaskReply(round.subtask, heading !== undefined, worktreePath);
     // The base run folds too once a repair has superseded it, but only when there is
     // exactly one — a split stage's parallel units are all `run` rounds and each holds a
     // different part of the answer, which is what the kind test was protecting.
@@ -718,14 +718,17 @@ export function withLiveActivity(
  * the file lists, the commands and their output — so reading a finished stage's
  * conclusion meant scrolling past everything that produced it.
  */
-function formatSubtaskReply(subtask: Subtask, headed: boolean): string[] {
+function formatSubtaskReply(subtask: Subtask, headed: boolean, worktreePath?: string): string[] {
   const lines: string[] = [];
   if (subtask.reply?.trim()) {
     // The round's own heading already says whose account this is, and what it was
     // asked to fix. A second heading under it repeated on every round is the noise a
     // corrected stage had four of.
     if (!headed) lines.push("## What the agent reported", "");
-    lines.push(subtask.reply.trim());
+    // The paths a stage names in prose are the ones a reader wants to open — the plan
+    // it wrote, the view it matched — and they are the only record of a file written
+    // by a shell heredoc, which `pathsWritten` never sees.
+    lines.push(linkifyPaths(subtask.reply.trim(), worktreePath));
   } else if (subtask.status === "failed" && !subtask.activity) {
     // Distinguished from "nothing was recorded", because they read identically and
     // mean opposite things: one invites the reader to go looking for what it did,
