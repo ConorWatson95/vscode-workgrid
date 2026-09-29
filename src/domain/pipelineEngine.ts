@@ -1850,6 +1850,31 @@ export function recordStageBlocked(
   return replaceStage(pipeline, { ...stage, blocked: reason.trim() });
 }
 
+/**
+ * Lifts a hold whose stated reason no longer holds.
+ *
+ * `recordStageBlocked` has many callers with nothing in common — a `BLOCKED` marker, a
+ * declined correction, `stageProductivity`, a failing check — and each makes a different
+ * claim. So a caller that has just disproved *its own* claim must be able to withdraw
+ * that one without touching the others, which is why the predicate belongs to the caller:
+ * the domain owns when a hold may be lifted, and the mechanism that raised it owns how
+ * its own reason reads.
+ *
+ * The case it exists for is a check re-run that passes. A failing check holds the stage;
+ * without this the hold outlives the failure, so a stage could pass its own check and
+ * still be unapprovable — which leaves `revertToStage` as the only way out, and that
+ * discard is what re-running a check exists to avoid.
+ */
+export function clearStageBlocked(
+  pipeline: TaskPipeline,
+  stageId: string,
+  raisedBy: (reason: string) => boolean,
+): TaskPipeline {
+  const stage = pipeline.stages.find((s) => s.id === stageId);
+  if (!stage?.blocked || !raisedBy(stage.blocked)) return pipeline;
+  return replaceStage(pipeline, { ...stage, blocked: undefined });
+}
+
 export function recordActions(
   pipeline: TaskPipeline,
   stageId: string,

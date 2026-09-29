@@ -42,6 +42,7 @@ import {
   recordFailure,
   recordFailureDisposition,
   recordStageBlocked,
+  clearStageBlocked,
   handoffsBefore,
   holdStageForFindings,
   recordStageVerdict,
@@ -87,6 +88,7 @@ import {
   VerificationCommandRunner,
   annotateOutcome,
   describeVerification,
+  isVerificationFailure,
 } from "./verificationRunner";
 import {
   rootNamedPaths,
@@ -748,6 +750,18 @@ export class PipelineRunner {
         stage.id,
         describeVerification(verification.command, verification.outcome),
       );
+    } else {
+      // A passing re-run clears a hold *this* mechanism placed, and nothing else. A
+      // check is the only thing that can settle the claim a failing check made, so
+      // leaving the hold up would make the first failure permanent — the stage would
+      // pass its check and still be unapprovable, which is the discard this command
+      // exists to avoid, arrived at from the other side.
+      //
+      // Narrow deliberately: only a hold whose reason is a verification failure. A
+      // `BLOCKED` marker, a declined correction and `stageProductivity` all raise holds
+      // about the work rather than about the check, and a green check says nothing
+      // about any of them.
+      pipeline = clearStageBlocked(pipeline, stage.id, isVerificationFailure);
     }
     await this.repository.save({
       ...task,

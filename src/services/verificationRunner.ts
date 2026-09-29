@@ -39,6 +39,21 @@ export const MAX_VERIFY_OUTPUT = 4000;
  * Pure and exported so the wording is tested — this string becomes a stage's
  * failure reason, which is the only thing many readers will see.
  */
+/**
+ * Whether a stage's hold was raised by a failing check rather than by anything else.
+ *
+ * Keyed on the openings `describeVerification` writes, and kept beside it so the two
+ * cannot drift apart — a predicate living anywhere else is one that goes on returning
+ * false after somebody rewords the sentence, which would silently make a check failure's
+ * hold permanent.
+ */
+export function isVerificationFailure(reason: string): boolean {
+  return (
+    /^Verification failed \(exit /.test(reason) ||
+    reason.startsWith("The stage's verification command could not be started:")
+  );
+}
+
 export function describeVerification(
   command: string,
   outcome: CommandOutcome,

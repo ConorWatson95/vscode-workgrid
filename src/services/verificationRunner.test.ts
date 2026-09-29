@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_VERIFY_OUTPUT,
   describeVerification,
+  isVerificationFailure,
   prepareOutput,
 } from "./verificationRunner";
 
@@ -61,5 +62,34 @@ describe("prepareOutput", () => {
   it("masks credentials in captured output", () => {
     // A failing sqlcmd echoes the connection it tried.
     expect(prepareOutput("failed: Password=S3cr3t!Value")).not.toContain("S3cr3t!Value");
+  });
+});
+
+describe("isVerificationFailure", () => {
+  // The predicate and the sentence live in one file precisely so this pins them
+  // together: reword `describeVerification` and this test fails, rather than a check
+  // failure's hold silently becoming permanent.
+  it("recognises the holds a failing check raises", () => {
+    expect(
+      isVerificationFailure(describeVerification("build.ps1", { exitCode: 1, output: "boom" })),
+    ).toBe(true);
+    expect(
+      isVerificationFailure(
+        describeVerification("build.ps1", { exitCode: -1, output: "", spawnError: "ENOENT" }),
+      ),
+    ).toBe(true);
+  });
+
+  // A hold about the work is not a hold about the check, and a green check says nothing
+  // about any of them. Withdrawing one of these would pass a stage that declined its own
+  // correction.
+  it("leaves holds raised about the work alone", () => {
+    for (const reason of [
+      "BLOCKED: the load could not be run on UAT",
+      "The correction was declined: this needs a change of approach.",
+      "This stage wrote no files.",
+    ]) {
+      expect(isVerificationFailure(reason)).toBe(false);
+    }
   });
 });
