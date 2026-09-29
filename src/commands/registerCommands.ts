@@ -23,7 +23,12 @@ import {
   settlePullRequest,
   recordPullRequests,
 } from "../domain/pipelineEngine";
-import { itemsForGate } from "../domain/checklistScope";
+import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
+import {
+  offeredCheckIds,
+  setItemCoverage,
+  tickAnsweredItems,
+} from "../domain/checkCoverage";
 import {
   InspectedOrphan,
   looksHarnessProvisioned,
@@ -31,6 +36,7 @@ import {
 } from "../domain/orphanSweep";
 import {
   refreshPendingStages,
+  refreshStageChecks,
   addMissingStages,
   revertToStage,
   sendBackTargets,
@@ -229,6 +235,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.noteChecklistItem", (arg) =>
       noteChecklistItemCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.coverChecklistItem", (arg) =>
+      coverChecklistItemCommand(ctx, arg),
     ),
     // Also a command, not only a button on the notification that announced it: a
     // notification is dismissable and the hold is not, and a route stopped with no
@@ -1313,7 +1322,7 @@ async function rerunVerificationCommand(
   arg: unknown,
 ): Promise<void> {
   if (!(arg instanceof StageTreeItem)) return;
-  const task = await rowPipelineTask(ctx, arg, "re-run this stage's check");
+  let task = await rowPipelineTask(ctx, arg, "re-run this stage's check");
   if (!task) return;
 
   // A check runs commands against the worktree and the advance may be doing the same.
@@ -1325,6 +1334,25 @@ async function rerunVerificationCommand(
       `"${task.name}" is advancing. Stop the agent before re-running its check.`,
     );
     return;
+  }
+
+  // Bring the declaration into line first. `refreshCheckDeclarations` skips a stage
+  // with nothing queued, which is every gate parked at `awaiting-approval` — exactly
+  // where this command is used. That rule is right while the check is history and
+  // wrong the moment somebody asks for it again: running the command the stage was
+  // created with, while `harness.json` declares another, is the staleness `${repoRoot}`
+  // exists to prevent, arriving from the other side and with nothing on screen to say
+  // which one ran.
+  //
+  // Absent source means unchanged, the rule every optional dependency here follows: a
+  // context built without route config runs the check exactly as the stage holds it.
+  const definitions = ctx.stageDefinitions?.();
+  if (definitions) {
+    const reloaded = refreshStageChecks(task.pipeline, arg.stage.id, definitions);
+    if (reloaded.changed) {
+      task = { ...task, pipeline: reloaded.pipeline, updatedAt: new Date().toISOString() };
+      await ctx.repository.save(task);
+    }
   }
 
   const outcome = await vscode.window.withProgress(
@@ -1348,7 +1376,10 @@ async function rerunVerificationCommand(
 
   if (outcome.value.exitCode === 0) {
     void vscode.window.showInformationMessage(
-      `"${arg.stage.name}" passed its check (exit 0). Nothing else changed.`,
+      outcome.value.ticked > 0
+        ? `"${arg.stage.name}" passed its check (exit 0), and ticked off ` +
+            `${outcome.value.ticked} checklist item(s) it answered.`
+        : `"${arg.stage.name}" passed its check (exit 0). Nothing else changed.`,
     );
     return;
   }
@@ -1908,6 +1939,96 @@ async function toggleChecklistItemCommand(
       "All verification items are checked — the human gate can now be approved.",
     );
   }
+}
+
+/**
+ * Attaches an automated check to a checklist item that already exists.
+ *
+ * The manual counterpart of the `[check: …]` tag a behaviour review writes. Without
+ * it, coverage reaches only checklists raised after a project adopted it, so every
+ * task in flight keeps asking a person for things a suite is already doing — and the
+ * only way to tag them would be to re-run the gate's review, which discards the whole
+ * checklist to record one fact about one line.
+ *
+ * The choices come from what the stage's **last run recorded**, never from the
+ * project's manifest. The harness has no business parsing that file — its format
+ * belongs to the project's tooling — and the useful question is the same one asked at
+ * tick time: which checks actually ran. Offering an id nothing executed would let an
+ * operator attach an item to a check that cannot answer it.
+ *
+ * Ticks straight away when the chosen check has already passed, because otherwise the
+ * operator attaches a check, sees nothing happen, and has no way to tell a working
+ * mechanism from a broken one.
+ */
+async function coverChecklistItemCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof ChecklistTreeItem)) return;
+  const task = await rowPipelineTask(ctx, arg, "attach a check to that item");
+  if (!task) return;
+
+  // The gate that reads this item, which is also the stage whose check ran. Read
+  // through `gateFor` rather than assumed to be the stage that raised it: an item is
+  // answered where its scope sends it, and on a route with two verifications those
+  // are different stages with different checks.
+  const gate = gateFor(checklistGates(task.pipeline), arg.item.scope);
+  const stage = gate && task.pipeline.stages.find((s) => s.id === gate.stageId);
+  const offered = offeredCheckIds(stage);
+
+  if (offered.length === 0) {
+    void vscode.window.showInformationMessage(
+      gate
+        ? `"${gate.stageName}" has not recorded any check outcomes yet. Run its check ` +
+            "first, then the checks it ran can be attached to items."
+        : "This item has no verification gate to attach a check from.",
+    );
+    return;
+  }
+
+  type Choice = vscode.QuickPickItem & { id?: string; clear?: boolean };
+  const choices: Choice[] = offered.map((outcome) => ({
+    label: outcome.id,
+    description: outcome.passed ? "passed" : "failed",
+    id: outcome.id,
+  }));
+  if (arg.item.coveredBy) {
+    // Offered last and only when there is something to clear. A wrong id is worse than
+    // none: an item naming a check that does not run reports as unverified rather than
+    // as the gap it is.
+    choices.push({
+      label: "$(circle-slash) Nothing checks this",
+      description: `clears "${arg.item.coveredBy}"`,
+      clear: true,
+    });
+  }
+
+  const picked = await vscode.window.showQuickPick(choices, {
+    title: "Which check answers this item?",
+    placeHolder: arg.item.text,
+    ignoreFocusOut: true,
+  });
+  if (!picked) return;
+
+  const at = new Date().toISOString();
+  let pipeline = setItemCoverage(task.pipeline, arg.item.id, picked.clear ? undefined : picked.id);
+  const settled = gate ? tickAnsweredItems(pipeline, gate.stageId, at) : undefined;
+  if (settled) pipeline = settled.pipeline;
+
+  await ctx.repository.save({ ...task, pipeline, updatedAt: at });
+  ctx.tree.refresh();
+
+  if (picked.clear) {
+    void vscode.window.showInformationMessage(
+      "Recorded as a gap — nothing automated answers it, so it stays for a person.",
+    );
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    settled && settled.ticked.length > 0
+      ? `Ticked off — "${picked.id}" has already passed.`
+      : `Attached to "${picked.id}". It will tick off when that check passes.`,
+  );
 }
 
 /**

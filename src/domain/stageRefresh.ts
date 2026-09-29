@@ -55,6 +55,7 @@ const REFRESHABLE = [
   "intent",
   "model",
   "verify",
+  "checkResults",
   "planFile",
   "planOutput",
   "requiresPullRequest",
@@ -238,7 +239,17 @@ function hasBegun(stage: TaskStage): boolean {
  * one is precisely the task that should stop waiting when config says it need not.
  */
 /** What a stage's next output will be judged by. See `refreshCheckDeclarations`. */
-const CHECK_DECLARATIONS = ["verify", "planFile", "planOutput", "requiresPullRequest", "conditional"] as const;
+const CHECK_DECLARATIONS = [
+  "verify",
+  // Beside `verify` because it is part of the same declaration: where that check
+  // records what it found. A stage judged by a check whose results land nowhere the
+  // harness reads is a stage whose checklist can never be ticked by it.
+  "checkResults",
+  "planFile",
+  "planOutput",
+  "requiresPullRequest",
+  "conditional",
+] as const;
 
 const GATE_DECLARATIONS = [
   "checklistScope",
@@ -461,6 +472,51 @@ export function refreshCheckDeclarations(
 
   if (changed.length === 0) return { pipeline, changed: [] };
   return { pipeline: { ...pipeline, stages }, changed };
+}
+
+/**
+ * The same check declarations, for the one stage an operator has just asked to re-run.
+ *
+ * `refreshCheckDeclarations` deliberately skips a stage with nothing queued, because a
+ * gate sitting at `awaiting-approval` has had its checks applied to the output being
+ * read and rewriting them would restate what happened. **Re-running a check makes that
+ * premise false**, and only for the stage named: the operator is asking for the check
+ * to happen again, so it is about to judge output rather than having judged it, and the
+ * one it should run is the one config declares now.
+ *
+ * Without this the sequence is the staleness `${repoRoot}` exists to prevent, arriving
+ * from the other side — somebody corrects `harness.json`, re-runs the check, and gets
+ * the command the stage was created with, with nothing on screen saying which ran.
+ *
+ * Narrow in three ways. **One stage**, named by the caller, never a sweep. **Never a
+ * resolved one**, because a passed or skipped stage's check is history whatever anyone
+ * clicks. And **only the check declarations** — an `intent` is an instruction given to
+ * a run that has already happened, and this changes nothing about what was asked.
+ */
+export function refreshStageChecks(
+  pipeline: TaskPipeline,
+  stageId: string,
+  source: StageDefinitionSource,
+): { pipeline: TaskPipeline; changed: boolean } {
+  const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
+  if (!stage || hasResolved(stage)) return { pipeline, changed: false };
+
+  const definition = findDefinition(source, pipeline.routeId, stage);
+  if (!definition) return { pipeline, changed: false };
+
+  const updates: Partial<TaskStage> = {};
+  for (const field of CHECK_DECLARATIONS) {
+    const next = normalize(definition[field]);
+    if (!sameDeclaration(stage[field], next)) {
+      (updates as Record<string, unknown>)[field] = next;
+    }
+  }
+  if (Object.keys(updates).length === 0) return { pipeline, changed: false };
+
+  const stages = pipeline.stages.map((candidate) =>
+    candidate.id === stageId ? { ...candidate, ...updates } : candidate,
+  );
+  return { pipeline: { ...pipeline, stages }, changed: true };
 }
 
 export function refreshGateDeclarations(
@@ -1054,6 +1110,7 @@ function findDefinition(
       model?: string;
       handoff?: boolean;
       verify?: string;
+      checkResults?: string;
       planFile?: string;
       planOutput?: string;
       requiresPullRequest?: boolean;

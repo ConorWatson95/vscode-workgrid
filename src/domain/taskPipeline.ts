@@ -414,7 +414,27 @@ export interface ChecklistItem {
    * one is assigned rather than dropped.
    */
   scope?: string;
+  /**
+   * The id of an automated check that answers this item, as the task's own check
+   * manifest declares it. Written by the behaviour review as a `[check: <id>]` tag.
+   *
+   * Absent means no check claims to answer it, which is the ordinary case and is
+   * reported as a **gap** rather than held on — see `domain/checkCoverage.ts`. An id
+   * naming a check that did not run is reported as unverified, never ticked: an exit
+   * code says every check the suite *contained* passed, and cannot speak for one it
+   * never had.
+   */
+  coveredBy?: string;
   checked: boolean;
+  /**
+   * What ticked it. Absent means a person, so every item recorded before this existed
+   * keeps its meaning without a migration.
+   *
+   * The distinction is the whole point of recording coverage: a checklist where a
+   * machine and a human have both signed things off is only honest if the report can
+   * say which did what.
+   */
+  checkedBy?: "check";
   /** Stage that raised it, so the gate can explain where each item came from. */
   raisedByStage: string;
   /** Optional tester note, e.g. what they actually observed. */
@@ -575,6 +595,12 @@ export interface TaskStage {
    */
   verify?: string;
   /**
+   * Where that check records which declared checks it ran, relative to the worktree.
+   * Snapshotted from the route like `verify`, and refreshed with it — see
+   * `RouteStageDefinition.checkResults`.
+   */
+  checkResults?: string;
+  /**
    * The check that actually ran, and what it returned.
    *
    * Separate from `verify` because a declaration is not evidence: a runner built
@@ -584,6 +610,20 @@ export interface TaskStage {
    * checkable — see `domain/stageEvidence.ts`.
    */
   verification?: { command: string; exitCode: number; at: string };
+  /**
+   * Which of the task's declared checks the last run of `verify` exercised, and how
+   * each went. Read from the file `checkResults` names, which the check itself writes.
+   *
+   * The finer grain `verification` cannot carry. An exit code is one bit about the
+   * whole suite, and the question a checklist asks is per item — so the pass that
+   * matters is "the check this item names ran and passed", which a 0 cannot state and
+   * an item naming a check the suite never contained would otherwise inherit.
+   *
+   * The newest run only. A stage re-verified after a fix is being asked what is true
+   * now, and an earlier run's pass certifies a worktree that has moved — the line
+   * between context and certification that `reopenAfter` draws.
+   */
+  checkOutcomes?: { id: string; passed: boolean }[];
   /**
    * What an assessment stage concluded about each stage of the route.
    *

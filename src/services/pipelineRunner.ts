@@ -13,7 +13,18 @@ import {
   parseReverifyProposals,
 } from "../domain/routeMutation";
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { Subtask, SubtaskActivity, TaskPipeline, TaskStage } from "../domain/taskPipeline";
+import {
+  ChecklistItem,
+  Subtask,
+  SubtaskActivity,
+  TaskPipeline,
+  TaskStage,
+} from "../domain/taskPipeline";
+import {
+  parseCheckResults,
+  recordCheckOutcomes,
+  tickAnsweredItems,
+} from "../domain/checkCoverage";
 import {
   resolveAmendmentModel,
   resolveStageModel,
@@ -715,11 +726,52 @@ export class PipelineRunner {
    *   certified this stage, so a command the runner declined to execute must not appear
    *   there wearing an exit code.
    */
+  /**
+   * Record what the stage's checks found, and tick the items they answer.
+   *
+   * Runs after *any* verification, passing or failing, because the outcomes are per
+   * check: a suite where one of four failed has genuinely answered the other three,
+   * and withholding them would hand the operator a longer manual list at the exact
+   * moment something has gone wrong.
+   *
+   * Every step is optional and every failure is silent-but-unchanged: no declaration,
+   * no reader, no file, or a file that will not parse, and the pipeline comes back as
+   * it went in. A tick asserts that something was verified, so it is made only on
+   * positive evidence.
+   */
+  private async applyCheckOutcomes(
+    task: TaskWorkspace,
+    stage: TaskStage,
+    pipeline: TaskPipeline,
+    at: string,
+  ): Promise<{ pipeline: TaskPipeline; ticked: ChecklistItem[] }> {
+    if (!stage.checkResults || !this.readWorktreeFile) return { pipeline, ticked: [] };
+
+    const { command: resultsPath } = substitutePlaceholders(stage.checkResults, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      baseCommit: task.baseCommit,
+      worktreePath: task.worktreePath,
+      repoRoot: task.repositoryRoot,
+      ticket: taskTicket(task),
+    });
+
+    const text = await this.readWorktreeFile(task.worktreePath, resultsPath);
+    const outcomes = parseCheckResults(text);
+    if (outcomes.length === 0) return { pipeline, ticked: [] };
+
+    const recorded = recordCheckOutcomes(pipeline, stage.id, outcomes);
+    return tickAnsweredItems(recorded, stage.id, at);
+  }
+
   async rerunVerification(
     taskId: string,
     stageId: string,
     signal?: AbortSignal,
-  ): Promise<Result<{ command: string; exitCode: number; output: string }, string>> {
+  ): Promise<
+    Result<{ command: string; exitCode: number; output: string; ticked: number }, string>
+  > {
     const task = await this.repository.get(taskId);
     if (!task?.pipeline) return err("That task has no pipeline.");
     const stage = task.pipeline.stages.find((candidate) => candidate.id === stageId);
@@ -763,6 +815,15 @@ export class PipelineRunner {
       // about any of them.
       pipeline = clearStageBlocked(pipeline, stage.id, isVerificationFailure);
     }
+
+    const covered = await this.applyCheckOutcomes(
+      task,
+      stage,
+      pipeline,
+      new Date().toISOString(),
+    );
+    pipeline = covered.pipeline;
+
     await this.repository.save({
       ...task,
       pipeline,
@@ -770,6 +831,7 @@ export class PipelineRunner {
     });
 
     return ok({
+      ticked: covered.ticked.length,
       command: verification.command,
       exitCode: verification.outcome.exitCode,
       output: verification.outcome.output,
@@ -1826,6 +1888,13 @@ export class PipelineRunner {
               // From the live pipeline, so rule-added gates count and a review is never
               // told about a gate this task does not have.
               declaredScopes(task.pipeline!),
+              // Likewise: whether asking for check ids is meaningful is a property of
+              // the gates this task actually has, not of the route as config declares
+              // it — a gate a rule added, or one a revert re-opened, is the thing that
+              // will read the items.
+              task.pipeline!.stages.some(
+                (candidate) => candidate.kind === "humanVerification" && candidate.checkResults,
+              ),
             )
           : subtaskPrompt(context, stage, subtask, planSteps);
 
@@ -2161,6 +2230,23 @@ export class PipelineRunner {
         at: new Date().toISOString(),
       });
       if (noted.ok) pipeline = noted.value;
+
+      // Passing or failing, because the outcomes are per check: a run where one of
+      // four failed has still answered the other three, and a gate that then asks a
+      // person to re-do them by hand is the waste this exists to remove.
+      const covered = await this.applyCheckOutcomes(
+        task,
+        stage,
+        pipeline,
+        new Date().toISOString(),
+      );
+      pipeline = covered.pipeline;
+      if (covered.ticked.length > 0) {
+        steps.push(
+          `"${stage.name}": ${covered.ticked.length} checklist item(s) answered by checks ` +
+            "that passed.",
+        );
+      }
     }
     if (verification?.unresolved) {
       // Stops the stage exactly as a failed check does, but says why in the words of

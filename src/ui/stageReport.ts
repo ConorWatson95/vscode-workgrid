@@ -11,6 +11,7 @@ import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
 import { checklistGates, gateFor } from "../domain/checklistScope";
+import { formatCoverageLine, summariseCoverage } from "../domain/checkCoverage";
 import {
   UsageTotals,
   discardedUsage,
@@ -581,9 +582,14 @@ export function formatStageReport(
         item.scope && gates.length > 0
           ? gateFor(gates, item.scope)?.stageName
           : undefined;
+      // Who answered it. A checklist a machine and a person have both signed is only
+      // honest if the reader can tell which did what — a tick is otherwise a claim
+      // somebody exercised the behaviour, and for these nobody did.
+      const answered = item.checkedBy === "check" ? "  _(checked automatically)_" : "";
       return (
         `- [${item.checked ? "x" : " "}] ${item.text}` +
-        (destination ? `  _(${destination})_` : "")
+        (destination ? `  _(${destination})_` : "") +
+        answered
       );
     };
 
@@ -605,6 +611,14 @@ export function formatStageReport(
 
     if (verifications.length > 0) {
       lines.push("", "## Verification items raised", "");
+      // How much of this a machine settled, and what is left that nothing can settle.
+      // Silent where nothing on the route is automated, the rule `summariseEvidence`
+      // follows: "0 of 6 answered by checks" printed on every gate of every route is
+      // decoration, and decoration stops being read.
+      const coverage = pipeline
+        ? formatCoverageLine(summariseCoverage(pipeline, stage.id))
+        : undefined;
+      if (coverage) lines.push(`_${coverage}_`, "");
       for (const item of verifications) lines.push(render(item));
     }
 

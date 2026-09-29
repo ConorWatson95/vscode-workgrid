@@ -409,6 +409,27 @@ export interface RouteStageDefinition {
   verify?: string;
 
   /**
+   * Where this stage's `verify` records which declared checks it ran, relative to the
+   * **worktree**.
+   *
+   * The pairing `${repoRoot}` already taught this codebase to keep apart: the command
+   * declaration says *which check runs* and is root-owned so a branch cannot choose
+   * what certifies it; this says *what that run found*, which is a fact about the task
+   * and therefore lives with the task.
+   *
+   * Only meaningful alongside `verify`, and rejected at load without one — a results
+   * path for a check that does not exist is dead config, and config that silently does
+   * nothing is indistinguishable from the feature being absent.
+   *
+   * The file is `{ "checks": [{ "id": string, "passed": boolean }] }`. A check the run
+   * skipped is left out rather than recorded failed, because "did not run" is a third
+   * state and an item naming it must read as unverified, not as a regression. An
+   * absent, unreadable or malformed file records nothing: a checklist item is ticked
+   * only on positive evidence, and absence of measurement is not permission to act.
+   */
+  checkResults?: string;
+
+  /**
    * Where a failure of this stage's `verify` is routed.
    *
    * Absent means what every failed check did before this existed: the stage fails and

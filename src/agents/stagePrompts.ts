@@ -12,6 +12,7 @@ import {
 import { invariantProtocolBlock } from "./claudeAdapter";
 import { isNothingReported } from "../domain/nothingReported";
 import { splitScopeTag } from "../domain/checklistScope";
+import { splitCheckTag } from "../domain/checkCoverage";
 import { referenceGuidance } from "../domain/taskReferences";
 import { markerLine, markerText } from "../domain/replyMarkers";
 
@@ -809,6 +810,16 @@ export function behaviourReviewPrompt(
    * would produce tags that go nowhere.
    */
   scopes: readonly string[] = [],
+  /**
+   * True when a verification gate on this route declares `checkResults` — that is,
+   * when something on this route actually records which automated checks ran.
+   *
+   * Gated rather than always asked, for `scopeInstruction`'s reason one step on. An
+   * item tagged with a check id on a route where nothing records outcomes reads as
+   * naming a check that did not run, which the gate reports as *unverified* — a false
+   * alarm manufactured by asking a question the route cannot answer.
+   */
+  coverageRecorded = false,
 ): string {
   return `${preamble(context, stage)}
 
@@ -826,8 +837,47 @@ that follows it.
 
 Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
-
+${coverageInstruction(coverageRecorded)}
 If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
+}
+
+/**
+ * Tells a behaviour review to say which automated check answers each item.
+ *
+ * The item a person clicks through is the unit of cost this whole harness is judged
+ * on, and measured across the live routes **41 of 127 site items are "the export
+ * buttons appear and both download"** — a person repeating what a browser check does
+ * on every run. Nothing could tell those apart from the items that genuinely need
+ * eyes, because both are just a line of text.
+ *
+ * Two things are asked for and the second is the one that pays. Tagging an item with
+ * the check that covers it lets the harness tick it, which removes the click. Saying
+ * plainly that an item *cannot* be checked turns the remainder into a countable list
+ * of gaps, which is the only way the number ever goes down — an untagged item is
+ * otherwise indistinguishable from one nobody got round to automating.
+ *
+ * Deliberately no mention of where the ids live. That is a property of the project's
+ * own tooling and belongs in the stage's intent; a harness that named a file here
+ * would stop being generic, which is the line `StageContext` draws everywhere else.
+ */
+function coverageInstruction(recorded: boolean): string {
+  if (!recorded) return "";
+  return `
+This route runs automated checks, and it records which of them ran. Where an item is
+answered by one, end the line with the check's id in that form:
+
+  - The Excel export downloads and opens [check: some-check-id]
+
+Then the harness ticks it off when that check passes, and nobody is asked to click
+through something a machine already did. Name only a check that exists — a made-up id
+is reported as an item nothing verified, which is worse than leaving the tag off.
+
+Leave the tag off where no check can answer the item, and that is a normal answer, not
+a failure: whether a **number is right**, whether a layout reads well, whether the
+thing a person asked for is what they got — none of those have an exit code. Those
+untagged items are counted as gaps and shown at the gate, so the list is a record of
+what is genuinely left for a person rather than a pile nobody has sorted through.
+`;
 }
 
 /**
@@ -1247,10 +1297,10 @@ export function parseChecklistReply(
    * these — see `splitScopeTag` for why anything else stays in the item's text.
    */
   declaredScopes: readonly string[] = [],
-): { text: string; scope?: string }[] {
+): { text: string; scope?: string; coveredBy?: string }[] {
   if (/^\s*none\s*$/i.test(text)) return [];
 
-  const items: { text: string; scope?: string }[] = [];
+  const items: { text: string; scope?: string; coveredBy?: string }[] = [];
   for (const raw of unfencedLines(text)) {
     const line = raw.trim();
     const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
@@ -1261,7 +1311,15 @@ export function parseChecklistReply(
     const split = splitScopeTag(body, declaredScopes);
     // A bullet that was nothing but a scope tag carries no item.
     if (!split.text) continue;
-    items.push(split.scope ? { text: split.text, scope: split.scope } : { text: split.text });
+    // Read after the scope, because the two ride opposite ends of the same line and a
+    // single item legitimately carries both: `[dev-site] ... [check: pyramid-export]`.
+    const covered = splitCheckTag(split.text);
+    if (!covered.text) continue;
+    items.push({
+      text: covered.text,
+      ...(split.scope ? { scope: split.scope } : {}),
+      ...(covered.coveredBy ? { coveredBy: covered.coveredBy } : {}),
+    });
   }
   return items;
 }

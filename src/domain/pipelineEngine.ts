@@ -1778,19 +1778,20 @@ export function recordChecklist(
    * that declares no scopes produces no scoped items, and a bare string is the same
    * item it always was.
    */
-  items: readonly (string | { text: string; scope?: string })[],
+  items: readonly (string | { text: string; scope?: string; coveredBy?: string })[],
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
 
   const checklist: ChecklistItem[] = items.map((entry, index) => {
-    const { text, scope } = typeof entry === "string" ? { text: entry, scope: undefined } : entry;
+    const parsed = typeof entry === "string" ? { text: entry } : entry;
     return {
       id: `${stage.id}-c${index + 1}`,
-      text,
+      text: parsed.text,
       checked: false,
       raisedByStage: stage.id,
-      ...(scope ? { scope } : {}),
+      ...(parsed.scope ? { scope: parsed.scope } : {}),
+      ...(parsed.coveredBy ? { coveredBy: parsed.coveredBy } : {}),
     };
   });
 

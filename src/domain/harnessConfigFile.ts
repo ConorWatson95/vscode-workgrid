@@ -397,6 +397,17 @@ function parseStage(
     return undefined;
   }
 
+  // Same rule, same reason: a results path with no check to write it is a file nothing
+  // ever produces, and a checklist that then ticks nothing looks exactly like a route
+  // that declared no coverage at all.
+  if (str(raw.checkResults) && !str(raw.verify)) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "checkResults" needs a "verify" command to ` +
+        "write it. Declare the check, or remove the results path.",
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -416,6 +427,7 @@ function parseStage(
     ...(raw.handoff === true ? { handoff: true } : {}),
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
+    ...(str(raw.checkResults) ? { checkResults: str(raw.checkResults) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(str(raw.planOutput) ? { planOutput: str(raw.planOutput) } : {}),
     ...(onFailure ? { onFailure } : {}),
