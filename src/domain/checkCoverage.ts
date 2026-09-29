@@ -168,6 +168,55 @@ export function itemsAnsweredByChecks(
  * permission to act — so a malformed file leaves every item exactly as unverified as
  * it was, which is the state a person can see and correct.
  */
+export interface CheckRun {
+  /** When the suite ran, as the runner recorded it. Absent means it did not say. */
+  ranAt?: string;
+  checks: CheckOutcome[];
+}
+
+/**
+ * Read a run of checks, including when it happened.
+ *
+ * `ranAt` exists because the file is written by a separate process into the worktree and
+ * simply read back afterwards, so nothing about reading it establishes that it describes
+ * the run that just finished. It bit immediately: a suite failed to record outcomes at
+ * all, the previous run's file was still sitting there, and the gate recorded three
+ * checks as passing against a run that had failed two hours later. A stale record of a
+ * verification is worse than none -- none is visible, and this ticks items on evidence
+ * from a run that no longer exists.
+ */
+export function parseCheckRun(text: string | undefined): CheckRun | undefined {
+  const checks = parseCheckResults(text);
+  if (checks.length === 0) return undefined;
+  let ranAt: string | undefined;
+  try {
+    const parsed = JSON.parse(text!) as { ranAt?: unknown };
+    if (typeof parsed.ranAt === "string" && !Number.isNaN(Date.parse(parsed.ranAt))) {
+      ranAt = parsed.ranAt;
+    }
+  } catch {
+    return undefined;
+  }
+  return { ranAt, checks };
+}
+
+/**
+ * True when this run can be read as describing a run that started at or after `since`.
+ *
+ * **A run that does not say when it happened is refused.** The rule absence of
+ * measurement already follows everywhere else here: the whole value of the field is
+ * telling a fresh file from a leftover, so treating silence as fresh reinstates exactly
+ * the failure it was added for. Refusing is announced by the caller, which is what keeps
+ * it from looking like the feature being off.
+ */
+export function ranSince(run: CheckRun, since: string): boolean {
+  if (!run.ranAt) return false;
+  const ran = Date.parse(run.ranAt);
+  const start = Date.parse(since);
+  if (Number.isNaN(ran) || Number.isNaN(start)) return false;
+  return ran >= start;
+}
+
 export function parseCheckResults(text: string | undefined): CheckOutcome[] {
   if (!text?.trim()) return [];
 

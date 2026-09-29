@@ -438,9 +438,12 @@ export function formatStageReport(
     lines.push("", "## ⚠ Failed", "");
     for (const subtask of failures) {
       const reason = subtask.failureReason?.trim();
-      lines.push(
-        failures.length > 1 ? `- **${subtask.title}:** ${describeFailure(reason)}` : describeFailure(reason),
-      );
+      // Linkified, like a reply. A failure reason is where a path matters *most* -- it
+      // is a check's own account of where it put the screenshot, the trace and the HTML
+      // report, and leaving it as text meant reading a path off the screen and finding
+      // the file by hand at the one moment somebody is working out what broke.
+      const described = linkifyPaths(describeFailure(reason), worktreePath);
+      lines.push(failures.length > 1 ? `- **${subtask.title}:** ${described}` : described);
     }
     lines.push("", "_What it did before failing is below._");
   }

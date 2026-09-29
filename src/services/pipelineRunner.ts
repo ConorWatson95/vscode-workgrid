@@ -21,7 +21,8 @@ import {
   TaskStage,
 } from "../domain/taskPipeline";
 import {
-  parseCheckResults,
+  parseCheckRun,
+  ranSince,
   recordCheckOutcomes,
   tickAnsweredItems,
 } from "../domain/checkCoverage";
@@ -744,7 +745,9 @@ export class PipelineRunner {
     stage: TaskStage,
     pipeline: TaskPipeline,
     at: string,
-  ): Promise<{ pipeline: TaskPipeline; ticked: ChecklistItem[] }> {
+    /** When the run that should have produced these outcomes began. */
+    since: string,
+  ): Promise<{ pipeline: TaskPipeline; ticked: ChecklistItem[]; skipped?: string }> {
     if (!stage.checkResults || !this.readWorktreeFile) return { pipeline, ticked: [] };
 
     const { command: resultsPath } = substitutePlaceholders(stage.checkResults, {
@@ -758,10 +761,25 @@ export class PipelineRunner {
     });
 
     const text = await this.readWorktreeFile(task.worktreePath, resultsPath);
-    const outcomes = parseCheckResults(text);
-    if (outcomes.length === 0) return { pipeline, ticked: [] };
-
-    const recorded = recordCheckOutcomes(pipeline, stage.id, outcomes);
+    const run = parseCheckRun(text);
+    if (!run) return { pipeline, ticked: [] };
+    // The file is written by another process into the worktree and read back here, so
+    // nothing about reading it says it describes the run that just finished. A leftover
+    // from an earlier run ticks items on evidence that no longer exists, which is what
+    // happened the first time the suite recorded nothing and the previous file was still
+    // sitting there: three checks reported as passing against a run that had failed.
+    // Announced rather than dropped, or it reads as the suite simply having no outcomes.
+    if (!ranSince(run, since)) {
+      return {
+        pipeline,
+        ticked: [],
+        skipped:
+          `the check results at ${resultsPath} are from ${run.ranAt ?? "an unstated time"}, ` +
+          "before this run started, so nothing was ticked from them -- this run recorded " +
+          "no outcomes of its own.",
+      };
+    }
+    const recorded = recordCheckOutcomes(pipeline, stage.id, run.checks);
     return tickAnsweredItems(recorded, stage.id, at);
   }
 
@@ -778,6 +796,9 @@ export class PipelineRunner {
     if (!stage) return err("That stage is not in this task's pipeline.");
     if (!stage.verify) return err(`"${stage.name}" declares no check to run.`);
     if (!this.verifier) return err("This runner was built without a verifier.");
+
+    // Stamped before the check runs, so an outcome file older than this is a leftover.
+    const verifyStartedAt = new Date().toISOString();
 
     const verification = await this.runVerification(task, stage, stage.verify, signal);
     if (!verification) return err(`"${stage.name}" could not be verified.`);
@@ -821,6 +842,7 @@ export class PipelineRunner {
       stage,
       pipeline,
       new Date().toISOString(),
+      verifyStartedAt,
     );
     pipeline = covered.pipeline;
 
@@ -834,7 +856,14 @@ export class PipelineRunner {
       ticked: covered.ticked.length,
       command: verification.command,
       exitCode: verification.outcome.exitCode,
-      output: verification.outcome.output,
+      // Appended rather than logged: the caller shows this, and a refused outcome file
+      // is the difference between "the suite recorded nothing" and "it recorded
+      // something, from a run that is not this one".
+      output: covered.skipped
+        ? `${verification.outcome.output}
+
+Note: ${covered.skipped}`
+        : verification.outcome.output,
     });
   }
 
@@ -2210,6 +2239,9 @@ export class PipelineRunner {
     // Counted across both ticking passes and announced once. See the second pass below
     // for why there are two.
     let tickedByChecks = 0;
+    // Stamped before the check runs, so an outcome file older than this is a leftover
+    // from a previous run rather than this run's account of itself.
+    const verifyStartedAt = new Date().toISOString();
     const verification =
       reply.ok && stage.verify && this.verifier && isLastUnresolved(stage, subtask.id)
         ? await this.runVerification(task, stage, stage.verify, signal)
@@ -2242,9 +2274,14 @@ export class PipelineRunner {
         stage,
         pipeline,
         new Date().toISOString(),
+      verifyStartedAt,
       );
       pipeline = covered.pipeline;
       tickedByChecks += covered.ticked.length;
+      if (covered.skipped) {
+        steps.push(`"${stage.name}": ${covered.skipped}`);
+        this.logger.warn(`Harness [${task.name}] ${stage.name}: ${covered.skipped}`);
+      }
     }
     if (verification?.unresolved) {
       // Stops the stage exactly as a failed check does, but says why in the words of

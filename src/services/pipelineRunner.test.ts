@@ -3242,8 +3242,26 @@ describe("checks that answer checklist items", () => {
     ],
   };
 
+  /**
+   * A results file the run itself produced.
+   *
+   * `ranAt` is dated forward because the runner compares it against a stamp it takes
+   * when the check starts, and a fake verifier finishes in microseconds -- a real suite
+   * writes the file well after that moment, and there is no way to express "later than
+   * something that has not happened yet" from out here.
+   */
   const results = (...ids: [string, boolean][]) =>
-    JSON.stringify({ checks: ids.map(([id, passed]) => ({ id, passed })) });
+    JSON.stringify({
+      ranAt: new Date(Date.now() + 60_000).toISOString(),
+      checks: ids.map(([id, passed]) => ({ id, passed })),
+    });
+
+  /** The same file, left behind by an earlier run. */
+  const staleResults = (...ids: [string, boolean][]) =>
+    JSON.stringify({
+      ranAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      checks: ids.map(([id, passed]) => ({ id, passed })),
+    });
 
   const checkedTask = () => ({ ...task(), pipeline: createPipeline(CHECKED) });
 
@@ -3307,6 +3325,56 @@ describe("checks that answer checklist items", () => {
     // are evidence either way -- that is what lets the next run tick what passed.
     expect(stage.checklist ?? []).toEqual([]);
     expect(stage.checkOutcomes).toEqual([{ id: "export-carries-from", passed: false }]);
+  });
+
+  it("refuses a results file left behind by an earlier run", async () => {
+    // The failure that prompted this: the suite recorded nothing, the previous run's
+    // file was still on disk, and the gate recorded three checks as passing against a
+    // run that had failed two hours later. A stale record of a verification is worse
+    // than none -- none is visible, this ticks items on evidence that no longer exists.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The Excel export carries the From period [check: export-carries-from]",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        ".taskworkspaces/site-checks-result.json": staleResults(["export-carries-from", true]),
+      },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))!.pipeline!.stages[0];
+    expect(stage.checkOutcomes ?? []).toEqual([]);
+    expect(stage.checklist?.[0].checked).toBe(false);
+  });
+
+  it("refuses a results file that does not say when it ran", async () => {
+    // Silence is not freshness. Treating it as such reinstates exactly the failure the
+    // field was added for, which is the rule absence of measurement already follows.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The Excel export carries the From period [check: export-carries-from]",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        ".taskworkspaces/site-checks-result.json": JSON.stringify({
+          checks: [{ id: "export-carries-from", passed: true }],
+        }),
+      },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect((await repo.get(subject.id))!.pipeline!.stages[0].checkOutcomes ?? []).toEqual([]);
   });
 
   it("ticks nothing at all when the results file is unreadable", async () => {
