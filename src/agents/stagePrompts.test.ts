@@ -447,6 +447,25 @@ describe("parseChecklistReply", () => {
     ]);
   });
 
+  it("stops at the accounting section the coverage instruction asks for", () => {
+    // The instruction asks for "Untagged items:" and one line per item. It has to land
+    // outside the list, or asking why an item is untagged would add an item.
+    expect(
+      parseChecklistReply(
+        [
+          "- Export to Excel and check the From row [check: carries-from]",
+          "- Compare the figures before and after the fix",
+          "",
+          "Untagged items:",
+          "- Compare the figures: needs a before-and-after baseline nothing holds.",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { text: "Export to Excel and check the From row", coveredBy: "carries-from" },
+      { text: "Compare the figures before and after the fix" },
+    ]);
+  });
+
   it("stops at a bold or markdown heading too", () => {
     expect(
       parseChecklistReply(["- Check the export", "", "**Notes:**", "- An aside"].join("\n")),

@@ -921,6 +921,19 @@ failure: whether a **number is right**, whether a layout reads well, whether the
 a person asked for is what they got — none of those have an exit code. Those items are
 counted as gaps and shown at the gate, so the list is a record of what is genuinely
 left for a person rather than a pile nobody has sorted through.
+
+**Then say, in one line each, why every untagged item is untagged**, under a final
+section headed exactly:
+
+  Untagged items:
+
+One line per item, naming the item and the reason — "no exit code", "the control is
+not offered on this tenant", "needs a before-and-after comparison nothing holds".
+Write the section even when every item is tagged, saying so. This is not paperwork: an
+item left untagged because nothing could answer it and one left untagged because
+nobody tried look identical at the gate, and the person standing there cannot tell
+them apart. Saying which is the only thing that turns the untagged count into a list
+of real gaps.
 `;
 }
 
