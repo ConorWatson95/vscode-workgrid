@@ -1,5 +1,5 @@
 import { ChecklistItem, TaskPipeline, TaskStage } from "./taskPipeline";
-import { itemsForGate } from "./checklistScope";
+import { checklistGates, gateFor } from "./checklistScope";
 
 /**
  * Which checklist items a machine already answered, and which nothing can.
@@ -101,15 +101,33 @@ export function outcomesOf(stage: TaskStage | undefined): CheckOutcome[] {
   return stage?.checkOutcomes ?? [];
 }
 
-/** Every item this gate must answer for, with what the last check run said about it. */
+/**
+ * Every item this gate answers for, **checked or not**, with what the last run said.
+ *
+ * Deliberately not `itemsForGate`, which returns only the outstanding ones because its
+ * job is to decide what still blocks a gate. Counting only those here would make the
+ * line shrink as items tick and then report a gate whose checks answered half its
+ * checklist as having no coverage at all — the record of what the machine did would be
+ * erased by the machine doing it, which is `TaskPipeline.discarded`'s complaint one
+ * field over.
+ */
 export function coverageForGate(
   pipeline: TaskPipeline,
   stageId: string,
 ): ItemCoverage[] {
   const gate = pipeline.stages.find((stage) => stage.id === stageId);
   const outcomes = outcomesOf(gate);
+  const gates = checklistGates(pipeline);
+  if (!gates.some((candidate) => candidate.stageId === stageId)) return [];
 
-  return itemsForGate(pipeline, stageId).map((item) => {
+  const items = pipeline.stages
+    // Skipped stages are excluded exactly as `itemsForGate` excludes them: their items
+    // gate nothing, and counting them would report coverage of work nobody is doing.
+    .filter((stage) => stage.status !== "skipped")
+    .flatMap((stage) => stage.checklist ?? [])
+    .filter((item) => gateFor(gates, item.scope)?.stageId === stageId);
+
+  return items.map((item) => {
     if (!item.coveredBy) return { item, state: "gap" as const };
     const outcome = outcomes.find((candidate) => sameId(candidate.id, item.coveredBy!));
     if (!outcome) return { item, state: "missing" as const };
@@ -130,6 +148,9 @@ export function itemsAnsweredByChecks(
 ): ChecklistItem[] {
   return coverageForGate(pipeline, stageId)
     .filter((entry) => entry.state === "answered")
+    // Only what is still outstanding. An already-ticked item needs nothing doing, and
+    // returning it would inflate the count the caller announces.
+    .filter((entry) => !entry.item.checked)
     // An action is a step only the operator can take, and no browser check performs
     // one. A suite that happened to exercise the same page has not opened the pull
     // request, so ticking it would be a false statement rather than a judgement call
