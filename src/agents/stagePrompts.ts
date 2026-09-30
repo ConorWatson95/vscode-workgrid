@@ -896,6 +896,14 @@ item's implementation — never a second list written beside it.
 **First** write the checklist, complete, without thinking about what can be automated.
 It is what a person must observe for this change to be believed.
 
+Write **one property per item**, in the smallest form that is still worth checking. Not
+a procedure with several observations in it, and not several states bundled together —
+"try all five options and confirm nothing else changed" is one item nothing can answer,
+where the same ground as five items is mostly automatable. This is not a style rule:
+an item is the unit a check implements, so a bundled item is one no single check can
+establish the whole of, and the rule below then obliges you to leave it untagged. The
+checklist that ends up cheapest for a person is the one written in separable claims.
+
 **Then** take each item in turn and ask whether a machine can answer it. Where it can,
 and this stage's instructions tell you how to add a check, write **one check for that
 item**, give it an id that names what the item asserts, and end the item's line with
@@ -929,6 +937,10 @@ section headed exactly:
 
 One line per item, naming the item and the reason — "no exit code", "the control is
 not offered on this tenant", "needs a before-and-after comparison nothing holds".
+A reason that is a claim about the **tooling** rather than about the item is the one to
+distrust, and check before writing: "the format has no step for this" has already been
+written about a sequence the format expressed perfectly well, and cost that item to a
+person on every run since.
 Write the section even when every item is tagged, saying so. This is not paperwork: an
 item left untagged because nothing could answer it and one left untagged because
 nobody tried look identical at the gate, and the person standing there cannot tell
