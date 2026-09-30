@@ -103,6 +103,7 @@ import {
   isVerificationFailure,
 } from "./verificationRunner";
 import {
+  missingCheckerNote,
   rootNamedPaths,
   staleCheckerNote,
   staleCheckers,
@@ -662,6 +663,38 @@ export class PipelineRunner {
   }
 
   /**
+   * Root-named checkers this worktree does not contain.
+   *
+   * Keyed on the script itself rather than its directory, because that is the path the
+   * command already names and the capability already reads — if the script is absent
+   * then so is everything beside it, which is the part that matters. A runner with no
+   * file reader says nothing, the rule the note above follows.
+   */
+  private async missingCheckerNote(
+    task: TaskWorkspace,
+    declared: string,
+  ): Promise<string | undefined> {
+    if (!this.readWorktreeFile) return undefined;
+    const named = rootNamedPaths(declared);
+    if (named.length === 0) return undefined;
+    const absent: string[] = [];
+    for (const path of named) {
+      // A directory is the check's *subject*, not its script, and reading one yields
+      // nothing either way — so only paths that look like a file are asked about.
+      if (!/\.[A-Za-z0-9]+$/.test(path)) continue;
+      try {
+        if ((await this.readWorktreeFile(task.worktreePath, path)) === undefined) {
+          absent.push(path);
+        }
+      } catch {
+        // Unreadable is not the same as absent, and guessing would produce the
+        // confident wrong fact this whole family of checks exists to avoid.
+      }
+    }
+    return missingCheckerNote(absent, task.baseBranch);
+  }
+
+  /**
    * Files in this branch's diff that no stage wrote and that exist elsewhere.
    *
    * Two halves, and the order is what keeps it cheap: the pure filter decides which
@@ -895,6 +928,15 @@ Note: ${covered.skipped}`
         command: string;
         outcome: CommandOutcome;
         discarded?: string;
+        /**
+         * Root-named tooling this worktree does not contain.
+         *
+         * Returned rather than only annotated onto the outcome, because a passing
+         * check's output is discarded — and passing is the case this exists for. A
+         * branch that predates the tooling runs the root's copy and passes while
+         * every correction written beside that script reaches it as silence.
+         */
+        toolingAbsent?: string;
         /** Placeholders nothing established, when the check was not run at all. */
         unresolved?: string[];
       }
@@ -1017,6 +1059,14 @@ Note: ${covered.skipped}`
     if (stale) {
       this.logger.warn(`Harness [${task.name}] "${stage.name}": ${stale}`);
     }
+    // Stated whatever the exit code, unlike the note above. A branch that predates the
+    // tooling runs the root's copy correctly and passes — the damage is to everything
+    // beside the script, which no outcome reveals, so failure-only would report it
+    // exactly never on the stages where it holds.
+    const absentTooling = await this.missingCheckerNote(task, declared);
+    if (absentTooling) {
+      this.logger.warn(`Harness [${task.name}] "${stage.name}": ${absentTooling}`);
+    }
     if (outcome.exitCode === 0) {
       this.logger.info(`Harness [${task.name}] "${stage.name}" verified (exit 0).`);
     } else {
@@ -1032,8 +1082,9 @@ Note: ${covered.skipped}`
       // Carried into the recorded output, so the stage report shows it beside the check
       // it enabled. A discard visible only in the log is one nobody reading the report
       // can connect to the file that is no longer changed.
-      outcome: annotateOutcome(outcome, [discarded, stale]),
+      outcome: annotateOutcome(outcome, [discarded, stale, absentTooling]),
       ...(discarded ? { discarded } : {}),
+      ...(absentTooling ? { toolingAbsent: absentTooling } : {}),
     };
   }
 
@@ -2272,6 +2323,14 @@ Note: ${covered.skipped}`
       // see what the advance did, and "files were restored" is the kind of thing they
       // must not have to go looking for.
       steps.push(`"${stage.name}": ${verification.discarded.split("\n")[0]}`);
+    }
+    // In the steps for the same reason, and with more force: a passing check's output
+    // is discarded, so on the stages where this holds the annotation reaches nothing
+    // else. A gate that left the same item to a person on three consecutive runs did
+    // so because the correction lived beside a script the worktree does not have, and
+    // the only place that appeared was the stage's own prose.
+    if (verification?.toolingAbsent) {
+      steps.push(`"${stage.name}": ${verification.toolingAbsent.split("\n")[0]}`);
     }
     if (verification && !verification.unresolved) {
       // Only a check that ran. `TaskStage.verification` means "something other than the

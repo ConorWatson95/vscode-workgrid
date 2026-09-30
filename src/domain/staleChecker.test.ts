@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  missingCheckerNote,
   rootNamedPaths,
   staleCheckerNote,
   staleCheckers,
@@ -89,5 +90,27 @@ describe("staleCheckerNote", () => {
   it("reads as plural for more than one", () => {
     const note = staleCheckerNote(["a.ps1", "b.ps1"], "main")!;
     expect(note).toContain("changed those files");
+  });
+});
+
+describe("missingCheckerNote", () => {
+  it("is absent when the branch has every root-named script", () => {
+    expect(missingCheckerNote([], "DEV")).toBeUndefined();
+  });
+
+  it("says the check is unaffected and the documentation beside it is not", () => {
+    const note = missingCheckerNote(["tools/e2e/Invoke-SiteChecks.ps1"], "DEV")!;
+    expect(note).toContain("DEV copy of `tools/e2e/Invoke-SiteChecks.ps1`");
+    // Nothing here is a claim about the check, which runs the authoritative copy.
+    expect(note).toContain("The check itself is unaffected");
+    // The damage, and the only reason the note exists.
+    expect(note).toContain("reaches it as silence");
+    expect(note).toContain("Merge DEV into this branch");
+  });
+
+  it("reads as plural for more than one", () => {
+    const note = missingCheckerNote(["a.ps1", "b.ps1"], "main")!;
+    expect(note).toContain("those paths");
+    expect(note).toContain("beside* them");
   });
 });

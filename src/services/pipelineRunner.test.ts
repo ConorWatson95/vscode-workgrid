@@ -1578,6 +1578,99 @@ describe("declared verification", () => {
     });
   });
 
+  describe("a check whose tooling this branch does not have", () => {
+    /**
+     * The NGBSD-222 shape, and the inverse of the block above. There the branch had
+     * *fixed* the root's checker; here it does not contain it at all, because the
+     * worktree was cut before the tooling existed.
+     *
+     * Nothing about the check is wrong -- it runs the root's copy and passes, which is
+     * exactly what the placeholder is for. What is wrong is everything beside the
+     * script: the tooling's own documentation is in the same directory, so a stage
+     * working in this worktree reads every correction written there as silence. A
+     * local-verify gate left the same checklist item to a person on three consecutive
+     * runs, each time reporting that the check format could not express it, while the
+     * correction saying otherwise sat in a file it could not open. The only place that
+     * appeared was the stage's own prose, and only because it happened to mention it.
+     */
+    const CHECKER = "tools/e2e/Invoke-SiteChecks.ps1";
+    const DECLARED = 'pwsh -File "${repoRoot}/' + CHECKER + '"';
+    const RAN = 'pwsh -File "C:/repos/app/' + CHECKER + '"';
+
+    const usesTooling = (verify: string): RouteDefinition => ({
+      id: "test",
+      label: "Test",
+      description: "d",
+      stages: [
+        {
+          id: "build",
+          label: "Build",
+          kind: "implementation",
+          intent: "Build it.",
+          splittable: false,
+          gate: "auto",
+          verify,
+        },
+      ],
+    });
+
+    it("says so on a stage that passed, where nothing else would", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN]: { exitCode: 0 } },
+        // The worktree has no such file. Every other read the runner makes is absent
+        // too, which is what a branch predating the tooling actually looks like.
+        files: {},
+      });
+      const subject = { ...task(), pipeline: createPipeline(usesTooling(DECLARED)) };
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      // The steps are what the operator reads to see what the advance did, and a
+      // passing check's output is discarded -- so this is the only channel left.
+      expect(report.steps.join("\n")).toContain(CHECKER);
+      expect(report.steps.join("\n")).toContain("predates the tooling");
+      // And it is an annotation, never a disposition: the check ran the authoritative
+      // copy, so there is nothing here to fail.
+      const saved = await repo.get(subject.id);
+      expect(saved?.pipeline?.stages[0].status).not.toBe("failed");
+    });
+
+    it("says nothing when the branch has the tooling", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN]: { exitCode: 0 } },
+        files: { [CHECKER]: "param()" },
+      });
+      const subject = { ...task(), pipeline: createPipeline(usesTooling(DECLARED)) };
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(report.steps.join("\n")).not.toContain("predates the tooling");
+    });
+
+    it("says nothing about a directory argument, which is the check's subject", async () => {
+      const sessions = fakeSessions({ "": { text: "Done." } });
+      const SUBJECT_ONLY = 'pwsh -File "run.ps1" -RepoRoot "${repoRoot}/tools"';
+      const RAN_SUBJECT = 'pwsh -File "run.ps1" -RepoRoot "C:/repos/app/tools"';
+      const { runner, repo } = makeRunner(sessions, {
+        verify: { [RAN_SUBJECT]: { exitCode: 0 } },
+        files: {},
+      });
+      const subject = {
+        ...task(),
+        pipeline: createPipeline(usesTooling(SUBJECT_ONLY)),
+      };
+      await repo.save(subject);
+
+      const report = await runner.advance(subject);
+
+      expect(report.steps.join("\n")).not.toContain("predates the tooling");
+    });
+  });
+
   describe("a failed check the route names an owner for", () => {
     /**
      * Promote, then a gate whose check asks whether the promotion actually landed.

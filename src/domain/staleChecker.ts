@@ -98,3 +98,46 @@ export function staleCheckerNote(
     `Land the change to ${one ? "it" : "them"} on ${baseBranch}, then re-run this stage.`
   );
 }
+
+/**
+ * What to tell the operator when the branch does not contain a root-named checker at all.
+ *
+ * The inverse of the above and the costlier half. `staleCheckers` asks whether the
+ * branch changed the script the root runs; this asks whether the branch *has* it —
+ * and where it does not, everything beside it is unreadable too. A stage's own docs
+ * live next to the script it runs, so a worktree cut before the tooling existed is one
+ * where every correction written into those docs reaches nobody, silently, while the
+ * check itself goes on passing from the root's copy.
+ *
+ * Measured on the branch that taught this: a gate left the same checklist item to a
+ * person on three consecutive runs, each time reporting that the check format could not
+ * express it. The correction had been written into `tools/e2e/AGENTS.md` — a file the
+ * session could not open, because `tools/e2e` is not in that worktree. Nothing said so.
+ * The stage's own report is the only place the fact appeared, and only because it
+ * happened to mention it.
+ *
+ * Narrow by measurement, not by hope: on the stalest worktree in that repository, one
+ * of eight `${repoRoot}`-named scripts is absent. A branch that has the tooling — which
+ * is nearly all of them — says nothing.
+ *
+ * An annotation, never a disposition, and stated whatever the exit code: the check is
+ * running the right copy by construction, so there is nothing here to fail. What is
+ * wrong is invisible and stays wrong until somebody merges.
+ */
+export function missingCheckerNote(
+  absent: readonly string[],
+  baseBranch: string,
+): string | undefined {
+  if (absent.length === 0) return undefined;
+  const names = absent.map((path) => `\`${path}\``).join(", ");
+  const one = absent.length === 1;
+  return (
+    `This check ran from the ${baseBranch} copy of ${names}, and this worktree does ` +
+    `not contain ${one ? "that path" : "those paths"} — the branch predates the ` +
+    `tooling.\n\nThe check itself is unaffected, because the root's copy is the ` +
+    `authoritative one. What is affected is everything *beside* ${one ? "it" : "them"}: ` +
+    `a stage working in this worktree cannot read the tooling's own documentation, so ` +
+    `guidance written there reaches it as silence. Merge ${baseBranch} into this branch ` +
+    `if a stage here is expected to use that tooling.`
+  );
+}

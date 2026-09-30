@@ -3025,6 +3025,40 @@ the report, the failure ledger and, through `checkFailureRepair`, the stage-scop
 guidance a retry carries forward. A note reaching only the log is one nobody reading the
 failure can connect to it, which is the rule a discarded file already follows.
 
+### And the branch did not have the script at all
+
+`missingCheckerNote`, 30 Sep 2026. The inverse of the above, and it bites where the
+other cannot: `staleCheckers` asks whether the branch *changed* the script the root
+runs, and this asks whether the branch *has* it. Where it does not, the check still runs
+the root's copy and still passes — which is `${repoRoot}` working exactly as designed —
+while everything **beside** the script is unreadable.
+
+That matters because a tool's own documentation lives next to it. On NGBSD-222 a local
+verification gate left the same checklist item to a person on three consecutive runs,
+each time reporting that the check format could not express it. The correction saying
+otherwise had been written into `tools/e2e/AGENTS.md`, and the worktree was cut before
+`tools/e2e` existed — so the file the stage was being corrected through was one it could
+not open. The only place that ever appeared was the stage's own prose, and only because
+it happened to mention it. Everything needed to derive it was already held: the declared
+command names the path, and the harness already reads files out of the worktree.
+
+- **An annotation, never a disposition**, the rule the note above follows. There is no
+  reading under which the check is wrong; only the silence beside it is.
+- **Stated whatever the exit code**, unlike `staleCheckerNote` — which is the whole
+  point, since the stages where this holds are the ones that *pass*.
+- **Carried into `steps`, not only the outcome.** A passing check's output is discarded
+  by `finishSubtask`, so annotating the outcome alone would have reported this exactly
+  never. The rule a discarded file already follows, one call site further on.
+- **Scripts only, never the directory form.** `-RepoRoot "${repoRoot}/tools"` is the
+  check's *subject*, the distinction the smoke-execution failure turned on, and reading
+  a directory yields nothing either way.
+- **Unreadable is not absent.** A read that throws says nothing, the direction every
+  optional dependency here chooses.
+
+Narrow by measurement rather than by hope: on the stalest worktree in that repository,
+**one of eight** `${repoRoot}`-named scripts is absent. A branch that has the tooling —
+nearly all of them — says nothing at all.
+
 ### And the base it compared against was moving
 
 `${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it
