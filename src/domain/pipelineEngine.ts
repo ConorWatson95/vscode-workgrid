@@ -1785,6 +1785,12 @@ export function recordChecklist(
    * item it always was.
    */
   items: readonly (string | { text: string; scope?: string; coveredBy?: string })[],
+  /**
+   * The stage's account of why each untagged item is untagged. Replaced with the
+   * checklist, never merged: both come from one reply, so a run that wrote a new list
+   * and no notes has withdrawn the old ones along with the items they described.
+   */
+  untaggedNotes: readonly string[] = [],
 ): Result<TaskPipeline, PipelineError> {
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
@@ -1801,7 +1807,13 @@ export function recordChecklist(
     };
   });
 
-  return ok(replaceStage(pipeline, { ...stage, checklist }));
+  return ok(
+    replaceStage(pipeline, {
+      ...stage,
+      checklist,
+      ...(untaggedNotes.length > 0 ? { untaggedNotes: [...untaggedNotes] } : {}),
+    }),
+  );
 }
 
 /** Ticks or un-ticks a verification item, optionally recording what was seen. */

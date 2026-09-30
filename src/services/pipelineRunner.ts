@@ -125,6 +125,7 @@ import {
   behaviourReviewPrompt,
   parseAssessments,
   parseChecklistReply,
+  parseUntaggedNotes,
   parseNeedsInfo,
   readStageReply,
   parseSubtaskPlan,
@@ -2343,13 +2344,25 @@ Note: ${covered.skipped}`
     if (reply.ok && producesChecklist(stage.kind)) {
       const scopes = declaredScopes(pipeline);
       const items = parseChecklistReply(reply.text, scopes);
-      const recorded = recordChecklist(pipeline, stage.id, items);
+      const untagged = parseUntaggedNotes(reply.text);
+      const recorded = recordChecklist(pipeline, stage.id, items, untagged);
       if (recorded.ok) pipeline = recorded.value;
       steps.push(
         items.length > 0
           ? `"${stage.name}" raised ${items.length} verification item(s).`
           : `"${stage.name}" found nothing needing manual verification.`,
       );
+      // The count of items no check answers is flat across re-runs wherever the
+      // remainder is genuinely unautomatable, so on its own it reads as a stage that is
+      // not improving — which is the account four identical "3 of 6" runs gave of a
+      // gate that got materially better each time. Saying the stage gave reasons is
+      // what separates "nothing happened again" from "this is the right answer".
+      if (untagged.length > 0) {
+        steps.push(
+          `"${stage.name}" said why ${untagged.length} item(s) cannot be automated — ` +
+            "see the stage report.",
+        );
+      }
       // Said out loud when the route asked for a distinction and the review made none.
       // Every item then falls to the fallback gate, which is safe but is not what the
       // route describes — and an operator reading "12 items" at one gate cannot tell

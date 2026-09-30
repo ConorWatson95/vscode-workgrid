@@ -1372,6 +1372,35 @@ function opensNewSection(raw: string): boolean {
   return /:$/.test(line.replace(/^[*_]+/, "").replace(/[*_]+$/, ""));
 }
 
+/**
+ * The stage's stated reasons for the items it left untagged.
+ *
+ * `coverageInstruction` asks for these under a heading of exactly "Untagged items:" and
+ * for a day nothing read them, so they reached only the stage report — which is not
+ * where an operator watching a gate looks. The fourteenth instance of a prompt asking
+ * for a fact nothing holds, and the one that made a working gate look broken: four runs
+ * reported "3 of 6", every one better than the last, and the reasons that would have
+ * said why three was the right answer were sitting in the reply each time.
+ *
+ * Read from the heading to the end, which is where the instruction puts it, and bullets
+ * only — a trailing paragraph about something else is not a reason for an item.
+ */
+export function parseUntaggedNotes(text: string): string[] {
+  const heading = /^[ \t]*[*_#]*\s*untagged items[*_\s]*:[*_]*[ \t]*$/im.exec(text);
+  if (!heading || heading.index === undefined) return [];
+
+  const notes: string[] = [];
+  for (const raw of unfencedLines(text.slice(heading.index + heading[0].length))) {
+    const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(raw.trim());
+    // Stops at the next section, so a stage that writes something after its reasons
+    // does not have it filed as one.
+    if (!bullet && notes.length > 0 && opensNewSection(raw)) break;
+    const body = bullet?.[1]?.trim();
+    if (body) notes.push(body);
+  }
+  return notes;
+}
+
 /** Parses a checklist reply. "NONE" yields an empty list, which is a valid answer. */
 export function parseChecklistReply(
   text: string,

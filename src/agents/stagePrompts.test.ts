@@ -3,6 +3,7 @@ import {
   StageContext,
   behaviourReviewPrompt,
   parseChecklistReply,
+  parseUntaggedNotes,
   parseAssessments,
   stripAssessments,
   assessmentPrompt,
@@ -464,6 +465,29 @@ describe("parseChecklistReply", () => {
       { text: "Export to Excel and check the From row", coveredBy: "carries-from" },
       { text: "Compare the figures before and after the fix" },
     ]);
+  });
+
+  it("reads the untagged reasons as their own list", () => {
+    const reply = [
+      "- Export to Excel and check the From row [check: carries-from]",
+      "- Repeat with the CSV export",
+      "",
+      "Untagged items:",
+      "- CSV item: the CSV control is hidden for NissanGB.",
+      "- Toggle item: no toggle-back step in the manifest format.",
+      "",
+      "I changed `site-checks.json` so the check selects a non-default From.",
+    ].join("\n");
+    expect(parseUntaggedNotes(reply)).toEqual([
+      "CSV item: the CSV control is hidden for NissanGB.",
+      "Toggle item: no toggle-back step in the manifest format.",
+    ]);
+    // And the reasons are not items: the section that holds them ends the checklist.
+    expect(parseChecklistReply(reply)).toHaveLength(2);
+  });
+
+  it("finds no reasons where the stage wrote no section", () => {
+    expect(parseUntaggedNotes("- Just a checklist\n- And another")).toEqual([]);
   });
 
   it("stops at a bold or markdown heading too", () => {

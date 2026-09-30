@@ -459,6 +459,29 @@ export interface TaskStage {
    */
   checklist?: ChecklistItem[];
   /**
+   * Why the stage left the items it left untagged, in its own words.
+   *
+   * The coverage line reports a ratio, and a ratio is the one thing about this that
+   * does not move. Four consecutive runs of one gate reported "3 of 6", and behind
+   * that identical number the first leaked its own notes into the list, the second
+   * did not, the third stated its reasons for the first time, and the fourth used
+   * them to strengthen the check that catches the actual defect. Every run improved
+   * and the operator, reading the only figure on screen, concluded nothing was
+   * happening — which is the account a person forms when a real change has no visible
+   * record of itself.
+   *
+   * And the reasons were *right*: no toggle-back step exists in the manifest format,
+   * the CSV control is hidden for that tenant, an unchanged-across-five-options claim
+   * has no baseline. Three of six is the correct answer, so the number was never going
+   * to move, and nothing said so. Asked for by `coverageInstruction` since the day
+   * before this field existed — a prompt asking for a fact nothing reads, which is the
+   * failure this codebase has now recorded thirteen times and this is the fourteenth.
+   *
+   * Absent means the stage said nothing, which is distinct from having no untagged
+   * items; the count of those is derived from the checklist and always available.
+   */
+  untaggedNotes?: string[];
+  /**
    * What this verification gate is responsible for confirming, as a short label —
    * `"local"`, `"dev-site"`. Copied from the route so a persisted pipeline stays
    * self-describing.

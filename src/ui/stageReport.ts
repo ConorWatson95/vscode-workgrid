@@ -11,7 +11,7 @@ import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
 import { checklistGates, gateFor } from "../domain/checklistScope";
-import { formatCoverageLine, summariseCoverage } from "../domain/checkCoverage";
+import { formatCoverageLine, formatUntaggedNotes, summariseCoverage } from "../domain/checkCoverage";
 import {
   UsageTotals,
   discardedUsage,
@@ -623,6 +623,12 @@ export function formatStageReport(
         : undefined;
       if (coverage) lines.push(`_${coverage}_`, "");
       for (const item of verifications) lines.push(render(item));
+      // After the items, not before: the reasons are about the ones with no check,
+      // and a reader has to have seen them to know which those are.
+      const untagged = pipeline
+        ? formatUntaggedNotes(summariseCoverage(pipeline, stage.id), stage.untaggedNotes)
+        : [];
+      if (untagged.length > 0) lines.push("", ...untagged);
     }
 
     if (actions.length > 0) {

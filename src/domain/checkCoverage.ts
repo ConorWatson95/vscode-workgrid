@@ -362,6 +362,39 @@ export function summariseCoverage(
  * else on the list is covered, because that is the point at which the difference
  * between "nobody automated this" and "nothing can" becomes a decision.
  */
+/**
+ * Why a gate's remaining items are not automated, as the stage put it.
+ *
+ * The ratio is what an operator reads, and on a gate whose remaining items are
+ * genuinely unautomatable it is the one thing that never moves. Four consecutive
+ * runs of one gate reported "3 of 6", and behind that identical number the first
+ * leaked its own notes into the list, the second did not, the third stated its
+ * reasons, and the fourth used them to strengthen the check that catches the
+ * actual defect. Three was the right answer every time -- no toggle step exists in
+ * the project's check format, the CSV control is hidden for that tenant, an
+ * unchanged-across-five-options claim has no baseline -- and nothing said so, so
+ * the reading available from the screen was that the gate was stuck.
+ *
+ * A gap with a stated reason and one nobody looked at are the same integer. Only
+ * the sentence tells them apart, and it is worth nothing in a report the person
+ * standing at the gate has no reason to open.
+ *
+ * Silent when there is nothing left unanswered: reasons for an empty set are noise,
+ * and the rule `summariseEvidence` follows.
+ */
+export function formatUntaggedNotes(
+  summary: CoverageSummary | undefined,
+  untaggedNotes: readonly string[] | undefined,
+): string[] {
+  if (!summary || summary.gaps === 0) return [];
+  if (!untaggedNotes || untaggedNotes.length === 0) return [];
+  return [
+    "Why the rest are not automated, as the stage put it:",
+    "",
+    ...untaggedNotes.map((note) => `- ${note}`),
+  ];
+}
+
 export function formatCoverageLine(summary: CoverageSummary | undefined): string | undefined {
   if (!summary) return undefined;
   const covered = summary.answered + summary.failed + summary.missing;
