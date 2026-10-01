@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   retractedRuleStages,
+  removeRetractedStages,
   rulesAreAuthoritative,
   withdrawRetractedItems,
 } from "./retractedRules";
@@ -110,13 +111,18 @@ describe("retractedRuleStages", () => {
     expect(retractedRuleStages(route, [])).toEqual([]);
   });
 
-  it("ignores a retracted stage that raised nothing", () => {
+  // Reported even with nothing to withdraw: removal still has work to do, and a stage
+  // whose only trace is a deferral would otherwise be invisible to it.
+  it("reports a retracted stage that raised nothing", () => {
     const quiet: TaskPipeline = {
       routeId: "report-change",
       stages: [stage({ id: "r-sql", kind: "domainReview", addedByRule: "SQL changed" })],
     };
 
-    expect(retractedRuleStages(quiet, [])).toEqual([]);
+    const retracted = retractedRuleStages(quiet, []);
+
+    expect(retracted).toHaveLength(1);
+    expect(retracted[0].withdrawable).toEqual([]);
   });
 
   // `addedByRule` holds prose, so a rule whose reason was reworded is still declared.
@@ -177,5 +183,86 @@ describe("withdrawRetractedItems", () => {
     withdrawRetractedItems(before, []);
 
     expect(before.stages[1].checklist).toHaveLength(1);
+  });
+});
+
+describe("removeRetractedStages", () => {
+  const AT = "2026-10-01T09:00:00.000Z";
+
+  it("removes the stage and everything it raised, ticks included", () => {
+    const before = pipeline([item({ id: "a" }), item({ id: "b", checked: true })]);
+
+    const result = removeRetractedStages(before, [], AT);
+
+    expect(result?.pipeline.stages.map((s) => s.id)).toEqual(["implement", "local"]);
+    expect(result?.removed[0].stageId).toBe("r-qa");
+    expect(result?.refused).toEqual([]);
+  });
+
+  it("takes items it raised off another stage's list", () => {
+    const elsewhere: TaskPipeline = {
+      routeId: "report-change",
+      stages: [
+        stage({ id: "r-qa", kind: "behaviourReview", addedByRule: "no automated UI checks" }),
+        stage({
+          id: "local",
+          kind: "humanVerification",
+          checklist: [item({ id: "a" }), item({ id: "own", raisedByStage: "local" })],
+        }),
+      ],
+    };
+
+    const result = removeRetractedStages(elsewhere, [], AT);
+
+    expect(result?.pipeline.stages[0].checklist?.map((i) => i.id)).toEqual(["own"]);
+  });
+
+  // `outstandingDeferrals` requires the raising stage to be settled, so removing it
+  // would make the item quietly stop being outstanding rather than be answered.
+  it("settles the deferrals it raised rather than orphaning them", () => {
+    const withDeferral: TaskPipeline = {
+      ...pipeline([]),
+      deferrals: [
+        { id: "d1", text: "nobody owns this", raisedByStage: "r-qa", raisedAt: AT },
+        { id: "d2", text: "nor this", raisedByStage: "implement", raisedAt: AT },
+      ],
+    };
+
+    const result = removeRetractedStages(withDeferral, [], AT);
+
+    expect(result?.pipeline.deferrals?.[0].resolved).toBe(true);
+    expect(result?.pipeline.deferrals?.[0].resolution).toContain("retracted");
+    expect(result?.pipeline.deferrals?.[1].resolved).toBeUndefined();
+  });
+
+  it("refuses a stage with a session running in it", () => {
+    const running = pipeline([item({ id: "a" })]);
+    running.stages[1] = { ...running.stages[1], status: "active" };
+
+    const result = removeRetractedStages(running, [], AT);
+
+    expect(result?.removed).toEqual([]);
+    expect(result?.refused[0].reason).toContain("session is running");
+    expect(result?.pipeline.stages).toHaveLength(3);
+  });
+
+  it("refuses the stage the route is currently on", () => {
+    const here: TaskPipeline = { ...pipeline([item({ id: "a" })]), currentStage: "r-qa" };
+
+    const result = removeRetractedStages(here, [], AT);
+
+    expect(result?.refused[0].reason).toContain("currently on it");
+  });
+
+  it("leaves a rule the project still declares alone", () => {
+    expect(removeRetractedStages(pipeline([item({ id: "a" })]), [rule("r-qa")], AT)).toBeUndefined();
+  });
+
+  it("does not mutate its input", () => {
+    const before = pipeline([item({ id: "a" })]);
+
+    removeRetractedStages(before, [], AT);
+
+    expect(before.stages).toHaveLength(3);
   });
 });

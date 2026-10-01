@@ -3205,6 +3205,37 @@ Five rules, each load-bearing:
   nobody asking is worse than items an operator disagrees with, so the count is named in
   the confirmation and announced afterwards, the rule a discarded file already follows.
 
+**And withdrawing the items was not what was wanted** (`removeRetractedStages`, the
+same day). The first build took the items and kept the stage, on the invariant's own
+reasoning — the stage ran, it cost money, its report is the account of what it did. That
+reasoning earns its keep for a stage a project still declares. It does not reach a
+*retracted* one: the project has said in config that the review should never have been
+required, so the row explains itself by a rule nobody can now read.
+
+The operator's actual purpose is what settles it, and it was not unblocking. The gate was
+about to be re-run to exercise **automatic check-driven ticking**, and the retracted
+stage held **15 items of which 11 named no check at all** — so the gate would have sat
+holding eleven questions no check could ever answer and the run would have proved nothing
+either way. An item a check cannot reach is not evidence; it is noise in the measurement.
+
+Both dispositions ship, and the dialog states what each costs rather than burying it:
+withdrawing keeps the stage, its report and every tick; removing takes all three. Four
+rules on the removal:
+
+- **Never a stage in flight** — `active`, the route's `currentStage`, or holding a
+  running subtask. Refused per stage with a reason and *announced*, since a stage the
+  operator believes is gone and is not is the worst of the three outcomes.
+- **Its deferrals are settled, not orphaned.** `outstandingDeferrals` requires the
+  raising stage to be settled, so removing the stage would make its items silently cease
+  to be outstanding — the *hiding* failure `settleDiscardedDeferrals` was written to end,
+  arrived at from the other side.
+- **The ledgers are never pruned.** `discarded`, `failures` and `interventions` record
+  what happened, and it happened. The rule a revert already follows.
+- **`retractedRuleStages` reports a stage that raised nothing**, which the first build
+  filtered out. That filter belonged to withdrawal — where a stage with no items is
+  nothing to act on — and applying it to the shared finder hid a stage whose only trace
+  was a deferral from removal entirely. Found by the deferral test, not by reading.
+
 Attribution is read from `ChecklistItem.raisedByStage` rather than from which stage's list
 holds the item. In practice a review writes onto its own stage and the two agree; the
 attribution is what *states* it, and reading the location instead would quietly stop
