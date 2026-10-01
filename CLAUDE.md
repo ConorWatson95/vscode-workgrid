@@ -3162,6 +3162,54 @@ Worth recording as the second case where investigating a held gate found a defec
 harness rather than in a stage — `correctionChangedNothing` was the first, and both were
 found by asking what the operator's next click would actually do.
 
+### A retracted rule went on asking its questions
+
+`domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and
+that is right — a pipeline is a snapshot, the stage ran, it cost money, and its report is
+the account of what it did. `repositionRuleStages` moves rule stages and deletes none for
+the same reason. What nobody had noticed is that a rule-added *behaviour review* does not
+only occupy a slot: it writes **checklist items**, and those gate a human verification
+that has not happened yet.
+
+So retracting a rule from `harness.json` reaches every pending stage through
+`refreshPendingStages` and reaches the items it already wrote through nothing at all. On
+the Pyramid export task `r-runtime-qa-plan` was retracted after its stated reason — no
+automated UI checks — was answered by `tools/e2e/Invoke-SiteChecks.ps1`; its 7 items stayed
+on the local verification gate, which went on refusing to pass while they were outstanding.
+The only admissible answers were to tick things nobody intended to exercise, or to revert
+to the review — which re-runs the retracted rule's stage and writes the list again.
+
+Five rules, each load-bearing:
+
+- **Keyed on absence from config, never on the rule no longer matching the diff.** A rule
+  stops matching routinely, because the diff moved; a stage that dropped its last `.sql`
+  file has not had its review retracted, and withdrawing on that basis would discard a
+  real review's findings mid-route. A rule the project no longer *declares* is a decision
+  somebody committed. Matched on the **stage id** among `rule.stage.id`, the same lookup
+  `stageModelResolution` already uses to find a rule-added stage in config, read for a
+  different question — never on `addedByRule`, which holds prose somebody edits.
+- **An unreadable config is refused, not acted on** (`rulesAreAuthoritative`). `loadHarness`
+  answers an unparseable file with *no rules* and a problem, which is indistinguishable
+  from every rule having been retracted — so a trailing comma would empty the checklist of
+  every task in the repository. Absence of a config file is refused for the same reason.
+  The rule an unmeasured wait already follows: absence of measurement is not permission to
+  act.
+- **Unchecked items only.** A tick is evidence somebody looked and the only record that
+  they did. Retracting a rule says the questions should not have been asked; it says
+  nothing about the answers already given.
+- **The stage stays, with its report, its cost and its history**, which is also what
+  explains the ticks that survive.
+- **A command, never a refresh pass** — the decision worth stating, since the three
+  refresh tiers all exist for exactly this shape of problem. They repair a stage that has
+  not acted yet; this destroys recorded output. Items vanishing from a gate mid-route with
+  nobody asking is worse than items an operator disagrees with, so the count is named in
+  the confirmation and announced afterwards, the rule a discarded file already follows.
+
+Attribution is read from `ChecklistItem.raisedByStage` rather than from which stage's list
+holds the item. In practice a review writes onto its own stage and the two agree; the
+attribution is what *states* it, and reading the location instead would quietly stop
+working if an item ever landed on the gate that reads it.
+
 ### And the base it compared against was moving
 
 `${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it

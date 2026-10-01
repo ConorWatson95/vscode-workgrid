@@ -25,6 +25,11 @@ import {
 } from "../domain/pipelineEngine";
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import {
+  retractedRuleStages,
+  rulesAreAuthoritative,
+  withdrawRetractedItems,
+} from "../domain/retractedRules";
+import {
   offeredCheckIds,
   setItemCoverage,
   tickAnsweredItems,
@@ -181,6 +186,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     register("taskWorkspaces.stopAgent", (arg) => stopAgentCommand(ctx, arg)),
     register("taskWorkspaces.adopt", (arg) => adoptCommand(ctx, arg)),
     register("taskWorkspaces.attachRoute", (arg) => attachRouteCommand(ctx, arg)),
+    register("taskWorkspaces.withdrawRetractedItems", (arg) =>
+      withdrawRetractedItemsCommand(ctx, arg),
+    ),
     register("taskWorkspaces.adoptBranch", () => adoptBranchCommand(ctx)),
     register("taskWorkspaces.removeOrphan", (arg) => removeOrphanCommand(ctx, arg)),
     register("taskWorkspaces.removeAllOrphans", () => removeAllOrphansCommand(ctx)),
@@ -1493,6 +1501,118 @@ async function revertToStageCommand(
   if (next === "Advance Route") {
     await vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
   }
+}
+
+/**
+ * Withdraws the checklist items left behind by a rule the project has retracted.
+ *
+ * Nothing removes a stage from a pipeline, and nothing should — the stage ran, it
+ * cost money, and its report is the account of what it did. But a rule-added
+ * behaviour review does not only occupy a slot: it writes checklist items, and those
+ * gate a human verification that has not happened yet. So retracting a rule from
+ * `harness.json` left every task already in flight holding questions nobody intended
+ * to ask again, at a gate that refuses to pass while any is outstanding, with only
+ * two ways out — tick things nobody exercised, or revert to the review and re-run the
+ * rule's stage, which writes the list again.
+ *
+ * **A command rather than a refresh pass**, which is the decision worth stating. The
+ * three refresh tiers repair stages that have not acted yet; this destroys recorded
+ * output, and a rule can also stop applying because the diff moved. Items vanishing
+ * from a gate mid-route with nobody asking is worse than items an operator disagrees
+ * with, so the operator says when, the count is named in the confirmation, and the
+ * withdrawal is announced afterwards.
+ */
+async function withdrawRetractedItemsCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const row = await resolveTask(ctx, arg);
+  if (!row) return;
+  const task = await rowPipelineTask(ctx, { task: row }, "withdraw retracted items");
+  if (!task) return;
+
+  const repositoryRoot = ctx.resolveRepositoryRoot();
+  if (!repositoryRoot) return;
+  const harness = loadHarness(repositoryRoot, {
+    configuredPath: ctx.configuration.harnessConfigPath(ctx.repositoryUri?.()),
+  });
+
+  // Refused rather than acted on, because an unreadable config answers "which rules
+  // does this project declare?" with silence — which here is indistinguishable from
+  // every rule having been retracted, and would empty the checklist of every task in
+  // the repository over a trailing comma.
+  if (!rulesAreAuthoritative(harness)) {
+    void vscode.window.showWarningMessage(
+      harness.problems[0] ??
+        `No ${HARNESS_CONFIG_RELATIVE_PATH} was found, so nothing can be known to have been retracted.`,
+      { modal: true, detail: "Rules are read from the repository root. Fix the config and try again." },
+    );
+    return;
+  }
+
+  const retracted = retractedRuleStages(task.pipeline, harness.rules);
+  if (retracted.length === 0) {
+    void vscode.window.showInformationMessage(
+      `Every review stage on "${task.name}" comes from a rule the project still declares.`,
+    );
+    return;
+  }
+
+  const result = withdrawRetractedItems(task.pipeline, harness.rules);
+  if (!result) {
+    // Retracted stages exist and every item they raised is ticked. Nothing to do, and
+    // saying so is better than silence: the operator came here because a gate would
+    // not pass, and this says the retracted rule is not the reason.
+    const kept = retracted.reduce((total, stage) => total + stage.kept, 0);
+    void vscode.window.showInformationMessage(
+      `Nothing to withdraw: all ${kept} item(s) from ${describeRetracted(retracted)} are already ticked.`,
+    );
+    return;
+  }
+
+  const count = result.withdrawn.reduce(
+    (total, stage) => total + stage.withdrawable.length,
+    0,
+  );
+  const kept = result.withdrawn.reduce((total, stage) => total + stage.kept, 0);
+  const confirmed = await vscode.window.showWarningMessage(
+    `Withdraw ${count} unchecked item(s) raised by ${describeRetracted(result.withdrawn)}?`,
+    {
+      modal: true,
+      detail:
+        `${describeRetracted(result.withdrawn)} no longer appears in the project's rules, ` +
+        "so the gate is holding questions that will not be asked again." +
+        (kept > 0
+          ? ` ${kept} item(s) somebody has already ticked are kept, along with the stage and its report.`
+          : " The stage and its report are kept."),
+    },
+    "Withdraw Items",
+  );
+  if (confirmed !== "Withdraw Items") return;
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: result.pipeline,
+    updatedAt: new Date().toISOString(),
+  });
+  ctx.tree.refresh();
+  ctx.logger.info(
+    `Harness [${task.name}] withdrew ${count} unchecked checklist item(s) from ` +
+      result.withdrawn
+        .map((stage) => `"${stage.stageName}" (${stage.rule})`)
+        .join(", ") +
+      `; ${kept} ticked item(s) kept.`,
+  );
+  void vscode.window.showInformationMessage(
+    `Withdrew ${count} item(s). ${kept > 0 ? `${kept} ticked item(s) kept.` : "The stage and its report are kept."}`,
+  );
+}
+
+/** Names the retracted stages, so a dialog says what is being acted on. */
+function describeRetracted(
+  stages: readonly { stageName: string }[],
+): string {
+  return stages.map((stage) => `"${stage.stageName}"`).join(" and ");
 }
 
 /**
