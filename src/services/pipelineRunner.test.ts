@@ -3393,6 +3393,56 @@ describe("checks that answer checklist items", () => {
     expect(items[1].checked).toBe(false);
   });
 
+  // Correcting a gate used to run its reply through `parseChecklistReply` and replace
+  // the list, rebuilding every item unchecked -- so a correction cost the stage the
+  // ticks its own checks had just earned. `correctionPrompt` never asks for a
+  // checklist, so those bullets are prose that happens to be bulleted.
+  it("keeps a corrected gate's checklist and its ticks", async () => {
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: [
+          "- The Excel export carries the selected From period [check: export-carries-from]",
+          "- The figures on the summary row are right for this dealer",
+        ].join("\n"),
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        ".taskworkspaces/site-checks-result.json": results(["export-carries-from", true]),
+      },
+    });
+    const subject = checkedTask();
+    await repo.save(subject);
+    await runner.advance(subject);
+
+    const before = (await repo.get(subject.id))!;
+    const fixed = correctStage(before.pipeline!, "verify-locally", {
+      finding: "The CSV cases are missing.",
+      at: "2026-10-01T09:00:00.000Z",
+    });
+    if (!fixed.ok) throw new Error(fixed.error.message);
+    await repo.save({ ...before, pipeline: fixed.value });
+
+    const { runner: second } = makeRunner(
+      fakeSessions({
+        "verify-locally:verify-locally-fix": {
+          text: ["Added them. What I changed:", "- the CSV writer", "- the test list"].join("\n"),
+        },
+        "verify-locally:": { text: "Ran them." },
+      }),
+      { repo, verify: { "run-site-checks": { exitCode: 0 } } },
+    );
+    await second.advance((await repo.get(subject.id))!);
+
+    const items = (await repo.get(subject.id))!.pipeline!.stages[0].checklist!;
+    expect(items.map((i) => i.text)).toEqual([
+      "The Excel export carries the selected From period",
+      "The figures on the summary row are right for this dealer",
+    ]);
+    expect(items[0].checked).toBe(true);
+  });
+
   it("leaves an item whose check failed for the person to look at", async () => {
     const sessions = fakeSessions({
       "verify-locally:": {

@@ -3126,6 +3126,42 @@ Worth separating from the narrowing above, which stands on its own: a gate that 
 own checklist is still the right consumer for the one in front of it on any project that
 keeps such a review, and writing for four environments at once was wrong whoever wrote it.
 
+### Correcting a gate threw away the ticks its own checks had earned
+
+1 Oct 2026, found on the Pyramid export task while deciding how to clear a held gate.
+Correcting `rc-local-verify` was the obvious next move — four of its items were ticked by
+checks the stage itself had written — and it would have silently destroyed all four.
+
+`pipelineRunner` records a checklist on `reply.ok && producesChecklist(stage.kind)`, with
+no regard for *which prompt the session was given*. A correction subtask gets
+`correctionPrompt`, which hands the session its previous report and tells it to change
+what the finding names; the checklist format is never mentioned. Its reply then went
+through `parseChecklistReply` anyway, and `recordChecklist` **replaces** the list,
+rebuilding every item with `checked: false`. Pinned by a test: a correction replying
+*"Added them. What I changed: - the CSV writer - the test list"* leaves the gate asking a
+person to verify the CSV writer, with the two real items and both ticks gone.
+
+**Not the reply-claims-an-outcome disease, and not the heading one either.** The model was
+asked for prose and wrote prose; a parser for a format nobody requested read it anyway.
+Nearest relative is the record destroyed by the mechanism acting on it — `failures` one
+field over — except that here the destroying mechanism is a *parser* running where it was
+never meant to.
+
+Three rules:
+
+- **Skipped, never merged.** Telling a new item from a reworded one means comparing prose,
+  which is the fuzzy match `sendBackTargets` and `namedByFindings` both refuse — and a
+  wrong merge loses a tick exactly as a wrong replace does.
+- **A stage that genuinely needs a different checklist is a re-run.** `revertToStage`
+  re-opens it and clears the items, for the reason re-opening always clears them.
+- **Keyed on the subtask carrying a correction, not on the stage kind.** An amendment is a
+  correction for this purpose and arrives by the same field; a split stage's ordinary
+  units are untouched.
+
+Worth recording as the second case where investigating a held gate found a defect in the
+harness rather than in a stage — `correctionChangedNothing` was the first, and both were
+found by asking what the operator's next click would actually do.
+
 ### And the base it compared against was moving
 
 `${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it

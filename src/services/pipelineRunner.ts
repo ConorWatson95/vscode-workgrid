@@ -2402,7 +2402,22 @@ Note: ${covered.skipped}`
       );
     }
 
-    if (reply.ok && producesChecklist(stage.kind)) {
+    // A correction's reply is not a checklist, because nothing asked it for one.
+    // `correctionPrompt` hands the session its previous report and tells it to change
+    // what the finding names; the checklist format is never mentioned. Parsing its
+    // prose for "- " lines and calling `recordChecklist` **replaces** the stage's list
+    // and rebuilds every item with `checked: false` — so correcting a gate destroyed
+    // the ticks it had already earned, including the ones its own checks had just set,
+    // and replaced real items with whatever the correction happened to bullet. Found
+    // on the Pyramid export task, where correcting the local gate was the obvious next
+    // move and would have silently cost four automatically verified items.
+    //
+    // Skipped rather than merged: telling a new item from a reworded one means
+    // comparing prose, which is the fuzzy match `sendBackTargets` and `namedByFindings`
+    // both refuse — and a wrong merge loses a tick the same way. A stage that genuinely
+    // needs a different checklist is a re-run, which re-opens it and clears the items
+    // for the reason re-opening always does.
+    if (reply.ok && producesChecklist(stage.kind) && !subtask.correction) {
       // The *parser* keeps the full set, deliberately, where the prompt is narrowed to
       // one scope: a tag is read as a scope only when it names one the route declared,
       // so a review that tags beyond what it was asked for still has the tag stripped
