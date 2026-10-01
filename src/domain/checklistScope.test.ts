@@ -5,6 +5,7 @@ import {
   declaredScopes,
   gateFor,
   itemsForGate,
+  scopesForWriter,
   scopingActive,
   splitScopeTag,
   unassignedItems,
@@ -230,6 +231,58 @@ describe("declaredScopes", () => {
 
   it("is empty when nothing opted in", () => {
     expect(declaredScopes(unscopedPipeline([]))).toEqual([]);
+  });
+});
+
+describe("scopesForWriter", () => {
+  it("gives a review only the scope of the gate it was spliced in front of", () => {
+    expect(scopesForWriter(twoGatePipeline([]), "qa")).toEqual(["local"]);
+  });
+
+  it("gives a gate writing its own checklist its own scope", () => {
+    expect(scopesForWriter(twoGatePipeline([]), "site")).toEqual(["dev-site"]);
+  });
+
+  // The gate that will read the items is the first *unresolved* one, which is where
+  // gateFor would route an item tagged with its scope — so a review re-running behind
+  // a gate that has already passed must be told about the gate still to come.
+  it("skips a gate that has already passed", () => {
+    const pipeline = twoGatePipeline([]);
+    pipeline.stages[1].status = "passed";
+    expect(scopesForWriter(pipeline, "qa")).toEqual(["dev-site"]);
+  });
+
+  it("is empty when nothing opted in, so an unscoped route is unchanged", () => {
+    expect(scopesForWriter(unscopedPipeline([]), "qa")).toEqual([]);
+  });
+
+  // Narrowing must never push an item later than tagging would have: with no scope to
+  // offer, a review writes untagged items and gateFor sends those to the last scoped
+  // gate. So the fallback is the full set, never silence.
+  it("falls back to every scope when the next gate declared none", () => {
+    const pipeline = twoGatePipeline([]);
+    delete pipeline.stages[1].checklistScope;
+    expect(scopesForWriter(pipeline, "qa")).toEqual(["dev-site"]);
+    pipeline.stages[2].checklistScope = "dev-site";
+    pipeline.stages.push(
+      stage({ id: "live", kind: "humanVerification", checklistScope: "live-site" }),
+    );
+    pipeline.stages[1].status = "passed";
+    pipeline.stages[2].status = "passed";
+    expect(scopesForWriter(pipeline, "qa")).toEqual(["live-site"]);
+  });
+
+  it("falls back to every scope for a stage the pipeline does not contain", () => {
+    expect(scopesForWriter(twoGatePipeline([]), "nope")).toEqual(["local", "dev-site"]);
+  });
+
+  // Every gate is past, so there is nobody to narrow to and the full set is the only
+  // honest answer — an item still has to land somewhere.
+  it("falls back to every scope when no gate is left to read the items", () => {
+    const pipeline = twoGatePipeline([]);
+    pipeline.stages[1].status = "passed";
+    pipeline.stages[2].status = "passed";
+    expect(scopesForWriter(pipeline, "qa")).toEqual(["local", "dev-site"]);
   });
 });
 

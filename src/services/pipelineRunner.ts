@@ -68,7 +68,7 @@ import {
 } from "../domain/pipelineEngine";
 import { formatSendBackNote, guidanceFor } from "../domain/stageRefresh";
 import { withHumanWait } from "../domain/humanWait";
-import { declaredScopes } from "../domain/checklistScope";
+import { declaredScopes, scopesForWriter } from "../domain/checklistScope";
 import {
   CHANGED_NOTHING_REASON,
   CORRECTION_CHANGED_NOTHING_REASON,
@@ -1984,8 +1984,10 @@ Note: ${covered.skipped}`
               context,
               stage,
               // From the live pipeline, so rule-added gates count and a review is never
-              // told about a gate this task does not have.
-              declaredScopes(task.pipeline!),
+              // told about a gate this task does not have — and narrowed to the gate
+              // that will actually read the items, so a local QA plan does not write a
+              // checklist for environments the change will not reach for days.
+              scopesForWriter(task.pipeline!, stage.id),
               // Likewise: whether asking for check ids is meaningful is a property of
               // the gates this task actually has, not of the route as config declares
               // it — a gate a rule added, or one a revert re-opened, is the thing that
@@ -2401,6 +2403,10 @@ Note: ${covered.skipped}`
     }
 
     if (reply.ok && producesChecklist(stage.kind)) {
+      // The *parser* keeps the full set, deliberately, where the prompt is narrowed to
+      // one scope: a tag is read as a scope only when it names one the route declared,
+      // so a review that tags beyond what it was asked for still has the tag stripped
+      // and the item routed, rather than carrying "[live-site]" into its own wording.
       const scopes = declaredScopes(pipeline);
       const items = parseChecklistReply(reply.text, scopes);
       const untagged = parseUntaggedNotes(reply.text);

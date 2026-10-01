@@ -3059,6 +3059,59 @@ Narrow by measurement rather than by hope: on the stalest worktree in that repos
 **one of eight** `${repoRoot}`-named scripts is absent. A branch that has the tooling —
 nearly all of them — says nothing at all.
 
+### A local QA plan that wrote tests for the live sites
+
+`scopesForWriter`, 1 Oct 2026. `checklistScope` fixed *routing* — which gate answers for
+an item — and nothing ever narrowed the *authoring*. `behaviourReviewPrompt` was handed
+`declaredScopes`, every scope the route declares, so the runtime QA stage spliced in
+front of the **local** gate was asked to tag items `[local]`, `[dev-site]`, `[uat-site]`
+or `[live-site]`, and duly wrote for all four.
+
+Measured on the Pyramid export task: 16 items, of which 3 were for a DEV sign-off two
+stages away, 1 for a UAT acceptance behind two promotions, and 1 for a live verification
+behind two more. Five items written about environments the change would not reach for
+days, by a session that could not see any of them.
+
+**It contradicts a rule this file already states.** The checklist review is spliced
+*immediately before the gate that will read it* — the correction made when a QA stage
+raised before anything reached DEV produced items nobody could yet test. That argument is
+exactly as true two gates further on, and the splice honoured it while the prompt did not.
+The duplication is the tell: `producesChecklist` counts `humanVerification`, so the DEV
+sign-off, the UAT acceptance and all three live gates each write their own checklist when
+they run. Everything the QA plan wrote for them is work done twice, the earlier copy from
+a guess.
+
+Narrowed to the first **unresolved** gate at or after the writing stage — which is exactly
+where `gateFor` routes an item carrying that gate's scope, so the prompt now asks for what
+the router was always going to do. A stage that is itself a gate therefore gets its own
+scope, and a review gets the gate it was spliced in front of.
+
+Four rules:
+
+- **The fallback is the full set, never silence.** A review told no scopes writes untagged
+  items, and `gateFor` sends those to the *last* scoped gate — a live sign-off. So
+  narrowing must never be able to push an item **later** than tagging would have, which it
+  would if "no scope to offer" meant "omit the instruction". Both fallbacks — a next gate
+  that declared no scope, and no unresolved gate left at all — return every declared scope.
+- **Unresolved, not merely next.** A review re-running behind a gate that has already
+  passed belongs to the gate still to come, which is the preference `gateFor` already
+  encodes.
+- **The parser keeps the full set.** Only the *prompt* is narrowed. `parseChecklistReply`
+  strips a tag only when it names a declared scope, so a review that tags beyond what it
+  was asked for still has the tag read and the item routed — rather than carrying
+  `[live-site]` into its own wording, which is the one outcome worse than the item being
+  written at all.
+- **Absence means unchanged.** A route declaring no scopes gets `[]` exactly as before.
+
+Not fixed, and the second half of the same measurement: even narrowed, the QA plan and the
+gate it serves both write a local checklist, so that gate was asked **9 outstanding items**
+where its own review had produced 6 — four of which its own checks ticked in the same
+advance. A gate whose list has already been written by the review spliced in front of it is
+writing a second one, and the operator joins them by reading. Worth a measurement before a
+mechanism: the gate is the session that can see the running thing, so its items may be the
+better ones, and the right fix may be to splice no review in front of a gate that writes
+its own.
+
 ### And the base it compared against was moving
 
 `${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it

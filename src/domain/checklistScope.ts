@@ -82,6 +82,48 @@ export function declaredScopes(pipeline: TaskPipeline): string[] {
 }
 
 /**
+ * The scopes a checklist-writing stage may tag items with.
+ *
+ * `declaredScopes` answers a different question — every scope the route declares — and
+ * using it here was the defect. A behaviour review is spliced *immediately before the
+ * gate that will read it*, which is the rule that stopped a runtime QA stage being
+ * raised before anything reached DEV; but it was then told about every gate on the
+ * route and asked to tag for all of them. So the local QA plan on a 23-stage route
+ * wrote items for UAT and for the live sites, environments the change would not reach
+ * for days, and the gates that own those scopes go on to write their own items for
+ * them anyway, because `producesChecklist` counts `humanVerification`.
+ *
+ * Measured on the Pyramid export task: 16 items, of which 5 were for gates three
+ * promotions away. The cost is not the five lines — it is that an item written before
+ * the change exists anywhere is written from a guess, and it arrives at a gate weeks
+ * later indistinguishable from one written by the stage that could see the thing.
+ *
+ * The gate that will read it is the first **unresolved** gate at or after this stage,
+ * which is exactly where `gateFor` would route an item tagged with its scope. A stage
+ * that is itself a gate therefore gets its own scope, and a review gets the scope of
+ * the gate it was spliced in front of.
+ *
+ * Two fallbacks, both returning the full set rather than nothing, because a review
+ * told no scopes writes untagged items and `gateFor` sends those to the *last* scoped
+ * gate — a live sign-off. Narrowing must never be able to push an item later than
+ * tagging would have: a route with no scopes at all is unchanged, and so is one whose
+ * next gate declared none while others did.
+ */
+export function scopesForWriter(pipeline: TaskPipeline, stageId: string): string[] {
+  const all = declaredScopes(pipeline);
+  if (all.length === 0) return [];
+
+  const index = pipeline.stages.findIndex((stage) => stage.id === stageId);
+  if (index < 0) return all;
+
+  const reader = pipeline.stages
+    .slice(index)
+    .find((stage) => stage.kind === "humanVerification" && !isResolved(stage));
+  const scope = reader ? normalise(reader.checklistScope) : undefined;
+  return scope ? [scope] : all;
+}
+
+/**
  * The gate that answers for a given scope.
  *
  * Prefers an unresolved gate: on a route that verifies the same scope twice — a DEV
