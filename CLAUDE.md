@@ -3103,14 +3103,28 @@ Four rules:
   written at all.
 - **Absence means unchanged.** A route declaring no scopes gets `[]` exactly as before.
 
-Not fixed, and the second half of the same measurement: even narrowed, the QA plan and the
-gate it serves both write a local checklist, so that gate was asked **9 outstanding items**
-where its own review had produced 6 — four of which its own checks ticked in the same
-advance. A gate whose list has already been written by the review spliced in front of it is
-writing a second one, and the operator joins them by reading. Worth a measurement before a
-mechanism: the gate is the session that can see the running thing, so its items may be the
-better ones, and the right fix may be to splice no review in front of a gate that writes
-its own.
+**And the second half turned out to need no mechanism at all.** Even narrowed, the QA plan
+and the gate it serves both write a local checklist, so that gate was asked **9 outstanding
+items** where its own review had produced 6 — four of which its own checks ticked in the
+same advance. Measured across the 21 cases where the consuming gate had actually run a
+session: **13 times both wrote a list**, 3 times only the gate, 3 times only the QA plan,
+twice neither. And the gate's items are the ones that get answered — **215 of 267 ticked
+(81%)** against **83 of 151 (55%)** for the QA plan, which writes before the change can be
+seen and so produces more items nothing can check.
+
+The rule's own `reason` said the project had *"no automated UI or report tests, so a human
+exercising the change at runtime is the only thing standing between a defect and a
+manufacturer seeing wrong figures"* — a premise `tools/e2e/Invoke-SiteChecks.ps1` removed,
+since a gate declaring `checkResults` now writes checks that tick its own items in the same
+advance. So the project dropped the rule (`qubeautoapp` 0be975010) and the harness gained
+nothing: a config change again retired waste no runtime change would have, which is the
+`ec-uat-promote` result a second time. The accepted risk is the 3-in-21 where only the QA
+plan wrote, and it is unprovable either way — those gates may have stayed silent *because*
+a list already existed.
+
+Worth separating from the narrowing above, which stands on its own: a gate that writes its
+own checklist is still the right consumer for the one in front of it on any project that
+keeps such a review, and writing for four environments at once was wrong whoever wrote it.
 
 ### And the base it compared against was moving
 
