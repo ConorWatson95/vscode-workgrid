@@ -3211,19 +3211,59 @@ Five narrowings, each load-bearing:
   `passed`, and a gate is already awaiting approval — so what it adds is not a stop but
   the **reason**, which is the half that was missing. `certifyStage` already refuses a
   held stage, and `approveStage` does not, so the operator can still pass it.
-- **Never on a repair round.** A correction skips `parseChecklistReply` — the rule
-  shipped four days earlier so a correction could not destroy the ticks its own checks
-  had earned — so a correction *cannot* attach a `[check: <id>]` tag however well it
-  writes one. Holding it for not having attached one would leave the stage with no
-  admissible repair at all, which is the hole `stagedEnvironmentPaths` keeps its escape
-  hatch open to avoid. The hold's message says so outright: the repair for this is a
-  **re-run**, not a correction.
+- **Never on a repair round.** A correction is handed one finding and told to make the
+  smallest change that answers it, so holding it against the whole checklist judges it
+  by a brief it was not given — and `correctionChangedNothing` already covers one that
+  did nothing.
 
 The general lesson is the one the activation of `planFile` already states from the
 other side, and this is the fourth cause rather than the first: the prose here does not
 restate a declaration that exists, it asks for a behaviour the language could not
 express at all. Extending it was the right move precisely because rewriting the intent
 had already been tried, measured, and failed.
+
+**And the hold's first firing named a remedy that did not work** — `correctionCoverage`,
+the same day. The gate was re-run against the corrected intent a second time and the
+hold fired exactly as designed: `blocked` set, the reason on the stage, four of eight
+items tagged. What the re-run produced was *better* — this time it gave a reason per
+untagged item rather than "not tried" — and two of the four reasons were false. It
+declined a dropdown-race item because *"the suite sets dropdowns by script and cannot
+reproduce the timing"* and a splash item because it *"did not run a flow-family check"*,
+having opened **no files at all**: `pathsRead []`, two commands, both of them running the
+existing suite. `tools/e2e/AGENTS.md` is in the worktree and documents `waitFor` with
+`state: hidden` and `expectHidden`, which answer the second item exactly. The intent
+names that file and says to read it before concluding an item is inexpressible.
+
+So the expensive remedy had now been tried twice and reached the same place, which is
+`correctStage`'s founding argument arriving at a stage it could not help: **a correction
+could author a check, run it, and had no way on earth to say which item it answered.**
+That was a hole made deliberately four days earlier — a correction's reply is not run
+through `parseChecklistReply`, because `recordChecklist` *replaces* the list and would
+destroy the ticks the gate's own checks had just earned. The rule is right and it took
+the whole of check coverage with it.
+
+`coverageFromCorrection` closes it without touching that rule, because `setItemCoverage`
+is a different act: it adds a field to an existing item, replaces nothing, and **never
+ticks** — whether the item is now answered stays `tickAnsweredItems`' question, decided
+from the run. Four guards, each load-bearing:
+
+- **The check must have run**, matched against `checkOutcomes`, which by that point hold
+  *this* advance's run — `runVerification` executes before the reply is parsed. So "a
+  check written and never run is a guess with an id on it" stops being a sentence in an
+  intent and becomes a thing the parser enforces.
+- **The item is matched exactly**, folded only for whitespace and case because the
+  session is retyping a line from its own previous report. Never further: fuzzy matching
+  is what `sendBackTargets` and `namedByFindings` both refuse, and a claim attached to
+  the wrong item is a false statement about what was verified.
+- **An item that already names a check is left alone.** Re-attributing one is the
+  operator's command, since the existing id may be what a tick was granted on.
+- **Ignored claims are announced.** A tag that answered nothing looks exactly like a
+  correction that wrote no check, and the operator would go looking for the wrong thing.
+
+The prompt half is narrowed to a stage that declares `checkManifest` — asking every
+correction for a marker nothing can act on is the failure `autoRepair` already names —
+and it states both guards rather than leaving them to be discovered, since a session
+told neither produces claims the parser silently drops.
 
 ### A retracted rule went on asking its questions
 

@@ -39,9 +39,9 @@ export const CHECK_AUTHORING_REASON =
   "attached, and the manifest is byte-for-byte what it was before the session -- so " +
   "nothing was authored. Either a check can express each item, or a real failure " +
   "message says why it cannot; neither was produced.\n\n" +
-  "Re-run this stage rather than correcting it: a correction skips the checklist " +
-  "parse, so it cannot attach a [check: <id>] tag to an item however well it writes " +
-  "one. Approve it instead if the gaps are genuinely inexpressible.";
+  "Correct this stage rather than re-running it: a correction keeps everything it " +
+  "produced, and may attach a check it writes and runs to the item that check " +
+  "answers. Approve it instead if the gaps are genuinely inexpressible.";
 
 /**
  * The reason to hold a settled check-writing gate, or `undefined` to leave it alone.
@@ -63,10 +63,12 @@ export const CHECK_AUTHORING_REASON =
  * - **Held, never failed.** "No check can express this" is a legitimate outcome, and
  *   the operator can see the items and the suite. Holding costs a click; failing costs
  *   a stage whose only remedy discards it.
- * - **Never on a repair round.** A correction skips `parseChecklistReply`, so it
- *   *cannot* attach a tag -- holding one for not having attached one would leave the
- *   stage with no admissible repair at all, which is the hole `stagedEnvironmentPaths`
- *   keeps its escape hatch open to avoid. The caller supplies that fact.
+ * - **Never on a repair round.** A correction is handed one finding and told to make
+ *   the smallest change that answers it, so holding it against the whole checklist
+ *   would be judging it by a brief it was not given -- and `correctionChangedNothing`
+ *   already covers a correction that did nothing. A correction *may* now attach a
+ *   check it wrote (`coverageFromCorrection`), which is what makes the repair for this
+ *   hold the cheap one. The caller supplies the fact that this is a repair round.
  */
 export function checkAuthoringSkipped(
   pipeline: TaskPipeline,

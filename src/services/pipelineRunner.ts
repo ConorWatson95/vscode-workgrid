@@ -24,9 +24,11 @@ import {
   parseCheckRun,
   ranSince,
   recordCheckOutcomes,
+  setItemCoverage,
   tickAnsweredItems,
 } from "../domain/checkCoverage";
 import { checkAuthoringSkipped } from "../domain/checkAuthoring";
+import { coverageFromCorrection } from "../domain/correctionCoverage";
 import {
   resolveAmendmentModel,
   resolveStageModel,
@@ -2451,6 +2453,37 @@ Note: ${covered.skipped}`
     // both refuse — and a wrong merge loses a tick the same way. A stage that genuinely
     // needs a different checklist is a re-run, which re-opens it and clears the items
     // for the reason re-opening always does.
+    // What a correction *may* say about the checklist: which item a check it just
+    // wrote and ran answers. Attached with `setItemCoverage`, which adds a field to an
+    // existing item and never ticks -- so none of what the paragraph above protects is
+    // reachable from here. Without it the cheap repair cannot close a coverage gap at
+    // all, and the only remedy for an untagged item is a cold re-run of a stage whose
+    // output is otherwise right.
+    if (reply.ok && producesChecklist(stage.kind) && subtask.correction) {
+      const { claims, ignored } = coverageFromCorrection(pipeline, stage.id, reply.text);
+      for (const claim of claims) {
+        pipeline = setItemCoverage(pipeline, claim.itemId, claim.coveredBy);
+      }
+      if (claims.length > 0) {
+        steps.push(
+          `"${stage.name}": ${claims.length} checklist item(s) now answered by a check ` +
+            "the correction wrote.",
+        );
+      }
+      // Announced, because a claim silently ignored looks exactly like a correction
+      // that wrote no check, and the operator would go looking for the wrong thing.
+      for (const entry of ignored) {
+        this.logger.warn(
+          `Harness [${task.name}] ${stage.name}: ignored a check tag (${entry.why}): ` +
+            entry.line,
+        );
+      }
+      if (ignored.length > 0) {
+        steps.push(
+          `"${stage.name}": ${ignored.length} check tag(s) answered nothing — see the log.`,
+        );
+      }
+    }
     if (reply.ok && producesChecklist(stage.kind) && !subtask.correction) {
       // The *parser* keeps the full set, deliberately, where the prompt is narrowed to
       // one scope: a tag is read as a scope only when it names one the route declared,

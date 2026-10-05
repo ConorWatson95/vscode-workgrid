@@ -3437,6 +3437,59 @@ describe("checks that answer checklist items", () => {
     expect((await repo.get(subject.id))!.pipeline!.stages[0].blocked).toBeUndefined();
   });
 
+  it("lets a correction attach a check it wrote, and ticks the item", async () => {
+    // The repair this makes possible. The gate left an item untagged; correcting it is
+    // the cheap move, and until now a correction could author the check and had no way
+    // on earth to say which item it answered -- so a cold re-run was the only remedy
+    // for a stage whose output was otherwise right.
+    const sessions = fakeSessions({
+      "verify-locally:": { text: "- The figures are right for this dealer" },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: { "tools/e2e/checks.json": '{"checks":[]}' },
+    });
+    const subject = authoringTask();
+    await repo.save(subject);
+    await runner.advance(subject);
+
+    const before = (await repo.get(subject.id))!;
+    expect(before.pipeline!.stages[0].checklist![0].coveredBy).toBeUndefined();
+
+    const fixed = correctStage(before.pipeline!, "verify-locally", {
+      finding: "Write a check for the outstanding item.",
+      at: "2026-10-05T09:00:00.000Z",
+    });
+    if (!fixed.ok) throw new Error(fixed.error.message);
+    await repo.save({ ...before, pipeline: fixed.value });
+
+    const { runner: second } = makeRunner(
+      fakeSessions({
+        "verify-locally:": {
+          text: [
+            "Wrote and ran it.",
+            "- The figures are right for this dealer [check: figures]",
+          ].join("\n"),
+        },
+      }),
+      {
+        repo,
+        verify: { "run-site-checks": { exitCode: 0 } },
+        files: {
+          "tools/e2e/checks.json": '{"checks":[{"id":"figures"}]}',
+          ".taskworkspaces/site-checks-result.json": results(["figures", true]),
+        },
+      },
+    );
+    await second.advance((await repo.get(subject.id))!);
+
+    const item = (await repo.get(subject.id))!.pipeline!.stages[0].checklist![0];
+    expect(item.coveredBy).toBe("figures");
+    // Attaching does not tick; the run does. Both happen in this advance, which is the
+    // whole point -- the operator is asked for nothing.
+    expect(item).toMatchObject({ checked: true, checkedBy: "check" });
+  });
+
   it("never holds a correction, which cannot attach a check tag at all", async () => {
     // `parseChecklistReply` is skipped on a correction, so a correction has no way to
     // tag an item however well it writes a check. Holding one for not having tagged

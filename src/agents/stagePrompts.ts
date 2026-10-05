@@ -1195,7 +1195,46 @@ export function correctionPrompt(
     "Report what you changed and why, in a few lines. If the finding was wrong — the",
     "code already does what it says is missing — say that instead of changing",
     "something to satisfy it.",
+    // Only where the stage has a manifest to write into. A correction of any other
+    // stage has no checklist to answer and no check to answer it with, and asking for
+    // a marker nothing can act on is the failure `autoRepair` already names.
+    ...(stage.checkManifest ? correctionCoverageRule() : []),
   ].join("\n");
+}
+
+/**
+ * How a correction says which checklist item a check it just wrote answers.
+ *
+ * The one thing a correction may say about the checklist. Its reply is deliberately not
+ * read as a checklist — that would replace the list and destroy the ticks the gate's
+ * own checks had earned — so without this a correction could author a check, run it,
+ * and have no way to attach it, leaving a cold re-run as the only remedy for an
+ * untagged item.
+ *
+ * It states the two guards rather than leaving them to be discovered: the check must
+ * have *run* in this session, and the item text must be copied exactly. Both are
+ * enforced in `coverageFromCorrection`, and a session told neither would produce claims
+ * the parser silently drops.
+ */
+function correctionCoverageRule(): string[] {
+  return [
+    "",
+    "### If you wrote a check for a checklist item",
+    "",
+    "Do not restate the checklist — it is kept exactly as it is, and anything you",
+    "bullet here is read as prose. The one exception is attaching a check you wrote to",
+    "the item it answers. For each, write one line:",
+    "",
+    "    <the item's text, copied exactly from the report above> [check: <check id>]",
+    "",
+    "Two things make the line count, and neither is negotiable. The check must have",
+    "**run** in this session — an id no run recorded attaches to nothing, because a",
+    "check written and never executed is a guess with an id on it. And the item text",
+    "must match the existing item exactly; it is matched as a string, not interpreted,",
+    "so a paraphrase answers nothing and is reported as having answered nothing.",
+    "",
+    "Attaching does not tick the item. Whether the check passed is read from the run.",
+  ];
 }
 
 export const ASSESSED_MARKER = "ASSESSED:";
