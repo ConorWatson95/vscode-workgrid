@@ -430,6 +430,28 @@ export interface RouteStageDefinition {
   checkResults?: string;
 
   /**
+   * Where this task's checks are **declared**, relative to the worktree.
+   *
+   * The input to `checkResults`' output, and the reason it is a separate field: a
+   * results file says what ran, and nothing in the runtime could say whether a gate
+   * asked to express its checklist as checks had *tried*. A gate that settled leaving
+   * items with no check attached was indistinguishable from one that had looked and
+   * found nothing expressible -- and the intent asking for the attempt is prose the
+   * parser does not read, which is the disease this codebase keeps closing.
+   *
+   * Sampled either side of each session, the pattern `humanWaitMs` and the worktree
+   * list already use. Unchanged across a session that left coverage gaps means the
+   * stage authored nothing, and the stage is **held** -- see
+   * `domain/checkAuthoring.ts` for the narrowings that keep that from firing on a gate
+   * whose gaps are honest.
+   *
+   * Only meaningful alongside `verify`, and rejected at load without one, for
+   * `checkResults`' reason: a manifest nothing ever runs is dead config, and config
+   * that silently does nothing is indistinguishable from the feature being absent.
+   */
+  checkManifest?: string;
+
+  /**
    * Where a failure of this stage's `verify` is routed.
    *
    * Absent means what every failed check did before this existed: the stage fails and

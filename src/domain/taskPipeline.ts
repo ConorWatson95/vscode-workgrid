@@ -624,6 +624,11 @@ export interface TaskStage {
    */
   checkResults?: string;
   /**
+   * Where this task's checks are declared, relative to the worktree. Snapshotted and
+   * refreshed with `checkResults` -- see `RouteStageDefinition.checkManifest`.
+   */
+  checkManifest?: string;
+  /**
    * The check that actually ran, and what it returned.
    *
    * Separate from `verify` because a declaration is not evidence: a runner built

@@ -270,6 +270,7 @@ function createStage(
     // refresh pass backfilled it -- a check that silently does not fire, which is
     // indistinguishable from the feature being absent.
     ...(definition.checkResults ? { checkResults: definition.checkResults } : {}),
+    ...(definition.checkManifest ? { checkManifest: definition.checkManifest } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
     ...(definition.planOutput ? { planOutput: definition.planOutput } : {}),
     ...(definition.checklistScope

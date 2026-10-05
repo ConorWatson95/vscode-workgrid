@@ -26,6 +26,7 @@ import {
   recordCheckOutcomes,
   tickAnsweredItems,
 } from "../domain/checkCoverage";
+import { checkAuthoringSkipped } from "../domain/checkAuthoring";
 import {
   resolveAmendmentModel,
   resolveStageModel,
@@ -774,6 +775,34 @@ export class PipelineRunner {
    * it went in. A tick asserts that something was verified, so it is made only on
    * positive evidence.
    */
+  /**
+   * The text of the file a stage's `checkManifest` names, or `undefined`.
+   *
+   * Undefined means unmeasured throughout -- no declaration, no reader, no file, or a
+   * read that threw. `checkAuthoringSkipped` requires two readings that both exist, so
+   * every one of those leaves the stage exactly as it was.
+   */
+  private async readCheckManifest(
+    task: TaskWorkspace,
+    stage: TaskStage,
+  ): Promise<string | undefined> {
+    if (!stage.checkManifest || !this.readWorktreeFile) return undefined;
+    const { command: path } = substitutePlaceholders(stage.checkManifest, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      baseCommit: task.baseCommit,
+      worktreePath: task.worktreePath,
+      repoRoot: task.repositoryRoot,
+      ticket: taskTicket(task),
+    });
+    try {
+      return await this.readWorktreeFile(task.worktreePath, path);
+    } catch {
+      return undefined;
+    }
+  }
+
   private async applyCheckOutcomes(
     task: TaskWorkspace,
     stage: TaskStage,
@@ -2018,6 +2047,11 @@ Note: ${covered.skipped}`
     // cumulative total, and there is nothing else that can attribute a wait to the
     // subtask it held up.
     const waitBefore = this.humanWaitMs?.(taskId) ?? 0;
+    // Read for the same reason and at the same moment: whether this gate authored a
+    // check is the difference between two readings of one file, and there is nothing
+    // else that can attribute an edit to the session that made it. `pathsWritten`
+    // cannot -- it is blind to a shell, and these gates use one.
+    const manifestBefore = await this.readCheckManifest(task, stage);
     let reply;
     try {
       reply = await this.sessions.run(task, prompt, `${stage.id}:${subtask.id}`, {
@@ -2984,6 +3018,38 @@ Note: ${covered.skipped}`
           this.logger.warn(
             `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
               "no files. Holding rather than passing: read what it did before approving.",
+          );
+        }
+      }
+    }
+
+    // The same shape one artefact along: a gate whose intent asks it to express its
+    // checklist as checks, settling with items untagged and the manifest untouched.
+    // Read after `tickAnsweredItems` below would be too late -- but the gaps this asks
+    // about are items naming no check at all, which no tick can remove.
+    if (reply.ok && !subtask.correction) {
+      const settled = pipeline.stages.find((s) => s.id === stage.id);
+      if (
+        settled &&
+        !settled.subtasks.some((s) => s.status === "pending" || s.status === "active")
+      ) {
+        const reason = checkAuthoringSkipped(pipeline, stage.id, {
+          before: manifestBefore,
+          after: await this.readCheckManifest(task, stage),
+        });
+        if (reason) {
+          pipeline = recordStageBlocked(pipeline, stage.id, reason);
+          // `holdStageForFindings` as well, though on a gate it is a no-op -- it moves
+          // a stage that settled `passed`, and a gate is already awaiting approval.
+          // Kept because the declaration is keyed on the manifest rather than the
+          // kind, and a route may put one on a stage that does settle.
+          const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+          if (held.ok) pipeline = held.value;
+          steps.push(`"${stage.name}" wrote no checks — held for you.`);
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name} left checklist items with no check ` +
+              "and did not touch its check manifest. Holding rather than passing: " +
+              "re-run the stage, or approve it if the gaps are real.",
           );
         }
       }

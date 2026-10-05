@@ -408,6 +408,17 @@ function parseStage(
     return undefined;
   }
 
+  // And again for the manifest, from the other end: a file of checks that no command
+  // ever runs is dead config, and the hold it exists to license would then fire on a
+  // gate whose checks could never have been executed anyway.
+  if (str(raw.checkManifest) && !str(raw.verify)) {
+    problems.push(
+      `Route "${routeId}" stage "${id}": "checkManifest" needs a "verify" command to ` +
+        "run what it declares. Declare the check, or remove the manifest path.",
+    );
+    return undefined;
+  }
+
   return {
     id,
     label,
@@ -428,6 +439,7 @@ function parseStage(
     ...(raw.mayChangeBranch === true ? { mayChangeBranch: true } : {}),
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(str(raw.checkResults) ? { checkResults: str(raw.checkResults) } : {}),
+    ...(str(raw.checkManifest) ? { checkManifest: str(raw.checkManifest) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(str(raw.planOutput) ? { planOutput: str(raw.planOutput) } : {}),
     ...(onFailure ? { onFailure } : {}),

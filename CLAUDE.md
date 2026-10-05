@@ -3162,6 +3162,69 @@ Worth recording as the second case where investigating a held gate found a defec
 harness rather than in a stage — `correctionChangedNothing` was the first, and both were
 found by asking what the operator's next click would actually do.
 
+### The intent asked for a check and nothing read whether it wrote one
+
+`domain/checkAuthoring.ts` + `RouteStageDefinition.checkManifest`, 5 Oct 2026.
+`checkCoverage` states the rule this refines: *a gap is counted and named, never
+blocking*, because holding on gaps alone would hold every gate of every route and that
+is how a signal gets switched off. The rule is right and it left a hole, because a gate
+can be *asked* to close its own gaps.
+
+On the Pyramid export task `rc-local-verify` left three of seven items for a person.
+The project's answer was a config change — the gate's intent was rewritten across nine
+stages to say that a check is one of two families, that the page is seen by **running**
+rather than by reading, and that a check written and never run is a guess with an id on
+it. The re-run received every word of it, and the state file says what it did with
+them: `toolCounts {Skill 1, Bash 1, PowerShell 1}`, `pathsWritten []`, the four checks
+that already existed run twice, `"I changed no files."`, and against the third item the
+reason *"not tried. No check was written for it, and it is a gap, not a tooling
+limit."*
+
+So the intent asked for an attempt and the parser read nothing about whether one
+happened — the disease this codebase keeps closing, one level up from a marker. The
+remedy had been applied at the only layer available and the layer was the wrong one.
+
+**`pathsWritten` cannot carry it, and that is why the field is new.**
+`wroteOutsideTheWriteTools` treats a session that used Bash or PowerShell as
+**unmeasured, not zero**, which is correct — and that gate used both, so the honest
+measure would abstain exactly where it is needed. The artefact the stage owes is the
+**manifest**, so the manifest is what is sampled, either side of the session: the
+pattern `humanWaitMs` and the worktree list already use, one file along.
+`checkManifest` is the input to `checkResults`' output, declared beside it and rejected
+at load without a `verify`, for `checkResults`' reason.
+
+Five narrowings, each load-bearing:
+
+- **Declared, never inferred from the kind.** Which gates are expected to author checks
+  is a property only the project knows — a UAT acceptance on a deployed site may have
+  nothing a local suite can reach. Absence means unchanged.
+- **Unchecked gaps only.** A ticked item was answered by a person, and holding because
+  the operator had already done the work by hand would be perverse.
+- **Both readings must exist, and differ.** A manifest absent *before and after* reads
+  exactly like a path nobody typed correctly, and that misconfiguration would hold
+  every gate of every route — the precise failure the rule above warns of. Absence of
+  measurement is not permission to act. A manifest that appeared during the session is
+  an attempt whatever else is true of it.
+- **Held, never failed.** "No check can express this" is a legitimate outcome and the
+  operator can see both the items and the suite. On a gate the hold is
+  `recordStageBlocked` alone — `holdStageForFindings` moves a stage that settled
+  `passed`, and a gate is already awaiting approval — so what it adds is not a stop but
+  the **reason**, which is the half that was missing. `certifyStage` already refuses a
+  held stage, and `approveStage` does not, so the operator can still pass it.
+- **Never on a repair round.** A correction skips `parseChecklistReply` — the rule
+  shipped four days earlier so a correction could not destroy the ticks its own checks
+  had earned — so a correction *cannot* attach a `[check: <id>]` tag however well it
+  writes one. Holding it for not having attached one would leave the stage with no
+  admissible repair at all, which is the hole `stagedEnvironmentPaths` keeps its escape
+  hatch open to avoid. The hold's message says so outright: the repair for this is a
+  **re-run**, not a correction.
+
+The general lesson is the one the activation of `planFile` already states from the
+other side, and this is the fourth cause rather than the first: the prose here does not
+restate a declaration that exists, it asks for a behaviour the language could not
+express at all. Extending it was the right move precisely because rewriting the intent
+had already been tried, measured, and failed.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

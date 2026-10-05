@@ -56,6 +56,7 @@ const REFRESHABLE = [
   "model",
   "verify",
   "checkResults",
+  "checkManifest",
   "planFile",
   "planOutput",
   "requiresPullRequest",
@@ -245,6 +246,9 @@ const CHECK_DECLARATIONS = [
   // records what it found. A stage judged by a check whose results land nowhere the
   // harness reads is a stage whose checklist can never be ticked by it.
   "checkResults",
+  // Beside it for the same reason, and because the pair is one declaration: where the
+  // checks are written and where their results land.
+  "checkManifest",
   "planFile",
   "planOutput",
   "requiresPullRequest",
@@ -1111,6 +1115,7 @@ function findDefinition(
       handoff?: boolean;
       verify?: string;
       checkResults?: string;
+      checkManifest?: string;
       planFile?: string;
       planOutput?: string;
       requiresPullRequest?: boolean;

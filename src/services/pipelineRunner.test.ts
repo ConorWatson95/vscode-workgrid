@@ -3358,6 +3358,126 @@ describe("checks that answer checklist items", () => {
 
   const checkedTask = () => ({ ...task(), pipeline: createPipeline(CHECKED) });
 
+  /** The same gate, plus the manifest its checks are declared in. */
+  const AUTHORING: RouteDefinition = {
+    ...CHECKED,
+    id: "authoring",
+    stages: [{ ...CHECKED.stages[0], checkManifest: "tools/e2e/checks.json" }],
+  };
+
+  const authoringTask = () => ({ ...task(), pipeline: createPipeline(AUTHORING) });
+
+  it("holds a check-writing gate that left items untagged and wrote no checks", async () => {
+    // The measured failure. A gate whose intent asks it to express each item as a
+    // check ran the checks that already existed, wrote "I changed no files", and
+    // settled with three items for a person -- and nothing read whether it had tried.
+    const sessions = fakeSessions({
+      "verify-locally:": {
+        text: "- The figures are right for this dealer",
+      },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: { "tools/e2e/checks.json": '{"checks":[]}' },
+    });
+    const subject = authoringTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))!.pipeline!.stages[0];
+    expect(stage.blocked).toMatch(/no check attached/i);
+    // Held, not failed: "nothing here is expressible" is a legitimate answer, and the
+    // operator can approve it -- `approveStage` does not refuse a held gate. The status
+    // is unchanged because a gate was already stopping; what was missing is the reason.
+    expect(stage.status).toBe("awaiting-approval");
+    expect(stage.subtasks[0].status).toBe("done");
+  });
+
+  it("leaves it alone when the session wrote a check", async () => {
+    const files: Record<string, string> = { "tools/e2e/checks.json": '{"checks":[]}' };
+    const sessions = fakeSessions({
+      "verify-locally:": { text: "- The figures are right for this dealer" },
+    });
+    const inner = sessions.run.bind(sessions);
+    sessions.run = async (...args: Parameters<typeof inner>) => {
+      files["tools/e2e/checks.json"] = '{"checks":[{"id":"summary-row"}]}';
+      return inner(...args);
+    };
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files,
+    });
+    const subject = authoringTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    // Still a gap -- the item names no check -- and that is counted and named, never
+    // blocking. What this gate did was try, and trying is all the hold asks for.
+    expect((await repo.get(subject.id))!.pipeline!.stages[0].blocked).toBeUndefined();
+  });
+
+  it("says nothing when the manifest is absent both ways", async () => {
+    // A path nobody typed correctly reads exactly like one the stage should have
+    // created. Holding on it would hold every gate of every route, which is how a
+    // signal like this gets switched off.
+    const sessions = fakeSessions({
+      "verify-locally:": { text: "- The figures are right for this dealer" },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {},
+    });
+    const subject = authoringTask();
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    expect((await repo.get(subject.id))!.pipeline!.stages[0].blocked).toBeUndefined();
+  });
+
+  it("never holds a correction, which cannot attach a check tag at all", async () => {
+    // `parseChecklistReply` is skipped on a correction, so a correction has no way to
+    // tag an item however well it writes a check. Holding one for not having tagged
+    // would leave the stage with no admissible repair.
+    const sessions = fakeSessions({
+      "verify-locally:": { text: "- The figures are right for this dealer" },
+    });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: { "tools/e2e/checks.json": '{"checks":[{"id":"a"}]}' },
+    });
+    const subject = authoringTask();
+    await repo.save(subject);
+    await runner.advance(subject);
+
+    const before = (await repo.get(subject.id))!;
+    const fixed = correctStage(before.pipeline!, "verify-locally", {
+      finding: "The wording is wrong.",
+      at: "2026-10-05T09:00:00.000Z",
+    });
+    if (!fixed.ok) throw new Error(fixed.error.message);
+    await repo.save({ ...before, pipeline: fixed.value });
+
+    const { runner: second } = makeRunner(
+      fakeSessions({ "verify-locally:": { text: "Reworded it." } }),
+      {
+        repo,
+        verify: { "run-site-checks": { exitCode: 0 } },
+        files: { "tools/e2e/checks.json": '{"checks":[{"id":"a"}]}' },
+      },
+    );
+    await second.advance((await repo.get(subject.id))!);
+
+    // `correctionChangedNothing` holds it, which is a different mechanism and the
+    // right one -- what must not appear is a demand for a tag the correction had no
+    // way to write.
+    expect((await repo.get(subject.id))!.pipeline!.stages[0].blocked).not.toMatch(
+      /no check attached/i,
+    );
+  });
+
   it("ticks an item the same session wrote, naming a check the same session added", async () => {
     // The point of the whole change. The stage writes the check, the check runs
     // because `verify` runs after the session, and the item naming it must not then
