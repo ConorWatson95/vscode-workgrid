@@ -127,6 +127,25 @@ describe("addMissingStages", () => {
     expect(result.pipeline).toBe(before);
   });
 
+  it("names the stage a re-run would have to re-open", () => {
+    // The refusal used to reach the output channel alone, so the operator worked the
+    // remedy out from the route order by hand. Re-opening this stage re-opens everything
+    // after it, so naming it is sufficient as well as necessary.
+    const result = addMissingStages(twoStagePipeline("passed"), {
+      routes: [grownRoute(0)],
+      rules: [],
+    });
+    expect(result.blockedBy).toBe("deploy");
+  });
+
+  it("names no blocker when nothing was refused", () => {
+    const result = addMissingStages(twoStagePipeline(), {
+      routes: [grownRoute(1)],
+      rules: [],
+    });
+    expect(result.blockedBy).toBeUndefined();
+  });
+
   it("still adds a stage that belongs ahead of the frontier", () => {
     const result = addMissingStages(twoStagePipeline("passed"), {
       routes: [grownRoute(1)],

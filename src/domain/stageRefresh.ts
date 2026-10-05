@@ -89,7 +89,17 @@ const REFRESHABLE = [
 export function addMissingStages(
   pipeline: TaskPipeline,
   source: StageDefinitionSource,
-): { pipeline: TaskPipeline; added: string[]; tooLate: string[] } {
+): {
+  pipeline: TaskPipeline;
+  added: string[];
+  tooLate: string[];
+  /**
+   * The stage a re-run would have to re-open for the refused ones to fit. Re-opening it
+   * re-opens everything after it, so it is sufficient as well as necessary — and it is
+   * the sentence the operator would otherwise have to work out from the route order.
+   */
+  blockedBy?: string;
+} {
   const route = source.routes.find((r) => r.id === pipeline.routeId);
   if (!route) return { pipeline, added: [], tooLate: [] };
 
@@ -107,6 +117,8 @@ export function addMissingStages(
   const stages = [...pipeline.stages];
   const added: string[] = [];
   const tooLate: string[] = [];
+  let blockedAt: number | undefined;
+  let blockedBy: string | undefined;
 
   for (const definition of missing) {
     // Where the route puts it: after the nearest earlier route stage that the pipeline
@@ -122,14 +134,27 @@ export function addMissingStages(
     }
     if (at < frontier) {
       tooLate.push(definition.id);
+      // Read now rather than by index afterwards: a stage added for an earlier slot
+      // shifts every index after it, so the index would name the wrong stage.
+      if (blockedAt === undefined || at < blockedAt) {
+        blockedAt = at;
+        blockedBy = stages[at]?.id;
+      }
       continue;
     }
     stages.splice(at, 0, stageFromDefinition(definition));
     added.push(definition.id);
   }
 
-  if (added.length === 0) return { pipeline, added: [], tooLate };
-  return { pipeline: { ...pipeline, stages }, added, tooLate };
+  if (added.length === 0) {
+    return { pipeline, added: [], tooLate, ...(blockedBy ? { blockedBy } : {}) };
+  }
+  return {
+    pipeline: { ...pipeline, stages },
+    added,
+    tooLate,
+    ...(blockedBy ? { blockedBy } : {}),
+  };
 }
 
 /**

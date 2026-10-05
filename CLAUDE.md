@@ -3404,6 +3404,82 @@ up: no declaration existed for *where the check vocabulary is documented*, so th
 **expressiveness** case — the rarest of the four and the only one that justifies a new
 primitive.
 
+### Three rewrites of one instruction, and the stage that was missing
+
+5 Oct 2026, immediately after the section above and the reason it is recorded separately:
+`checkVocabulary` shipped, the gate was re-run end to end, and it authored **nothing**.
+`pathsWritten []`, `pathsRead []`, `toolCounts {Bash: 2}` — both commands running the
+suite that already existed. The four ticks on its checklist were earned by checks
+`rc-implement-app` had written days earlier.
+
+The prompt had verifiably arrived. 65,977 characters, read back out of the live
+transcript: the vocabulary section present, `expectHidden` present, `capability gap`
+present, the old write-the-checklist-first instruction gone. The wording of the list
+changed and **only** the wording — eight items became seven, the unanswerable CSV item was
+correctly never written, and the untagged notes now separate a judgement from a gap. It
+also invented one new unanswerable item and declined it in the same breath. The tell is
+its own note against item 5: *"I did not try a `steps` flow."* It named the exact
+capability out of the document it had been handed, and said it did not try.
+
+So the prompt layer had now been tried three times, each measured:
+
+| attempt | what the stage did |
+|---|---|
+| intent rewritten across nine stages | `pathsWritten []`, *"I changed no files."* |
+| intent rewritten again, a reason demanded per item | `pathsRead []`, 2 commands, both running the suite |
+| the vocabulary quoted into the prompt in full | `pathsWritten []`, 2 commands, both running the suite |
+
+**Writing checks is implementation work with a file as its output, and it was being asked
+for as an appendix to a review.** That is the whole finding, and the harness already has
+the machinery for it one stage over: `stageProductivity` holds an implementation stage
+that wrote no files, and it is keyed on `kind` precisely so a review, a deployment and an
+assessment — which all legitimately write nothing — are not held constantly.
+`checkAuthoringSkipped` cannot reach this at all: it requires `checkManifest` **and**
+unchecked gaps in a checklist, so it fires only on the gate, which is the stage that was
+never going to author the file.
+
+`rc-write-checks` is therefore an ordinary `implementation` stage spliced in front of the
+gate, whose entire work product is the manifest. Three things make it bite:
+
+- **It declares no `verify`**, deliberately. A declared check that exits 0 **outranks
+  `stageProductivity` entirely** — the rule that something other than the agent has
+  certified the work — so the obvious move of pointing a verify at the suite would switch
+  off the one hold that catches a stage writing nothing. The suite is run in-session
+  instead.
+- **The vocabulary reaches an ordinary subtask, not only a behaviour review.**
+  `subtaskPrompt` gained the same quoted section; a stage told to write checks in a
+  vocabulary it cannot see is the failure this whole area has already measured three
+  times.
+- **It is told to prove the check catches the bug** — restore the old behaviour, confirm
+  the check fails, restore the fix. A check written against code that is already correct
+  is a check that has never been observed to fail, which is `stageEvidence`'s distinction
+  between the check declared and the check that ran, one layer down.
+
+**The honest ceiling is 6 of 7, and saying so is part of the result.** Item 5 is a race:
+two flow checks were written against it and both **passed on the broken code**, so a tick
+there would mean *"I did not happen to reproduce it"* — which is what
+`retireChecklistItem` exists for and not a thing to automate. Item 7 asks whether the
+figures are right for a dealer, and no baseline is held anywhere. A target stated as 7 of
+7 would have been met by two false ticks.
+
+**And the new stage could not reach the task that produced the finding.**
+`addMissingStages` places a stage after the nearest earlier route stage the pipeline
+already has — index 10, behind `rc-deploy-dev` — and the frontier was 11, because
+`rc-local-verify` sat at `awaiting-approval` and the frontier is one past the last stage
+that is not `pending`. Refused, correctly: a stage spliced in front of a gate that has
+already begun is the history-rewriting this function exists to prevent.
+
+What was wrong is that the refusal was `logger.warn` and nothing else, under a comment
+reading *"the only way to know is to be told"*. An advance that silently declines a stage
+the project just declared is indistinguishable from one where config never changed — the
+failure the unquoted hook command taught this codebase, arriving through a warning nobody
+sees. It is now a warning message, and it **names the stage to re-run**
+(`addMissingStages`' `blockedBy`): re-opening that stage re-opens everything after it, so
+naming it is sufficient as well as necessary, and working it out from the route order is
+the diagnosis by hand this runtime exists to retire. Captured at the moment of refusal
+rather than by index afterwards, because a stage added for an earlier slot shifts every
+index behind it.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

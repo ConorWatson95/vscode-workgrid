@@ -2431,13 +2431,20 @@ async function advanceRouteCommand(
       );
     }
     if (grown.tooLate.length > 0) {
-      // Said out loud rather than dropped: the route now has a step this task will
-      // never run, and the only way to know is to be told.
-      ctx.logger.warn(
-        `Harness [${task.name}] cannot add ${grown.tooLate.join(", ")} — the route has ` +
-          "moved past where they belong. Do those steps by hand, or revert to an " +
-          "earlier stage first.",
-      );
+      // Shown, not only logged. The comment this replaces said "the only way to know is
+      // to be told" and then told the output channel — so a route that gained a step in
+      // front of a gate already running refused it in silence, and the advance looked
+      // exactly like one where config had never changed. The remedy is named because it
+      // is a single command, and working it out from the route order is the diagnosis
+      // by hand this runtime exists to retire.
+      const remedy = grown.blockedBy
+        ? `Re-run This Stage… on "${grown.blockedBy}" first, or do those steps by hand.`
+        : "Re-run an earlier stage first, or do those steps by hand.";
+      const message =
+        `"${task.name}" cannot run ${grown.tooLate.join(", ")} — the route has moved ` +
+        `past where they belong. ${remedy}`;
+      ctx.logger.warn(`Harness [${task.name}] ${message}`);
+      void vscode.window.showWarningMessage(message);
     }
   }
 
