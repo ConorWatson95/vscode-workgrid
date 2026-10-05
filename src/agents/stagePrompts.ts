@@ -915,8 +915,14 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
  * How much of the vocabulary document is quoted. It lands in a prompt, not in the
  * state file, so the cap is generous — the cost is one session's input tokens against
  * a capability the session will otherwise claim it does not have.
+ *
+ * Set from the real document rather than from a round number: `tools/e2e/AGENTS.md` is
+ * 38,000 characters and its vocabulary section alone runs to 32,000, so a 24,000 cap
+ * cut through the middle of the thing being quoted — abridging exactly the steps a
+ * session declines items for lack of. A cap that truncates the capability list is this
+ * defect wearing a limit's clothes.
  */
-export const MAX_VOCABULARY_CHARS = 24_000;
+export const MAX_VOCABULARY_CHARS = 80_000;
 
 /**
  * The suite's own documented vocabulary, quoted into the prompt.

@@ -3390,8 +3390,9 @@ Four rules:
   project documented since. That is the whole of *"if Playwright grows, so should the
   checklist"* — a re-run reads the document as it stands then, so a gap becomes a ticked
   item without anybody re-authoring anything.
-- **Capped and announced** (`MAX_VOCABULARY_CHARS`), the rule truncated command output
-  follows, and here with a sharper edge: a document that simply stops reads as a
+- **Capped and announced** (`MAX_VOCABULARY_CHARS`, set from the real document — the
+  first cap cut through the middle of the vocabulary section it was quoting), the rule
+  truncated command output follows, and here with a sharper edge: a document that simply stops reads as a
   vocabulary that ends there, which is exactly the false limitation this exists to
   remove.
 
