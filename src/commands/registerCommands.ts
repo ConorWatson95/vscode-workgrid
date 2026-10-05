@@ -99,10 +99,12 @@ import {
   outstandingDeferrals,
   resolveDeferral,
   setChecklistItem,
+  retireChecklistItem,
   unansweredQuestions,
   ungrantedDenials,
   createPipeline,
 } from "../domain/pipelineEngine";
+import { appendIntervention } from "../domain/interventions";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
@@ -247,6 +249,9 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
     ),
     register("taskWorkspaces.coverChecklistItem", (arg) =>
       coverChecklistItemCommand(ctx, arg),
+    ),
+    register("taskWorkspaces.retireChecklistItem", (arg) =>
+      retireChecklistItemCommand(ctx, arg),
     ),
     // Also a command, not only a button on the notification that announced it: a
     // notification is dismissable and the hold is not, and a route stopped with no
@@ -2167,6 +2172,90 @@ async function coverChecklistItemCommand(
     settled && settled.ticked.length > 0
       ? `Ticked off — "${picked.id}" has already passed.`
       : `Attached to "${picked.id}". It will tick off when that check passes.`,
+  );
+}
+
+/**
+ * Withdraws an item nothing can answer, with the reason.
+ *
+ * The third disposition, and the reason it had to become one is that the other two
+ * were tick or stop. A gate cannot pass while an item is outstanding, so an operator
+ * holding an unanswerable item — a control hidden for that tenant, a timing race no
+ * person reproduces reliably, a toggle-back the check format cannot express — had a
+ * choice between asserting a verification nobody performed and leaving the route
+ * stopped. The first is the one taken under time pressure, and it is the one that
+ * makes every other tick on the list worth less.
+ *
+ * Modal, and the reason is mandatory. The confirmation states that the gate will stop
+ * asking, because that is the part that is not obvious from a row disappearing: this
+ * is not a tick and not a note, it is the review being told it asked for the wrong
+ * thing. The stage's own account of why it wrote no check is shown as the prompt's
+ * placeholder, since that is usually the sentence — what it is not is a substitute
+ * for one, which is why it is not pre-filled.
+ */
+async function retireChecklistItemCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  if (!(arg instanceof ChecklistTreeItem)) return;
+  const task = await rowPipelineTask(ctx, arg, "withdraw that item");
+  if (!task) return;
+
+  if (arg.item.checked) {
+    void vscode.window.showInformationMessage(
+      "That item is already ticked, so there is nothing to withdraw.",
+    );
+    return;
+  }
+
+  const reason = await vscode.window.showInputBox({
+    title: arg.item.text,
+    prompt:
+      "Why can nothing answer this? Kept with the item, so a reader can see what the " +
+      "review asked for and why it was never verified.",
+    placeHolder: "e.g. the CSV control is hidden for this tenant, so there is nothing to click",
+    ignoreFocusOut: true,
+  });
+  // Escape means "leave it outstanding", never "withdraw with no reason" — the rule
+  // the re-run reason box follows, and for the same cause: the box is the first thing
+  // shown, so dismissing it must not lead to the act it was asked about.
+  if (reason === undefined || !reason.trim()) return;
+
+  const confirmed = await vscode.window.showWarningMessage(
+    `Stop asking for "${arg.item.text}"?`,
+    {
+      modal: true,
+      detail:
+        "The gate will no longer hold on it, and it stays on the report with your " +
+        "reason. Tick it instead if somebody did verify it.",
+    },
+    "Withdraw",
+  );
+  if (confirmed !== "Withdraw") return;
+
+  const at = new Date().toISOString();
+  const retired = retireChecklistItem(task.pipeline, arg.item.id, { reason, at });
+  if (!retired.ok) {
+    void vscode.window.showWarningMessage(retired.error.message);
+    return;
+  }
+
+  await ctx.repository.save({
+    ...task,
+    pipeline: {
+      ...retired.value,
+      interventions: appendIntervention(retired.value.interventions, {
+        kind: "retirement",
+        stageId: arg.item.raisedByStage,
+        at,
+      }),
+    },
+    updatedAt: at,
+  });
+  ctx.tree.refresh();
+  void vscode.window.showInformationMessage(
+    "Withdrawn. A route accumulating these is one whose behaviour review is writing " +
+      "items nothing can answer.",
   );
 }
 

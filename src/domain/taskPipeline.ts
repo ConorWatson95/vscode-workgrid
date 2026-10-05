@@ -437,6 +437,31 @@ export interface ChecklistItem {
   checkedBy?: "check";
   /** Stage that raised it, so the gate can explain where each item came from. */
   raisedByStage: string;
+  /**
+   * Withdrawn by the operator, because nothing can answer it.
+   *
+   * A third outcome beside ticked and outstanding, and it exists because the other two
+   * were the only ones available for an item that is **unanswerable** — not merely
+   * uncovered by a check. A gate refuses to pass while an item is outstanding, so the
+   * operator's choices were to tick it, which asserts a verification nobody performed,
+   * or to leave the route stopped. Measured on a live gate: of four items no check
+   * answered, one asked for a toggle-back the manifest format cannot express, one named
+   * a control hidden for that tenant, and two described a timing race a person cannot
+   * reproduce reliably enough for a tick to mean anything. The stage had already said
+   * all of that in `untaggedNotes`, correctly, and nothing could act on it.
+   *
+   * Distinct from a **gap**, which is an item a check could answer and nobody wrote one
+   * for — the ordinary case, counted and named and never blocking. A gap is work; this
+   * is a question that should not have been asked. Conflating them would let the number
+   * that measures the first be driven down by withdrawing the second.
+   *
+   * The operator's act, never a stage's, and a reason is required: a gate able to
+   * withdraw its own questions passes trivially, which is the rule that a constraint's
+   * value cannot be authored by the party it constrains. Retained rather than deleted,
+   * like everything else here — the reason is the only account of why something the
+   * review thought worth verifying never was.
+   */
+  retired?: { reason: string; at: string };
   /** Optional tester note, e.g. what they actually observed. */
   note?: string;
   checkedAt?: string;

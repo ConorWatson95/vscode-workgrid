@@ -184,6 +184,49 @@ describe("recordCheckOutcomes", () => {
   });
 });
 
+describe("a withdrawn item", () => {
+  const retired = { reason: "the control is hidden for this tenant", at: "2026-10-05T00:00:00Z" };
+
+  it("is reported as withdrawn, never as a gap", () => {
+    // The number that measures gaps must not be improvable by withdrawing the items
+    // it counts, so the two are said apart.
+    const p = pipeline([
+      stage({
+        id: "gate",
+        checklist: [item({ id: "1", coveredBy: "c" }), item({ id: "2", retired })],
+        checkOutcomes: [{ id: "c", passed: true }],
+      }),
+    ]);
+    expect(coverageForGate(p, "gate").map((e) => e.state)).toEqual(["answered", "retired"]);
+    const summary = summariseCoverage(p, "gate")!;
+    expect(summary.gaps).toBe(0);
+    expect(summary.retired).toBe(1);
+    expect(formatCoverageLine(summary)).toContain("1 withdrawn, as nothing can answer it");
+  });
+
+  it("is said even on a gate where no check covers anything", () => {
+    // The one thing on the line a reader cannot reconstruct from the list in front
+    // of them, so silence here would hide the whole act.
+    const p = pipeline([
+      stage({ id: "gate", checklist: [item({ id: "1" }), item({ id: "2", retired })] }),
+    ]);
+    expect(formatCoverageLine(summariseCoverage(p, "gate"))).toBe(
+      "1 of 2 withdrawn, as nothing can answer it.",
+    );
+  });
+
+  it("is never offered for ticking by a passing check", () => {
+    const p = pipeline([
+      stage({
+        id: "gate",
+        checklist: [item({ id: "1", coveredBy: "c", retired })],
+        checkOutcomes: [{ id: "c", passed: true }],
+      }),
+    ]);
+    expect(itemsAnsweredByChecks(p, "gate")).toEqual([]);
+  });
+});
+
 describe("formatCoverageLine", () => {
   it("says nothing at all when nothing claims coverage", () => {
     const p = pipeline([stage({ id: "gate", checklist: [item({ id: "1" }), item({ id: "2" })] })]);

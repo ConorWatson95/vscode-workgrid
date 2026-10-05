@@ -589,6 +589,16 @@ export function formatStageReport(
       // honest if the reader can tell which did what — a tick is otherwise a claim
       // somebody exercised the behaviour, and for these nobody did.
       const answered = item.checkedBy === "check" ? "  _(checked automatically)_" : "";
+      // A withdrawn item renders with its reason and no tick box, because a box would
+      // be a question and this is one nobody is being asked. Kept on the list for the
+      // reason nothing here is deleted: the reason is the only account of what the
+      // review asked for and why it was never verified.
+      if (item.retired) {
+        return (
+          `- ~~${item.text}~~  _(withdrawn — ${item.retired.reason})_` +
+          (destination ? `  _(${destination})_` : "")
+        );
+      }
       return (
         `- [${item.checked ? "x" : " "}] ${item.text}` +
         (destination ? `  _(${destination})_` : "") +

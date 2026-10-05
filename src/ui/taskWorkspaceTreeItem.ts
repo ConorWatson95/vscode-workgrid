@@ -291,19 +291,26 @@ export class ChecklistTreeItem extends vscode.TreeItem {
     // An operator action is not a verification and must not read as one: "for you to
     // verify" invites a judgement about risk, where this is a step that either happened
     // or did not.
-    this.description =
-      item.kind === "action"
+    this.description = item.retired
+      ? "withdrawn"
+      : item.kind === "action"
         ? item.checked ? "done" : "for you to DO"
         : item.checked ? "verified" : "for you to verify";
     this.tooltip = new vscode.MarkdownString(
       [
         item.text,
         "",
-        item.checked
-          ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.`
-          : "**Not yet verified.** Exercise this in the running application, then " +
-            "click the row to tick it. The sign-off stage cannot pass while any " +
-            "item is outstanding.",
+        item.retired
+          ? `**Withdrawn** — ${item.retired.reason}
+
+The gate no longer holds on ` +
+            "it. It stays here, and on the report, as the record of what the review " +
+            "asked for and why nothing could answer it."
+          : item.checked
+            ? `Verified${item.checkedAt ? ` at ${item.checkedAt}` : ""}.`
+            : "**Not yet verified.** Exercise this in the running application, then " +
+              "click the row to tick it. The sign-off stage cannot pass while any " +
+              "item is outstanding.",
         item.note
           ? `\nNote: ${item.note}`
           : // Named because the tick no longer asks: an observation is worth

@@ -2,7 +2,7 @@
   "name": "task-workspaces",
   "displayName": "Task Workspaces",
   "description": "Manage isolated development tasks using Git worktrees and coding agents.",
-  "version": "0.130.0",
+  "version": "0.131.0",
   "publisher": "task-workspaces",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -167,6 +167,12 @@
         "title": "Answer This With a Check…",
         "category": "Task Workspaces",
         "icon": "$(beaker)"
+      },
+      {
+        "command": "taskWorkspaces.retireChecklistItem",
+        "title": "Stop Asking for This…",
+        "category": "Task Workspaces",
+        "icon": "$(circle-slash)"
       },
       {
         "command": "taskWorkspaces.settleDeferrals",
@@ -683,6 +689,11 @@
           "command": "taskWorkspaces.coverChecklistItem",
           "when": "view == taskWorkspaces.tree && viewItem =~ /^checklist-/",
           "group": "checklist@1"
+        },
+        {
+          "command": "taskWorkspaces.retireChecklistItem",
+          "when": "view == taskWorkspaces.tree && viewItem == checklist-unchecked",
+          "group": "checklist@2"
         },
         {
           "command": "taskWorkspaces.copyPath",

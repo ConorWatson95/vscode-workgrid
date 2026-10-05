@@ -231,9 +231,21 @@ export function checklistPresentation(item: ChecklistItem): {
   colorId?: string;
   contextValue: string;
 } {
-  return item.checked
-    ? { iconId: "check", colorId: "charts.green", contextValue: "checklist-checked" }
-    : { iconId: "circle-large-outline", contextValue: "checklist-unchecked" };
+  if (item.checked) {
+    return { iconId: "check", colorId: "charts.green", contextValue: "checklist-checked" };
+  }
+  // A withdrawn item stays on the list, greyed rather than ticked. Hiding it would
+  // make a route whose review asks for unanswerable things look identical to one
+  // whose review does not — and the row is the only place the reason is visible
+  // without opening the report.
+  if (item.retired) {
+    return {
+      iconId: "circle-slash",
+      colorId: "descriptionForeground",
+      contextValue: "checklist-retired",
+    };
+  }
+  return { iconId: "circle-large-outline", contextValue: "checklist-unchecked" };
 }
 
 /**

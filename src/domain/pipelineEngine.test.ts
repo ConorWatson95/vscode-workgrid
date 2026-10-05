@@ -41,6 +41,7 @@ import {
   narrowAmendments,
   unansweredQuestions,
   setChecklistItem,
+  retireChecklistItem,
   skipStage,
   revertSubtask,
   recordAssessments,
@@ -660,6 +661,80 @@ describe("checklists", () => {
         .flatMap((s) => s.checklist ?? [])
         .find((i) => i.kind === "action");
       expect(action?.checked).toBe(false);
+    });
+  });
+
+  describe("retireChecklistItem", () => {
+    const only = (pipeline: ReturnType<typeof atGate>) =>
+      pipeline.stages.flatMap((s) => s.checklist ?? [])[0];
+
+    it("stops a withdrawn item holding the gate, and keeps it on the list", () => {
+      let pipeline = atGate(["The CSV button downloads"]);
+      pipeline = must(
+        retireChecklistItem(pipeline, only(pipeline).id, {
+          reason: "the CSV control is hidden for this tenant",
+          at: T,
+        }),
+      );
+      expect(outstandingChecklist(pipeline)).toHaveLength(0);
+      expect(approveStage(pipeline, "human-verification", T).ok).toBe(true);
+      // Retained, never deleted: the reason is the only account of what the review
+      // asked for and why nothing answered it.
+      expect(only(pipeline).retired?.reason).toContain("hidden for this tenant");
+      expect(only(pipeline).checked).toBe(false);
+    });
+
+    it("refuses a withdrawal with no reason", () => {
+      const pipeline = atGate(["Check exports"]);
+      const result = retireChecklistItem(pipeline, only(pipeline).id, {
+        reason: "   ",
+        at: T,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.kind).toBe("retirementNeedsReason");
+    });
+
+    it("refuses an item that is already ticked", () => {
+      let pipeline = atGate(["Check exports"]);
+      pipeline = must(setChecklistItem(pipeline, only(pipeline).id, { checked: true, at: T }));
+      const result = retireChecklistItem(pipeline, only(pipeline).id, {
+        reason: "nothing can answer it",
+        at: T,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.kind).toBe("alreadyResolved");
+    });
+
+    it("is not swept up by a bulk verify", () => {
+      // A withdrawal says nobody is being asked; a bulk tick would assert that
+      // somebody exercised it, which is the statement it exists to avoid making.
+      let pipeline = atGate(["Check exports", "Run a dealer report"]);
+      pipeline = must(
+        retireChecklistItem(pipeline, only(pipeline).id, { reason: "no baseline", at: T }),
+      );
+      const result = checkOutstandingChecklist(pipeline, { note: "Bulk", at: T });
+      expect(result.checked).toBe(1);
+      expect(only(result.pipeline).checked).toBe(false);
+      expect(only(result.pipeline).retired).toBeDefined();
+    });
+
+    it("voids the withdrawal when the operator states something about it again", () => {
+      let pipeline = atGate(["Check exports"]);
+      pipeline = must(
+        retireChecklistItem(pipeline, only(pipeline).id, { reason: "no baseline", at: T }),
+      );
+      pipeline = must(setChecklistItem(pipeline, only(pipeline).id, { checked: true, at: T }));
+      expect(only(pipeline).retired).toBeUndefined();
+      expect(only(pipeline).checked).toBe(true);
+    });
+
+    it("reports an unknown item rather than silently doing nothing", () => {
+      const result = retireChecklistItem(atGate(["Check exports"]), "nope", {
+        reason: "no baseline",
+        at: T,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error.kind).toBe("unknownChecklistItem");
     });
   });
 

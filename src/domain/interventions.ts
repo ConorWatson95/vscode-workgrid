@@ -30,7 +30,18 @@ export type InterventionKind =
    * and had not thought to ask. A route accumulating these is one whose stages are
    * under-briefed, which is a different fix from one that asks too much.
    */
-  | "interjection";
+  | "interjection"
+  /**
+   * The operator withdrew a checklist item nothing could answer.
+   *
+   * Its own kind, because it is the only one that is a correction to the *route*
+   * rather than a cost of running it. An approval is the gate working; an answer is a
+   * stage asking; this is the behaviour review having asked for something no person
+   * and no check can confirm, which is a defect in what the route writes rather than
+   * in what it does. A route accumulating these needs its review narrowed, which is a
+   * different fix from every other kind on this list.
+   */
+  | "retirement";
 
 export interface InterventionRecord {
   kind: InterventionKind;

@@ -66,6 +66,7 @@ export type PipelineError =
   | { kind: "notAwaitingApproval"; message: string }
   | { kind: "checklistIncomplete"; message: string; outstanding: number }
   | { kind: "unknownChecklistItem"; message: string }
+  | { kind: "retirementNeedsReason"; message: string }
   | { kind: "unknownDeferral"; message: string }
   | {
       kind: "planStepsUnaccounted";
@@ -1832,11 +1833,77 @@ export function setChecklistItem(
             checked: update.checked,
             note: update.note ?? item.note,
             checkedAt: update.checked ? update.at : undefined,
+            // Either way, a withdrawal is void once the operator states something
+            // about the item again: a tick says it was answered after all, and an
+            // un-tick says it is a live question. Leaving it set would mean a ticked
+            // item still reported as withdrawn, which is the one combination that can
+            // be read two ways.
+            retired: undefined,
           }
         : item,
     );
     return ok(replaceStage(pipeline, { ...stage, checklist }));
   }
+  return err({
+    kind: "unknownChecklistItem",
+    message: `No checklist item "${itemId}" in pipeline.`,
+  });
+}
+
+/**
+ * Withdraws an item nothing can answer, with the operator's reason.
+ *
+ * The third disposition, beside ticking and leaving outstanding. A gate cannot pass
+ * while an item is outstanding, so an item that is *unanswerable* — as opposed to
+ * merely uncovered by a check — left exactly two moves: tick it, asserting a
+ * verification nobody performed, or leave the route stopped. Neither is honest, and the
+ * first is the one an operator under time pressure takes.
+ *
+ * Four rules:
+ *
+ * - **A reason is required**, the rule settling a deferral already follows and for the
+ *   same cause: what is missing here is a judgement nothing else holds, so silence
+ *   would reproduce the gap it is meant to close. The stage's own `untaggedNotes` is
+ *   the evidence to write it from, not a substitute for it.
+ * - **Never a stage's act.** Nothing parses a marker for this and nothing ever should:
+ *   a gate that may withdraw its own questions passes trivially, which is the rule that
+ *   a constraint's value cannot be authored by the party it constrains.
+ * - **A ticked item is left alone.** A tick is evidence somebody looked, and retiring
+ *   it would destroy the record of the one thing that did happen — the rule
+ *   withdrawing a retracted rule's items already follows.
+ * - **Retained, never deleted.** The item and its reason stay on the stage that raised
+ *   it, so a reader can see what the review asked for and why it was not answered.
+ */
+export function retireChecklistItem(
+  pipeline: TaskPipeline,
+  itemId: string,
+  retire: { reason: string; at: string },
+): Result<TaskPipeline, PipelineError> {
+  const reason = retire.reason.trim();
+  if (!reason) {
+    return err({
+      kind: "retirementNeedsReason",
+      message: "Retiring a checklist item needs a reason saying what cannot answer it.",
+    });
+  }
+
+  for (const stage of pipeline.stages) {
+    const item = stage.checklist?.find((candidate) => candidate.id === itemId);
+    if (!item) continue;
+    if (item.checked) {
+      return err({
+        kind: "alreadyResolved",
+        message: `Checklist item "${itemId}" is already ticked, so there is nothing to withdraw.`,
+      });
+    }
+    const checklist = stage.checklist!.map((candidate) =>
+      candidate.id === itemId
+        ? { ...candidate, retired: { reason, at: retire.at } }
+        : candidate,
+    );
+    return ok(replaceStage(pipeline, { ...stage, checklist }));
+  }
+
   return err({
     kind: "unknownChecklistItem",
     message: `No checklist item "${itemId}" in pipeline.`,
@@ -1976,6 +2043,8 @@ export function checkOutstandingChecklist(
       // bulk is a judgement about risk; ticking "I opened the pull request" in bulk is
       // simply untrue, and the step it stands for is the one this exists to protect.
       if (item.kind === "action") return item;
+      // Withdrawn, so there is nothing to assert about it either way.
+      if (item.retired) return item;
       checked += 1;
       return {
         ...item,
@@ -2287,7 +2356,10 @@ export function outstandingChecklist(pipeline: TaskPipeline): ChecklistItem[] {
   return pipeline.stages
     .filter((s) => s.status !== "skipped")
     .flatMap((s) => s.checklist ?? [])
-    .filter((item) => !item.checked);
+    // A retired item asks nothing, so it gates nothing. Excluded here rather than
+    // deleted, so the question and the reason it was withdrawn both survive on the
+    // stage that raised it.
+    .filter((item) => !item.checked && !item.retired);
 }
 
 /**

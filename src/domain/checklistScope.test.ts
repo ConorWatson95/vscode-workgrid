@@ -5,6 +5,7 @@ import {
   declaredScopes,
   gateFor,
   itemsForGate,
+  unassignedItems,
   scopesForWriter,
   scopingActive,
   splitScopeTag,
@@ -114,6 +115,23 @@ describe("with no scopes declared", () => {
     pipeline.stages[1].status = "passed";
     expect(itemsForGate(pipeline, "signoff")).toEqual([]);
     expect(itemsForGate(pipeline, "uat").map((i) => i.id)).toEqual(["a"]);
+  });
+});
+
+describe("a withdrawn item", () => {
+  it("reaches no gate, so none is held on it", () => {
+    const pipeline = unscopedPipeline([
+      item({ id: "a" }),
+      item({ id: "b", retired: { reason: "hidden for this tenant", at: "2026-10-05" } }),
+    ]);
+    expect(itemsForGate(pipeline, "signoff").map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("is not reported as unassigned, which is the guard for items nobody is asked", () => {
+    const pipeline = unscopedPipeline([
+      item({ id: "a", retired: { reason: "no baseline", at: "2026-10-05" } }),
+    ]);
+    expect(unassignedItems(pipeline)).toEqual([]);
   });
 });
 

@@ -59,8 +59,15 @@ export interface ItemCoverage {
    * `"failed"` — it names a check that ran and did not pass.
    * `"missing"` — it names a check, and no run of this gate's suite contains it.
    * `"gap"` — it names no check at all.
+   * `"retired"` — the operator withdrew it, because nothing can answer it.
+   *
+   * Retirement is read **before** the check join, and reported rather than dropped.
+   * A withdrawn item is not a gap: a gap is work a check could do and nobody has, and
+   * a number measuring that must not be improvable by withdrawing the items it counts.
+   * Both still appear, said apart — "3 answered, 1 gap, 2 withdrawn" is the only
+   * honest account of a gate where the review asked for more than anything can answer.
    */
-  state: "answered" | "failed" | "missing" | "gap";
+  state: "answered" | "failed" | "missing" | "gap" | "retired";
 }
 
 /**
@@ -128,6 +135,7 @@ export function coverageForGate(
     .filter((item) => gateFor(gates, item.scope)?.stageId === stageId);
 
   return items.map((item) => {
+    if (item.retired) return { item, state: "retired" as const };
     if (!item.coveredBy) return { item, state: "gap" as const };
     const outcome = outcomes.find((candidate) => sameId(candidate.id, item.coveredBy!));
     if (!outcome) return { item, state: "missing" as const };
@@ -304,6 +312,15 @@ export interface CoverageSummary {
   failed: number;
   missing: number;
   gaps: number;
+  /**
+   * Items the operator withdrew because nothing can answer them.
+   *
+   * Reported beside the gaps and never folded into them. A gap says a check could be
+   * written and has not been, which is a number worth driving down; this says the
+   * question should not have been asked, which is a correction to the review. Summed,
+   * the first becomes improvable by withdrawing the items it counts.
+   */
+  retired: number;
   total: number;
   /**
    * Checks that ran and that no item on this gate names.
@@ -347,6 +364,7 @@ export function summariseCoverage(
     failed: count("failed"),
     missing: count("missing"),
     gaps: count("gap"),
+    retired: count("retired"),
     total: coverage.length,
     orphans,
   };
@@ -398,18 +416,35 @@ export function formatUntaggedNotes(
 export function formatCoverageLine(summary: CoverageSummary | undefined): string | undefined {
   if (!summary) return undefined;
   const covered = summary.answered + summary.failed + summary.missing;
-  if (covered === 0) return undefined;
+  // A withdrawal is worth saying even where no check covers anything, because it is a
+  // statement about what this gate is no longer asking for — the one thing on the
+  // line that a reader cannot reconstruct from the list in front of them.
+  if (covered === 0 && summary.retired === 0) return undefined;
 
-  const parts = [`${summary.answered} of ${summary.total} answered by checks that passed`];
+  const parts =
+    covered === 0
+      ? []
+      : [`${summary.answered} of ${summary.total} answered by checks that passed`];
   if (summary.failed > 0) parts.push(`${summary.failed} by checks that failed`);
   if (summary.missing > 0) {
     parts.push(
       `${summary.missing} naming a check the last run did not contain — those are unverified`,
     );
   }
-  if (summary.gaps > 0) {
+  // A gap is still only worth naming once something else is *covered*. A withdrawal
+  // is not coverage, so a gate that has withdrawn one item and automated none keeps
+  // the silence the rule above describes rather than opening on a gap count.
+  if (summary.gaps > 0 && covered > 0) {
     parts.push(
       `${summary.gaps} with no check behind ${summary.gaps === 1 ? "it" : "them"}`,
+    );
+  }
+  if (summary.retired > 0) {
+    const them = summary.retired === 1 ? "it" : "them";
+    parts.push(
+      covered === 0
+        ? `${summary.retired} of ${summary.total} withdrawn, as nothing can answer ${them}`
+        : `${summary.retired} withdrawn, as nothing can answer ${them}`,
     );
   }
   let line = parts.join(", ") + ".";

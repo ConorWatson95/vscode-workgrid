@@ -3265,6 +3265,77 @@ correction for a marker nothing can act on is the failure `autoRepair` already n
 and it states both guards rather than leaving them to be discovered, since a session
 told neither produces claims the parser silently drops.
 
+### An item nothing can answer, and the two moves that were left
+
+`retireChecklistItem` + `ChecklistItem.retired`, 5 Oct 2026. The section above closed
+the gap between an item and a check and left the question underneath it untouched:
+**what happens to an item nothing can answer at all.** Put plainly by the operator — *if
+they're not answerable, they shouldn't be checklist items* — and he is right, with a
+sharper reason than the one he gave.
+
+A gate cannot pass while an item is outstanding. So the operator holding an unanswerable
+item had exactly two moves: tick it, which asserts a verification nobody performed, or
+leave the route stopped. The first is the one taken under time pressure, and it is the
+one that makes every other tick on the list worth less — which is the whole currency the
+checklist trades in.
+
+Measured on `rc-local-verify`, of the four items no check answered:
+
+| item | why nothing answers it |
+|---|---|
+| the CSV export | the control is **hidden** for this tenant — nothing to click |
+| toggle back and re-check | no toggle-back step exists in the manifest format |
+| change Period then From in quick succession | a **race**; `selectOption` waits for actionability, so the obvious flow check cannot reproduce it, and neither can a person reliably |
+| the figures are right for this dealer | a judgement with no exit code — genuinely a person's, and it stays |
+
+The third row is the one worth recording, because it was *proved* rather than reasoned
+about. Two flow-family checks were written against the race and run against the broken
+code at `4f41f5e53^`: both **passed** while `pyramid-monthly-carries-from` and
+`pyramid-toggle-back-carries-from` correctly failed. So the item is not answerable by a
+check, and a person clicking fast and seeing nothing wrong is not evidence either — a
+tick on a race means "I did not happen to reproduce it". The deterministic consequence
+the race produces is already covered by the two export checks.
+
+**And the harness already held the evidence and could not act on it.** `untaggedNotes`
+is the stage's own account of why it tagged nothing, added the day before; its reasons
+were correct and specific, naming the hidden control and the missing step format. The
+item went on gating the route regardless. Which is this codebase's recurring disease
+from the far side: not a reply claiming an outcome no parser checks, but a parsed,
+recorded, *correct* fact with no disposition attached to it.
+
+- **Distinct from a gap, and never summed with it.** A gap is an item a check could
+  answer and nobody wrote one for — work, counted and named and never blocking. This is
+  a question that should not have been asked. Folded together, the number measuring the
+  first becomes improvable by withdrawing the second, which is the one way to make a
+  coverage figure lie. `summariseCoverage` reports `retired` as its own count and
+  `formatCoverageLine` says it in its own clause.
+- **The operator's act, never a stage's.** No marker is parsed for this and none should
+  be: a gate that may withdraw its own questions passes trivially, which is the rule that
+  a constraint's value cannot be authored by the party it constrains. The stage's
+  `untaggedNotes` is the evidence to write the reason from, and deliberately not
+  pre-filled into the box — it is the material for a judgement, not the judgement.
+- **A reason is required**, the rule settling a deferral already follows. What is missing
+  is a judgement nothing else holds, so silence reproduces the gap it closes.
+- **Retained, never deleted**, and shown struck through with its reason on the report and
+  greyed on the row. Deleting it would make a route whose review asks for unanswerable
+  things look identical to one whose review does not — and that difference is the
+  finding, not the noise.
+- **A ticked item cannot be withdrawn, and a withdrawal is void the moment the operator
+  states something about the item again.** A tick is evidence somebody looked; and an
+  item both ticked and withdrawn is the one combination readable two ways.
+- **Counted as its own `InterventionKind`.** Every other kind measures a cost of running
+  the route; this one measures a defect in what the route *writes*. A route accumulating
+  retirements needs its behaviour review narrowed, which is a different fix from one that
+  asks too many questions or fails too often — and summing them would point the next
+  investigation at the wrong thing.
+
+Note what is deliberately **not** built. Nothing stops the review writing such an item in
+the first place, and the obvious prompt change — *do not raise what nothing can answer* —
+is the kind this codebase has learned thirteen times does not stick, and would cost real
+verification the first time a review guessed wrong about its own reach. The review goes
+on asking; the operator now has an honest way to say no, and the count makes the pattern
+visible if it is one.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

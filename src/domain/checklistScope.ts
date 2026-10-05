@@ -183,7 +183,9 @@ export function itemsForGate(
   return pipeline.stages
     .filter((stage) => stage.status !== "skipped")
     .flatMap((stage) => stage.checklist ?? [])
-    .filter((item) => !item.checked)
+    // Retired items are excluded for the reason skipped stages are: they gate nothing,
+    // so a gate asked for them would be held on questions the operator has withdrawn.
+    .filter((item) => !item.checked && !item.retired)
     .filter((item) => gateFor(gates, item.scope)?.stageId === stageId);
 }
 
@@ -217,7 +219,7 @@ export function unassignedItems(pipeline: TaskPipeline): ChecklistItem[] {
   return pipeline.stages
     .filter((stage) => stage.status !== "skipped")
     .flatMap((stage) => stage.checklist ?? [])
-    .filter((item) => !item.checked)
+    .filter((item) => !item.checked && !item.retired)
     .filter((item) => gateFor(gates, item.scope) === undefined);
 }
 
