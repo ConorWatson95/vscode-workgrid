@@ -1734,6 +1734,18 @@ describe("refreshCheckDeclarations", () => {
     expect(changed).toEqual([]);
   });
 
+  // The vocabulary decides how a checklist is worded, so a project that documents a
+  // new capability must reach a stage that has not written its list yet -- otherwise
+  // the suite grows and the next checklist is still written against the old one.
+  it("carries a newly declared check vocabulary", () => {
+    const { pipeline, changed } = refreshCheckDeclarations(
+      pipe(planStage({}, [done, fix])),
+      source({ checkVocabulary: "tools/e2e/AGENTS.md" }),
+    );
+    expect(changed).toEqual(["plan"]);
+    expect(pipeline.stages[0].checkVocabulary).toBe("tools/e2e/AGENTS.md");
+  });
+
   it("removes a check the project has since dropped", () => {
     const { pipeline, changed } = refreshCheckDeclarations(
       pipe(planStage({ planOutput: "docs/old.md" }, [done, fix])),

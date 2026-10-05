@@ -440,6 +440,7 @@ function parseStage(
     ...(str(raw.verify) ? { verify: str(raw.verify) } : {}),
     ...(str(raw.checkResults) ? { checkResults: str(raw.checkResults) } : {}),
     ...(str(raw.checkManifest) ? { checkManifest: str(raw.checkManifest) } : {}),
+    ...(str(raw.checkVocabulary) ? { checkVocabulary: str(raw.checkVocabulary) } : {}),
     ...(str(raw.planFile) ? { planFile: str(raw.planFile) } : {}),
     ...(str(raw.planOutput) ? { planOutput: str(raw.planOutput) } : {}),
     ...(onFailure ? { onFailure } : {}),

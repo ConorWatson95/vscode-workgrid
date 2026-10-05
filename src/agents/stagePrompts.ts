@@ -820,6 +820,17 @@ export function behaviourReviewPrompt(
    * alarm manufactured by asking a question the route cannot answer.
    */
   coverageRecorded = false,
+  /**
+   * The check suite's own documented vocabulary, read out of the worktree.
+   *
+   * Read in rather than named, because naming it was tried and measured: a gate whose
+   * intent named this exact file and said to read it before declaring an item
+   * inexpressible opened no files at all and declined two items on claims the document
+   * contradicts. See `RouteStageDefinition.checkVocabulary`.
+   *
+   * Absent means unchanged — the prompt asks for a checklist the way it always did.
+   */
+  vocabulary?: string,
 ): string {
   return `${preamble(context, stage)}
 
@@ -837,7 +848,7 @@ that follows it.
 
 Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
-${coverageInstruction(coverageRecorded)}
+${coverageInstruction(coverageRecorded, vocabulary)}
 If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
 }
 
@@ -865,12 +876,23 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
  * nothing then holds them together: a check can cover no item, an item can name a
  * check that nearly fits, and the tag reads as an answer while being an approximation.
  *
- * So the order is stated and it is not cosmetic. Decide what a person must observe;
- * that is the checklist, and it is complete before any check exists. Then implement
- * the items that a machine can answer, one check per item, each named after the item
- * it answers. Under that rule a gap is not a judgement anybody makes — it is simply an
- * item with no implementation, which is the only definition that stays true as the
- * list changes.
+ * So the order is stated and it is not cosmetic. **The checklist derives from the
+ * specification, and it is written in the vocabulary the suite can express.** Then one
+ * check per item, each named after the item it answers. Under that rule a gap is not a
+ * judgement anybody makes — it is simply an item with no implementation, which is the
+ * only definition that stays true as the list changes.
+ *
+ * The first version of this instruction had it the other way round and said so in
+ * capitals: *"First write the checklist, complete, without thinking about what can be
+ * automated."* That is a defensible rule and it is the wrong one, because applying
+ * automation afterwards as a *filter* makes the untagged remainder whatever the suite
+ * happens not to reach — which is a fact about the tooling, arrived at by a session
+ * that was told not to think about the tooling while writing. Measured on the Pyramid
+ * export task: seven items, three of them left to a person on three consecutive runs,
+ * and two of those three were expressible all along. Writing the list against the
+ * vocabulary does not shrink the specification; it states the same requirement in
+ * terms that can be settled, and leaves the genuinely unreachable parts named as the
+ * missing capability rather than as a shrug.
  *
  * `summariseCoverage` counts the checks no item names, because the derivation is the
  * one thing a reply cannot be trusted to have got right and it is invisible read from
@@ -884,18 +906,76 @@ If nothing needs manual verification, reply with exactly: NONE${deferralInstruct
  * property of the project's own tooling and belongs in the stage's intent; a harness
  * that named a file here would stop being generic, which is the line `StageContext`
  * draws everywhere else. So the instruction is conditional on the project having said
- * how — absent that, this asks for tagging only, exactly as before.
+ * how — absent that, this asks for tagging only, exactly as before. The vocabulary is
+ * the same: the harness says a vocabulary governs the wording, and only the project
+ * says what it is.
  */
-function coverageInstruction(recorded: boolean): string {
+
+/**
+ * How much of the vocabulary document is quoted. It lands in a prompt, not in the
+ * state file, so the cap is generous — the cost is one session's input tokens against
+ * a capability the session will otherwise claim it does not have.
+ */
+export const MAX_VOCABULARY_CHARS = 24_000;
+
+/**
+ * The suite's own documented vocabulary, quoted into the prompt.
+ *
+ * **Read in, never named**, which is `planFile`'s rule and for the measured reason:
+ * the gate that produced the failure above had an intent naming this exact document
+ * and telling the session to read it before declaring an item inexpressible. The
+ * session recorded `pathsRead []`, opened nothing, and declined two items on claims
+ * the document contradicts. An instruction to go and read something is a fact nobody
+ * has until somebody reads it.
+ *
+ * Capped and **announced**, the rule truncated command output follows: a document that
+ * simply stops reads as a vocabulary that ends there, which is exactly the false
+ * limitation this is here to remove.
+ */
+function vocabularySection(vocabulary?: string): string {
+  if (!vocabulary) return "";
+  const trimmed = vocabulary.trim();
+  if (!trimmed) return "";
+  const body =
+    trimmed.length > MAX_VOCABULARY_CHARS
+      ? `${trimmed.slice(0, MAX_VOCABULARY_CHARS)}
+
+[...abridged — the rest of this document was not included. Read the file itself before concluding it cannot express something.]`
+      : trimmed;
+  return `
+## What a check here is able to say
+
+This is the check suite's own documentation, as it stands in this worktree now. It is
+what decides how the checklist below is worded, so read it before writing a single
+item. It is also what grows: a vocabulary that gains a step answers items it could not
+answer last time, and a re-run of this stage reads it as it is then.
+
+${body}
+
+`;
+}
+
+function coverageInstruction(recorded: boolean, vocabulary?: string): string {
   if (!recorded) return "";
   return `
 This route runs automated checks, and it records which of them ran. Work in this
 order, because the checklist is the statement of what must be true and a check is one
 item's implementation — never a second list written beside it.
-
-**First** write the checklist, complete, without thinking about what can be automated.
-It is what a person must observe for this change to be believed.
-
+${vocabularySection(vocabulary)}
+**First** write the checklist from the **specification** — the ticket, the plan and any
+governing document named above — stating what must be observably true of this change.
+Not what you imagine somebody clicking: what the specification requires, in claims that
+can be settled by looking at the running application.
+${
+    vocabulary
+      ? `Write it **in the vocabulary above**, which is what decides what this list can
+say. An item you can state in those terms is one you can prove, so state it in them.
+Where the specification requires something the vocabulary cannot reach, the item is
+still written — but it is a **capability gap**, named as one below, and it is the only
+kind of item that costs a person anything.
+`
+      : ""
+}
 Write **one property per item**, in the smallest form that is still worth checking. Not
 a procedure with several observations in it, and not several states bundled together —
 "try all five options and confirm nothing else changed" is one item nothing can answer,
@@ -904,10 +984,9 @@ an item is the unit a check implements, so a bundled item is one no single check
 establish the whole of, and the rule below then obliges you to leave it untagged. The
 checklist that ends up cheapest for a person is the one written in separable claims.
 
-**Then** take each item in turn and ask whether a machine can answer it. Where it can,
-and this stage's instructions tell you how to add a check, write **one check for that
-item**, give it an id that names what the item asserts, and end the item's line with
-that id:
+**Then** take each item in turn and write the check that proves it. Where the
+vocabulary reaches it, write **one check for that item**, give it an id that names what
+the item asserts, and end the item's line with that id:
 
   - The Excel export carries the selected From period [check: export-carries-from]
 
@@ -929,6 +1008,14 @@ failure: whether a **number is right**, whether a layout reads well, whether the
 a person asked for is what they got — none of those have an exit code. Those items are
 counted as gaps and shown at the gate, so the list is a record of what is genuinely
 left for a person rather than a pile nobody has sorted through.
+
+The two kinds of untagged item are not the same thing and the difference is the whole
+value of the section below. One is a **judgement** — nothing could ever answer it, and
+a person is the right answer forever. The other is a **capability gap** — the suite
+cannot express it *yet*, and naming precisely what is missing is what gets it added.
+Say which, every time. A suite that grows answers more of the specification, so the
+same checklist written against a richer vocabulary leaves less for a person; that only
+happens if the gaps were written as the missing step rather than as a shrug.
 
 **Then say, in one line each, why every untagged item is untagged**, under a final
 section headed exactly:

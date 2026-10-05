@@ -3394,6 +3394,60 @@ describe("checks that answer checklist items", () => {
     expect(stage.subtasks[0].status).toBe("done");
   });
 
+  it("quotes the declared vocabulary into the checklist-writing prompt", async () => {
+    // Read in, never named. The gate that produced this failure had an intent naming
+    // the document and telling the session to read it; it opened no files and declined
+    // two items on claims the document contradicts.
+    const sessions = fakeSessions({ "verify-locally:": { text: "- A thing" } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        "tools/e2e/checks.json": '{"checks":[]}',
+        "tools/e2e/AGENTS.md": "waitFor supports state: hidden.",
+      },
+    });
+    const subject = {
+      ...task(),
+      pipeline: createPipeline({
+        ...AUTHORING,
+        id: "vocab",
+        stages: [{ ...AUTHORING.stages[0], checkVocabulary: "tools/e2e/AGENTS.md" }],
+      }),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const prompt = sessions.calls.find((c) => c.label.startsWith("verify-locally:"))!.prompt;
+    expect(prompt).toContain("waitFor supports state: hidden.");
+  });
+
+  it("writes the checklist as before when the document cannot be read", async () => {
+    // Unreadable means absent, the direction every optional read here chooses: a wider
+    // checklist is the failure this replaces, not a worse one, and holding the stage
+    // over a path somebody mistyped would stop every route in the project.
+    const sessions = fakeSessions({ "verify-locally:": { text: "- A thing" } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: { "tools/e2e/checks.json": '{"checks":[]}' },
+    });
+    const subject = {
+      ...task(),
+      pipeline: createPipeline({
+        ...AUTHORING,
+        id: "vocab-missing",
+        stages: [{ ...AUTHORING.stages[0], checkVocabulary: "tools/e2e/NOPE.md" }],
+      }),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const prompt = sessions.calls.find((c) => c.label.startsWith("verify-locally:"))!.prompt;
+    expect(prompt).not.toContain("What a check here is able to say");
+    expect(prompt).toContain("Untagged items:");
+  });
+
   it("leaves it alone when the session wrote a check", async () => {
     const files: Record<string, string> = { "tools/e2e/checks.json": '{"checks":[]}' };
     const sessions = fakeSessions({

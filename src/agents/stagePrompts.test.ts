@@ -27,6 +27,7 @@ import {
   readStageReply,
   stripBlocked,
   stripDeferrals,
+  MAX_VOCABULARY_CHARS,
 } from "./stagePrompts";
 import { TaskStage } from "../domain/taskPipeline";
 
@@ -359,6 +360,73 @@ describe("behaviourReviewPrompt", () => {
     expect(prompt).toContain("what would indicate a regression");
     expect(prompt).toContain("settled by reading the code");
     expect(prompt).toContain("NONE");
+  });
+});
+
+describe("the check vocabulary", () => {
+  const VOCAB = "waitFor supports state: hidden, and expectHidden asserts absence.";
+
+  it("is quoted into the prompt rather than named for the session to go and read", () => {
+    // Naming it was tried and measured: a gate whose intent named the document and
+    // said to read it recorded pathsRead [] and declined two items on claims the
+    // document contradicts.
+    const prompt = behaviourReviewPrompt(
+      CONTEXT,
+      stage({ kind: "behaviourReview" }),
+      [],
+      true,
+      VOCAB,
+    );
+    expect(prompt).toContain(VOCAB);
+    expect(prompt).toContain("What a check here is able to say");
+  });
+
+  it("asks for the checklist to be written in its terms", () => {
+    const prompt = behaviourReviewPrompt(
+      CONTEXT,
+      stage({ kind: "behaviourReview" }),
+      [],
+      true,
+      VOCAB,
+    );
+    expect(prompt).toContain("in the vocabulary above");
+    expect(prompt).toContain("capability gap");
+    // The old rule said the opposite, and it is what produced items nothing answers.
+    expect(prompt).not.toContain("without thinking about what can be automated");
+  });
+
+  it("is absent when the stage declares none, and the instruction is unchanged", () => {
+    const prompt = behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" }), [], true);
+    expect(prompt).not.toContain("What a check here is able to say");
+    expect(prompt).not.toContain("in the vocabulary above");
+    // Still asks for the derivation and the accounting it always asked for.
+    expect(prompt).toContain("Untagged items:");
+  });
+
+  it("announces an abridgement, since a document that simply stops reads as a limit", () => {
+    const long = `${"x".repeat(MAX_VOCABULARY_CHARS)}TAIL-THAT-SHOULD-NOT-APPEAR`;
+    const prompt = behaviourReviewPrompt(
+      CONTEXT,
+      stage({ kind: "behaviourReview" }),
+      [],
+      true,
+      long,
+    );
+    expect(prompt).not.toContain("TAIL-THAT-SHOULD-NOT-APPEAR");
+    expect(prompt).toContain("abridged");
+  });
+
+  it("says nothing when the check instruction itself is not being asked for", () => {
+    // No gate records outcomes, so there are no checks to write and no vocabulary to
+    // write them in.
+    const prompt = behaviourReviewPrompt(
+      CONTEXT,
+      stage({ kind: "behaviourReview" }),
+      [],
+      false,
+      VOCAB,
+    );
+    expect(prompt).not.toContain(VOCAB);
   });
 });
 

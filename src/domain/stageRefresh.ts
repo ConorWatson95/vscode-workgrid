@@ -57,6 +57,7 @@ const REFRESHABLE = [
   "verify",
   "checkResults",
   "checkManifest",
+  "checkVocabulary",
   "planFile",
   "planOutput",
   "requiresPullRequest",
@@ -249,6 +250,7 @@ const CHECK_DECLARATIONS = [
   // Beside it for the same reason, and because the pair is one declaration: where the
   // checks are written and where their results land.
   "checkManifest",
+  "checkVocabulary",
   "planFile",
   "planOutput",
   "requiresPullRequest",
@@ -1116,6 +1118,7 @@ function findDefinition(
       verify?: string;
       checkResults?: string;
       checkManifest?: string;
+      checkVocabulary?: string;
       planFile?: string;
       planOutput?: string;
       requiresPullRequest?: boolean;

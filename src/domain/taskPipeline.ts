@@ -653,6 +653,8 @@ export interface TaskStage {
    * refreshed with `checkResults` -- see `RouteStageDefinition.checkManifest`.
    */
   checkManifest?: string;
+  /** Mirrors RouteStageDefinition.checkVocabulary. */
+  checkVocabulary?: string;
   /**
    * The check that actually ran, and what it returned.
    *

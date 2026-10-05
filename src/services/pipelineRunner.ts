@@ -805,6 +805,36 @@ export class PipelineRunner {
     }
   }
 
+  /**
+   * The check suite's own documentation, read out of the worktree.
+   *
+   * Unreadable means absent, the direction every optional read here chooses: a
+   * vocabulary that could not be loaded must leave the prompt asking for a checklist
+   * exactly as it did before, never hold the stage. A stage declaring one and getting
+   * none writes a wider list than it could have, which is the failure this replaces
+   * and not a worse one.
+   */
+  private async readCheckVocabulary(
+    task: TaskWorkspace,
+    stage: TaskStage,
+  ): Promise<string | undefined> {
+    if (!stage.checkVocabulary || !this.readWorktreeFile) return undefined;
+    const { command: path } = substitutePlaceholders(stage.checkVocabulary, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      baseCommit: task.baseCommit,
+      worktreePath: task.worktreePath,
+      repoRoot: task.repositoryRoot,
+      ticket: taskTicket(task),
+    });
+    try {
+      return await this.readWorktreeFile(task.worktreePath, path);
+    } catch {
+      return undefined;
+    }
+  }
+
   private async applyCheckOutcomes(
     task: TaskWorkspace,
     stage: TaskStage,
@@ -2001,6 +2031,14 @@ Note: ${covered.skipped}`
     // A correction outranks the stage's kind. Even a review being corrected is being
     // *repaired*, not re-run, and asking it for a fresh review would discard the
     // reading that the correction is an amendment to.
+    // Read for a checklist-writing stage only, and before the prompt is composed: the
+    // vocabulary decides how the items are worded, so it is an input to the writing
+    // rather than something to consult afterwards.
+    const vocabulary =
+      !subtask.correction && producesChecklist(stage.kind)
+        ? await this.readCheckVocabulary(task, stage)
+        : undefined;
+
     const prompt = subtask.correction
       ? correctionPrompt(
           context,
@@ -2026,6 +2064,7 @@ Note: ${covered.skipped}`
               task.pipeline!.stages.some(
                 (candidate) => candidate.kind === "humanVerification" && candidate.checkResults,
               ),
+              vocabulary,
             )
           : subtaskPrompt(context, stage, subtask, planSteps);
 

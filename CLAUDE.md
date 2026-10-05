@@ -3329,12 +3329,79 @@ recorded, *correct* fact with no disposition attached to it.
   asks too many questions or fails too often — and summing them would point the next
   investigation at the wrong thing.
 
-Note what is deliberately **not** built. Nothing stops the review writing such an item in
-the first place, and the obvious prompt change — *do not raise what nothing can answer* —
-is the kind this codebase has learned thirteen times does not stick, and would cost real
-verification the first time a review guessed wrong about its own reach. The review goes
-on asking; the operator now has an honest way to say no, and the count makes the pattern
-visible if it is one.
+Note what is deliberately **not** built here. Nothing in *this* change stops the review
+writing such an item in the first place, and the obvious prompt change — *do not raise
+what nothing can answer* — is the kind this codebase has learned thirteen times does not
+stick, and would cost real verification the first time a review guessed wrong about its
+own reach. The section below is the answer to that, and it is not a prohibition: it is a
+change to what the list is written **from**.
+
+### The checklist was written first and the automation applied as a filter
+
+`RouteStageDefinition.checkVocabulary`, 5 Oct 2026, correcting the section above on the
+same day. Withdrawal is a palliative, and the operator said so in one line: *Claude
+should generate a checklist based on a specification that can actually be tested by
+Playwright. If Playwright grows, so should the checklist.*
+
+The instruction responsible was explicit, in capitals, and had been there since the
+check mechanism shipped:
+
+> *"**First** write the checklist, complete, without thinking about what can be
+> automated."*
+
+It is a defensible rule and it is the wrong one. Applying automation afterwards as a
+**filter** makes the untagged remainder whatever the suite happens not to reach — a fact
+about the tooling, arrived at by a session that was told not to think about the tooling
+while it wrote. Measured on the Pyramid export task: seven items, three left to a person
+on three consecutive runs, and **two of the three were expressible all along**. One was
+declined because *"the suite sets dropdowns by script and cannot reproduce the timing"*
+and another because the format *"has no step for this"*; `tools/e2e/AGENTS.md` documents
+`waitFor` with `state: hidden` and `expectHidden`, which answer both.
+
+So the checklist derives from the **specification** and is written **in the vocabulary
+the suite can express**. That is not a smaller list — the specification is unchanged —
+it is the same requirement stated in terms that can be settled, with the genuinely
+unreachable parts named as the **missing capability** rather than as a shrug. The prompt
+now distinguishes the two kinds of untagged item explicitly: a *judgement*, which a
+person answers forever, and a *capability gap*, which is a thing to go and build. The
+first is why withdrawal still exists; the second is why the list grows back when the
+suite does.
+
+**Read in, never named**, which is `planFile`'s rule and the half that was measured
+rather than reasoned. The gate's intent already named that exact document and told the
+session to read it before declaring an item inexpressible. `pathsRead []` — it opened no
+files at all, and declined two items on claims the document contradicts. An instruction
+to go and read something is a fact nobody has until somebody reads it, so the document is
+quoted into the prompt and the declaration is where the project says which one.
+
+Four rules:
+
+- **The third of a trio, declared beside the other two.** `checkResults` says where
+  outcomes land, `checkManifest` where checks are declared, `checkVocabulary` what a
+  check is *able to say*. Each answers a different question and the project owns all
+  three: the harness states that a vocabulary governs the wording and never what it is,
+  the line `StageContext` draws everywhere else.
+- **Absence means unchanged.** No declaration, no quoted document, and the instruction
+  asks for a checklist exactly as it did. An unreadable path is the same answer, never a
+  hold — a wider checklist is the failure this replaces, and stopping every route in a
+  project over a mistyped path would be a worse one.
+- **Refreshed at the `refreshCheckDeclarations` tier**, with `checkManifest` and
+  `planOutput`: a stage that has not written its list yet must pick up a vocabulary the
+  project documented since. That is the whole of *"if Playwright grows, so should the
+  checklist"* — a re-run reads the document as it stands then, so a gap becomes a ticked
+  item without anybody re-authoring anything.
+- **Capped and announced** (`MAX_VOCABULARY_CHARS`), the rule truncated command output
+  follows, and here with a sharper edge: a document that simply stops reads as a
+  vocabulary that ends there, which is exactly the false limitation this exists to
+  remove.
+
+Worth separating from the twelve reply-claims-an-outcome instances, which this is not.
+Nothing was misparsed and no marker was missing. The session was asked for a list, wrote
+the list it was asked for, and the **instruction** was what guaranteed the list contained
+items nothing could answer. The nearest relative is the four-cause diagnostic one level
+up: no declaration existed for *where the check vocabulary is documented*, so this is the
+**expressiveness** case — the rarest of the four and the only one that justifies a new
+primitive.
 
 ### A retracted rule went on asking its questions
 

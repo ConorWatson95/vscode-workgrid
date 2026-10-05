@@ -452,6 +452,42 @@ export interface RouteStageDefinition {
   checkManifest?: string;
 
   /**
+   * Where the check suite's own vocabulary is documented, relative to the worktree.
+   *
+   * The third of the trio and the one that decides what the checklist can say at all.
+   * `checkManifest` is where checks are declared and `checkResults` is where their
+   * outcomes land; this is what a check is **able to express**, and it is read into the
+   * checklist-writing prompt rather than named in it.
+   *
+   * It exists because the order the prompt stated was wrong. *Write the checklist
+   * complete, without thinking about what can be automated, then tag what a machine can
+   * answer* treats automation as a filter applied afterwards, so the list is authored
+   * against an imagined person and the untagged remainder is whatever the suite happens
+   * not to reach. A checklist written from the **specification, in the vocabulary the
+   * suite can express**, is a different artefact: every item it can state, it can prove,
+   * and the residue is a capability gap somebody can go and close rather than a click
+   * somebody pays for on every task forever.
+   *
+   * The inversion also makes the list grow with the tooling, which is the property that
+   * makes it worth a declaration. A re-run or a correction reads the vocabulary **as it
+   * now stands**, so a step added to the suite turns last run's gap into this run's
+   * checked item, with no change to any route and nothing for an operator to remember.
+   *
+   * **Read in, never named**, and that is the measured half. On the Pyramid export task
+   * the gate's intent named this exact file and said to read it before concluding an
+   * item was inexpressible; the session opened **no files at all** (`pathsRead []`) and
+   * declined two items on claims about the tooling that the document contradicts on its
+   * own pages. Naming a document is an instruction the reply cannot be checked against
+   * — the disease this codebase keeps closing — and the fix is the one `planFile`
+   * already uses for a document a stage must not improvise around: the harness reads it
+   * and puts it in the prompt.
+   *
+   * Capped and announced like every other inlined artefact here, and absent means
+   * unchanged: a route declaring nothing gets the prompt it got before.
+   */
+  checkVocabulary?: string;
+
+  /**
    * Where a failure of this stage's `verify` is routed.
    *
    * Absent means what every failed check did before this existed: the stage fails and

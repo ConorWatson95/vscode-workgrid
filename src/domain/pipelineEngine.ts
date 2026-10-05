@@ -272,6 +272,7 @@ function createStage(
     // indistinguishable from the feature being absent.
     ...(definition.checkResults ? { checkResults: definition.checkResults } : {}),
     ...(definition.checkManifest ? { checkManifest: definition.checkManifest } : {}),
+    ...(definition.checkVocabulary ? { checkVocabulary: definition.checkVocabulary } : {}),
     ...(definition.planFile ? { planFile: definition.planFile } : {}),
     ...(definition.planOutput ? { planOutput: definition.planOutput } : {}),
     ...(definition.checklistScope
