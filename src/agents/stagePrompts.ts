@@ -773,13 +773,25 @@ export function subtaskPrompt(
    * ones the stage is asked about — not whatever it makes of the document itself.
    */
   planSteps?: readonly PlanStep[],
+  /**
+   * The check suite's documented vocabulary, read out of the worktree.
+   *
+   * An ordinary stage gets this for the same reason a checklist-writing one does, and
+   * the measurement that put it here is the same: three prompt-layer attempts asked a
+   * gate to author checks and all three wrote nothing, the third while holding the
+   * whole document. Writing checks is implementation work with a file as its output,
+   * so the stage that owes that file is the one that needs the vocabulary.
+   *
+   * Absent means unchanged — this is exactly the prompt it always was.
+   */
+  vocabulary?: string,
 ): string {
   const body = `${preamble(context, stage)}
 
 Objective: ${subtask.title}
 
 ${subtask.prompt}
-
+${vocabularySection(vocabulary)}
 Stay within this objective.${deferralInstruction()}${blockedInstruction(stage)}${actionInstruction()}${
     stage.planFile && planSteps && planSteps.length > 0
       ? planStepInstruction(stage.planFile, planSteps)
@@ -952,9 +964,9 @@ function vocabularySection(vocabulary?: string): string {
 ## What a check here is able to say
 
 This is the check suite's own documentation, as it stands in this worktree now. It is
-what decides how the checklist below is worded, so read it before writing a single
-item. It is also what grows: a vocabulary that gains a step answers items it could not
-answer last time, and a re-run of this stage reads it as it is then.
+what decides what a check here can express, so read it before writing anything. It is
+also what grows: a vocabulary that gains a step reaches what it could not reach last
+time, and a re-run of this stage reads it as it is then.
 
 ${body}
 

@@ -416,6 +416,30 @@ describe("the check vocabulary", () => {
     expect(prompt).toContain("abridged");
   });
 
+  it("reaches an ordinary stage, which is the one that owes the file", () => {
+    // Three prompt-layer attempts asked a gate to author checks and all three wrote
+    // nothing, the third while holding the whole document.
+    const prompt = subtaskPrompt(
+      CONTEXT,
+      stage({ kind: "implementation" }),
+      { id: "checks-1", title: "Write the checks", prompt: "P", status: "pending" },
+      undefined,
+      VOCAB,
+    );
+    expect(prompt).toContain(VOCAB);
+    expect(prompt).toContain("What a check here is able to say");
+  });
+
+  it("leaves an ordinary stage's prompt exactly as it was when none is declared", () => {
+    const prompt = subtaskPrompt(CONTEXT, stage(), {
+      id: "fix-1",
+      title: "T",
+      prompt: "P",
+      status: "pending",
+    });
+    expect(prompt).not.toContain("What a check here is able to say");
+  });
+
   it("says nothing when the check instruction itself is not being asked for", () => {
     // No gate records outcomes, so there are no checks to write and no vocabulary to
     // write them in.

@@ -2031,13 +2031,11 @@ Note: ${covered.skipped}`
     // A correction outranks the stage's kind. Even a review being corrected is being
     // *repaired*, not re-run, and asking it for a fresh review would discard the
     // reading that the correction is an amendment to.
-    // Read for a checklist-writing stage only, and before the prompt is composed: the
-    // vocabulary decides how the items are worded, so it is an input to the writing
-    // rather than something to consult afterwards.
-    const vocabulary =
-      !subtask.correction && producesChecklist(stage.kind)
-        ? await this.readCheckVocabulary(task, stage)
-        : undefined;
+    // Read for any stage that declares one, not only a checklist-writing gate. Three
+    // prompt-layer attempts asked a gate to author checks and all three wrote nothing,
+    // the third while holding the whole document -- so the stage that owes the file is
+    // the one that needs the vocabulary, and that is an implementation stage.
+    const vocabulary = subtask.correction ? undefined : await this.readCheckVocabulary(task, stage);
 
     const prompt = subtask.correction
       ? correctionPrompt(
@@ -2066,7 +2064,7 @@ Note: ${covered.skipped}`
               ),
               vocabulary,
             )
-          : subtaskPrompt(context, stage, subtask, planSteps);
+          : subtaskPrompt(context, stage, subtask, planSteps, vocabulary);
 
     let pipeline = task.pipeline!;
     // Registered before the session runs, so the steps exist to be unaccounted for
