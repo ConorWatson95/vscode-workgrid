@@ -5,6 +5,7 @@ import {
   ALL_STAGE_KINDS,
   ChecklistAudience,
   looksLikeKindEntry,
+  producesChecklist,
   RouteDefinition,
   RouteStageDefinition,
   sendBackEntryKind,
@@ -408,10 +409,18 @@ function parseStage(
     return undefined;
   }
 
-  // And again for the manifest, from the other end: a file of checks that no command
-  // ever runs is dead config, and the hold it exists to license would then fire on a
-  // gate whose checks could never have been executed anyway.
-  if (str(raw.checkManifest) && !str(raw.verify)) {
+  // And again for the manifest, from the other end — but only on a stage that writes a
+  // checklist, because that is the only place the holds it licenses fire, and there a
+  // file of checks no command runs would hold a gate whose checks never executed. On
+  // any other stage the manifest is the artefact the stage *owes* (`stageProductivity`
+  // reads it either side of the session), and a check-authoring stage declares no
+  // verify on purpose: one exiting 0 outranks that hold entirely. Rejecting it there
+  // refused the one route that declared what its authoring stage produces.
+  if (
+    str(raw.checkManifest) &&
+    !str(raw.verify) &&
+    producesChecklist(kind as StageKind)
+  ) {
     problems.push(
       `Route "${routeId}" stage "${id}": "checkManifest" needs a "verify" command to ` +
         "run what it declares. Declare the check, or remove the manifest path.",

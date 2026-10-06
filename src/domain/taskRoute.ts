@@ -445,9 +445,11 @@ export interface RouteStageDefinition {
    * `domain/checkAuthoring.ts` for the narrowings that keep that from firing on a gate
    * whose gaps are honest.
    *
-   * Only meaningful alongside `verify`, and rejected at load without one, for
-   * `checkResults`' reason: a manifest nothing ever runs is dead config, and config
-   * that silently does nothing is indistinguishable from the feature being absent.
+   * On a checklist-writing stage it is rejected at load without a `verify`, for
+   * `checkResults`' reason: a manifest nothing ever runs is dead config, and the holds
+   * it licenses would fire on checks that never executed. Any other stage may declare
+   * it bare, as the artefact it owes -- a check-authoring stage declares no `verify` on
+   * purpose, because one exiting 0 outranks `stageProductivity` entirely.
    */
   checkManifest?: string;
 

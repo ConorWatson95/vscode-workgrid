@@ -3593,6 +3593,15 @@ Four rules:
   so the runtime change reached it only once config said what it owed. That is the trio
   behaving as designed and also the reason the fix is two edits rather than one.
 
+**And the parser refused that declaration** (0.140.0, the same day). `checkManifest` was
+rejected at load without a `verify`, so declaring it on `rc-write-checks` and
+`sc-write-checks` took **both routes** out of config — every task on `report-change`
+and `sql-change` at once. The rule's reason only holds where the field licenses a hold
+on a gate, so it now applies to checklist-writing stages only; anywhere else the
+manifest is the artefact a stage owes, and the authoring stage declares no `verify` on
+purpose. Two rules, each written correctly for its own half of the trio, had never been
+checked against each other — and the config edit was never loaded before it shipped.
+
 Worth separating from the twelve reply-claims-an-outcome instances. Nothing was
 misparsed and no marker was missing: the harness held a stage for not doing work it had
 itself measured, through a signal that was a proxy for the work rather than the work.

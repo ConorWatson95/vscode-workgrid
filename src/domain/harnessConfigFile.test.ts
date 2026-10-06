@@ -181,6 +181,30 @@ describe("parseHarnessConfig", () => {
   });
 });
 
+describe("checkManifest without a verify", () => {
+  const MANIFEST = ".taskworkspaces/site-checks.json";
+
+  // The check-authoring stage owes the manifest and declares no verify on purpose — a
+  // check exiting 0 would outrank the hold that catches it writing nothing.
+  it("is accepted on a stage that owes it", () => {
+    const parsed = parseHarnessConfig({
+      routes: [{ ...ROUTE, stages: [{ ...STAGE, checkManifest: MANIFEST }, GATE] }],
+    });
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.routes[0].stages[0].checkManifest).toBe(MANIFEST);
+  });
+
+  // On a gate it licenses holds, and a manifest nothing runs would hold on checks that
+  // never executed.
+  it("is rejected on a stage that writes a checklist", () => {
+    const parsed = parseHarnessConfig({
+      routes: [{ ...ROUTE, stages: [STAGE, { ...GATE, checkManifest: MANIFEST }] }],
+    });
+    expect(parsed.routes).toEqual([]);
+    expect(parsed.problems.join(" ")).toContain("\"checkManifest\" needs a \"verify\"");
+  });
+});
+
 describe("checklistAudience", () => {
   const routeWith = (over: Record<string, unknown>) => ({
     ...ROUTE,
