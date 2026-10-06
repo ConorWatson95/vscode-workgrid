@@ -180,13 +180,56 @@ export function itemsForGate(
   const gates = checklistGates(pipeline);
   if (!gates.some((gate) => gate.stageId === stageId)) return [];
 
+  const gateStage = pipeline.stages.find((stage) => stage.id === stageId);
+
   return pipeline.stages
     .filter((stage) => stage.status !== "skipped")
     .flatMap((stage) => stage.checklist ?? [])
     // Retired items are excluded for the reason skipped stages are: they gate nothing,
     // so a gate asked for them would be held on questions the operator has withdrawn.
     .filter((item) => !item.checked && !item.retired)
+    .filter((item) => holdsThisGate(gateStage, item))
     .filter((item) => gateFor(gates, item.scope)?.stageId === stageId);
+}
+
+/**
+ * Whether an item with no check behind it still holds a check-settled gate.
+ *
+ * `checkCoverage` states the rule and nothing enforced it: *a gap is counted and
+ * named, never blocking*. It was written about the coverage mechanism not adding a
+ * hold of its own, and the gate went on holding anyway — because `itemsForGate`
+ * knows about ticks and knows nothing about checks. So on a gate whose whole job is
+ * to confirm its suite passed, an item no check answers left the operator the two
+ * moves `retireChecklistItem` was built for: tick it, asserting a verification
+ * nobody performed, or leave the route stopped. Measured on the Pyramid export task,
+ * that was two items of seven, on every run, for two weeks.
+ *
+ * Derived rather than declared by the writer, which is the half that matters. The
+ * same question was first answered by asking the *review* to tag an item it judged
+ * unanswerable — and the review is the party the constraint is on, which is the rule
+ * this codebase breaks only by accident. What a check covers is a fact the harness
+ * already holds.
+ *
+ * Four narrowings, each load-bearing:
+ *
+ * - **Only a gate that declares `checkManifest`.** That declaration is the project
+ *   saying this gate's items are meant to be settled by checks. Absence means
+ *   unchanged, so every gate that has not opted in holds exactly as it did.
+ * - **Only once the suite has actually run.** `checkOutcomes` is the record of a run,
+ *   not the exit code — the distinction `checkCoverage` already keeps. Before it
+ *   exists, nothing is known about what a check answers, and absence of measurement
+ *   is not permission to pass.
+ * - **An item that names a check always holds.** Failed, or naming a check the
+ *   manifest does not contain, it is exactly the item the gate exists for.
+ * - **Reported, never hidden.** The item stays on the stage with no tick and
+ *   `formatCoverageLine` counts it, so a gate that keeps producing them is visible as
+ *   the defect in the review it is. Nothing here deletes a question; it stops one
+ *   nothing can answer from being the thing that stops the route.
+ */
+function holdsThisGate(gateStage: TaskStage | undefined, item: ChecklistItem): boolean {
+  if (!gateStage?.checkManifest) return true;
+  if (!gateStage.checkOutcomes?.length) return true;
+  return item.coveredBy !== undefined;
 }
 
 /**

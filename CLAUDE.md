@@ -3641,6 +3641,52 @@ no disposition attached to it** — the same shape as `untaggedNotes` gating a r
 `retireChecklistItem`'s own section, closed this time by making the writer's distinction
 reach the list rather than by giving the operator another button.
 
+### And the gate held on them anyway
+
+`holdsThisGate` in `checklistScope.ts`, 6 Oct 2026, correcting the section above within
+the hour. The judgement tag shipped, the gate was looked at again, and **two items were
+still outstanding** — because the tag only reaches a list written after it, and because
+it asks the *review* to decide. That is the party the constraint is on, which is the one
+rule this codebase breaks only by accident.
+
+`checkCoverage` had already written the correct rule and nothing enforced it:
+
+> *A gap is counted and named, never blocking.*
+
+It was written about the coverage mechanism not adding a hold of its own. The gate went
+on holding regardless, because `itemsForGate` knows about ticks and knows nothing about
+checks — so on a gate whose entire job is to confirm its suite passed, an item no check
+answers was the thing that stopped the route. Two of seven, on every run, for two weeks.
+
+**Derived, not declared**, and that is the whole difference from the attempt an hour
+earlier. What a check covers is a fact the harness already holds: the gate's own
+`checkOutcomes`, joined to the item's `coveredBy`. Nobody has to tag anything, the rule
+reaches lists already written, and a review that writes a bad item cannot make it
+unblocking by saying so.
+
+Four narrowings:
+
+- **Only a gate that declares `checkManifest`**, which is the project saying this gate's
+  items are meant to be settled by checks. Absence means unchanged.
+- **Only once the suite has run.** `checkOutcomes` is the record of a run, not an exit
+  code — `checkCoverage`'s own distinction. Before it exists nothing is known about what
+  a check answers, and absence of measurement is not permission to pass.
+- **An item that names a check always holds.** Failed, or naming a check the manifest
+  does not contain, it is exactly the item the gate exists for.
+- **Reported, never hidden.** The item stays unticked on the stage and
+  `formatCoverageLine` counts it, so a review that keeps producing them stays visible as
+  the defect it is.
+
+The judgement tag above is not withdrawn — it keeps an unanswerable item out of the list
+in the first place, which is better than one that sits there not blocking. But it is now
+the cosmetic half, and this is the half that makes the route move.
+
+Worth recording for the pattern rather than the fix: six attempts at one problem, five of
+them at the prompt and one at the operator's own hands, and the working one came from
+reading a rule the codebase had already written down and checking whether anything
+implemented it. **A rule stated in a comment and enforced nowhere is the same failure as
+a marker nothing parses**, one layer up from the model.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

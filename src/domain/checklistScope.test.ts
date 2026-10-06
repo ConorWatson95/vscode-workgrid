@@ -366,3 +366,57 @@ describe("splitScopeTag", () => {
     expect(splitScopeTag("[local] Run it", [])).toEqual({ text: "[local] Run it" });
   });
 });
+
+describe("a check-settled gate and the items no check answers", () => {
+  /** One gate, declaring a manifest, with its suite already run. */
+  function checkedGate(items: ChecklistItem[], outcomes?: { id: string; passed: boolean }[]) {
+    return {
+      routeId: "report-change",
+      stages: [
+        stage({
+          id: "local",
+          kind: "humanVerification",
+          checklist: items,
+          checkManifest: ".taskworkspaces/site-checks.json",
+          checkOutcomes: outcomes,
+        }),
+      ],
+    } satisfies TaskPipeline;
+  }
+
+  const run = [{ id: "export-from", passed: true }];
+
+  it("stops holding on an item nothing covers", () => {
+    // The whole point: a gate cannot pass while an item is outstanding, so an item no
+    // check answers left two moves -- a tick nobody earned, or a route left stopped.
+    const pipeline = checkedGate(
+      [item({ id: "a", text: "The export carries From", coveredBy: "export-from" }), item({ id: "b", text: "The figures are right" })],
+      run,
+    );
+    expect(itemsForGate(pipeline, "local").map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("still holds on an item that names a check", () => {
+    // Failed, or naming a check the manifest does not contain, it is exactly the item
+    // the gate exists for.
+    const pipeline = checkedGate([item({ id: "a", coveredBy: "export-from" })], [
+      { id: "export-from", passed: false },
+    ]);
+    expect(itemsForGate(pipeline, "local").map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("holds everything until the suite has actually run", () => {
+    // checkOutcomes is the record of a run. Before it exists nothing is known about
+    // what a check answers, and absence of measurement is not permission to pass.
+    const pipeline = checkedGate([item({ id: "b", text: "The figures are right" })]);
+    expect(itemsForGate(pipeline, "local").map((i) => i.id)).toEqual(["b"]);
+  });
+
+  it("leaves a gate that declares no manifest exactly as it was", () => {
+    const pipeline = {
+      routeId: "report-change",
+      stages: [stage({ id: "local", kind: "humanVerification", checklist: [item({ id: "b" })] })],
+    } satisfies TaskPipeline;
+    expect(itemsForGate(pipeline, "local").map((i) => i.id)).toEqual(["b"]);
+  });
+});
