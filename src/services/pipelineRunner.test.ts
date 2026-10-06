@@ -141,7 +141,13 @@ function makeRunner(
     currentBranch?: string;
     /** Canned verification outcomes, keyed by the command run. */
     verify?: Record<string, { exitCode: number; output?: string; spawnError?: string }>;
-    /** Canned worktree files, keyed by path relative to the worktree. */
+    /**
+     * Canned files, keyed by path relative to whichever root is read.
+     *
+     * A key may be prefixed `<root>:` to pin which root asked for it, since the
+     * manifest and the results come from the worktree and the check vocabulary comes
+     * from the repository root. An unprefixed key answers either.
+     */
     files?: Record<string, string>;
     /**
      * Cumulative human-wait readings, consumed one per call.
@@ -196,7 +202,8 @@ function makeRunner(
           },
       options.files === undefined
         ? undefined
-        : async (_worktreePath, relativePath) => options.files?.[relativePath],
+        : async (root, relativePath) =>
+            options.files?.[`${root}:${relativePath}`] ?? options.files?.[relativePath],
       undefined,
       options.humanWaits === undefined
         ? undefined
@@ -3420,6 +3427,37 @@ describe("checks that answer checklist items", () => {
 
     const prompt = sessions.calls.find((c) => c.label.startsWith("verify-locally:"))!.prompt;
     expect(prompt).toContain("waitFor supports state: hidden.");
+  });
+
+  it("reads the vocabulary from the repository root, never the branch's copy", async () => {
+    // `verify`'s rule one field over: a branch must not choose the terms it is judged
+    // in. The benign failure is what was measured -- three in-flight branches cut 189,
+    // 239 and 683 commits before `tools/e2e` existed, so every one read no vocabulary
+    // at all and wrote a checklist in terms nothing could prove.
+    const sessions = fakeSessions({ "verify-locally:": { text: "- A thing" } });
+    const { runner, repo } = makeRunner(sessions, {
+      verify: { "run-site-checks": { exitCode: 0 } },
+      files: {
+        "tools/e2e/checks.json": '{"checks":[]}',
+        "C:/repos/app:tools/e2e/AGENTS.md": "waitFor supports state: hidden.",
+        "C:/repos/app-t1:tools/e2e/AGENTS.md": "the branch's own idea of what a check may say",
+      },
+    });
+    const subject = {
+      ...task(),
+      pipeline: createPipeline({
+        ...AUTHORING,
+        id: "vocab-root",
+        stages: [{ ...AUTHORING.stages[0], checkVocabulary: "tools/e2e/AGENTS.md" }],
+      }),
+    };
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const prompt = sessions.calls.find((c) => c.label.startsWith("verify-locally:"))!.prompt;
+    expect(prompt).toContain("waitFor supports state: hidden.");
+    expect(prompt).not.toContain("the branch's own idea");
   });
 
   it("writes the checklist as before when the document cannot be read", async () => {

@@ -3059,6 +3059,52 @@ Narrow by measurement rather than by hope: on the stalest worktree in that repos
 **one of eight** `${repoRoot}`-named scripts is absent. A branch that has the tooling —
 nearly all of them — says nothing at all.
 
+### And the vocabulary was looked for in the one place a branch cannot have it
+
+`readCheckVocabulary`, 6 Oct 2026. The fourth failure of the `${repoRoot}` family, and the
+first where the thing being resolved was not a command at all.
+
+`checkVocabulary` names the check suite's own documentation — what a check is *able* to
+say — and it was read out of the **worktree**. The sharp consequence is the rule `verify`
+already states one field over: a branch that can edit its own copy can narrow the list it
+must answer, which is a branch choosing the terms it is judged in.
+
+The benign one is what was measured, and it was every in-flight task at once. Three
+branches — 189, 239 and 683 commits behind DEV — were cut before `tools/e2e` existed, so
+all three read no vocabulary, silently, and wrote checklists in terms nothing could
+prove. *Absence means unchanged* did exactly what it promises, and here the promise was
+the wrong one: the prompt went on asking for a checklist as it always had, which is the
+failure `checkVocabulary` was built to end. A check that silently does not fire again,
+arriving through the field added to stop the previous one.
+
+**The suite was never the obstacle**, which is why this is a one-line fix rather than a
+merge of DEV into every branch. `Invoke-SiteChecks.ps1` resolves its own root from
+`$PSScriptRoot`, so a check declared through `${repoRoot}` runs the main checkout's suite
+against the worktree's app, and the only thing a branch must supply is the manifest it
+was going to write anyway. Only the *documentation* was being looked for in the one place
+a branch cut before the tooling is guaranteed not to have it.
+
+Three rules:
+
+- **Root, never a fallback.** Worktree-then-root reads as *a branch may override*, which
+  is the hole rather than a convenience.
+- **`checkManifest` and `checkResults` stay in the worktree.** They are this task's work
+  product; the vocabulary is the project's tooling. The trio is declared together and
+  splits on exactly that line.
+- **Unreadable still means absent.** Stopping every route in a project over a mistyped
+  path is the worse failure, and it is unchanged.
+
+**And the route that had none got the machinery, not an exception** (`qubeautoapp`
+d83edcce7). `sql-change` declared no manifest, no results, no vocabulary and nothing that
+writes a check, so a SQL fix whose defect is visible on a page could prove nothing and its
+sign-off asked a person to re-establish by hand what `report-change` settles
+automatically. `sc-write-checks` is the authoring stage cloned unchanged — the config half
+of the same answer, and the fourth time a config change has retired waste no runtime
+change would have. No `checklistScope` was added with it: that route scopes nothing today,
+and declaring a scope on one gate of an unscoped route re-routes every untagged item to
+it, which is the checklist wreckage the backfill guard exists to prevent arriving by
+config instead.
+
 ### A local QA plan that wrote tests for the live sites
 
 `scopesForWriter`, 1 Oct 2026. `checklistScope` fixed *routing* — which gate answers for

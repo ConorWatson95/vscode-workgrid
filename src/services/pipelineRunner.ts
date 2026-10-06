@@ -806,9 +806,25 @@ export class PipelineRunner {
   }
 
   /**
-   * The check suite's own documentation, read out of the worktree.
+   * The check suite's own documentation, read out of the **repository root**.
    *
-   * Unreadable means absent, the direction every optional read here chooses: a
+   * Never the worktree, and the rule is `verify`'s one field over: a branch must not be
+   * able to choose the terms it is judged in. The vocabulary decides what a check is
+   * able to say, and therefore what the checklist may claim, so a branch that could
+   * edit its own copy could narrow the list it must answer — the sharp failure
+   * `${repoRoot}` exists to prevent.
+   *
+   * The benign failure is the one that was measured, and it was every in-flight task at
+   * once. `checkVocabulary` names project tooling, not the task's work product — unlike
+   * `checkManifest` and `checkResults`, which are this task's output and stay in the
+   * worktree. Three branches cut 189, 239 and 683 commits before `tools/e2e` existed
+   * therefore read no vocabulary at all, silently, and wrote checklists in terms nothing
+   * could prove. The suite itself was never the obstacle: `Invoke-SiteChecks.ps1`
+   * resolves its own root from `$PSScriptRoot`, so a check run through `${repoRoot}`
+   * runs the main checkout's suite against the worktree's app. Only the documentation
+   * was being looked for in the one place a branch is guaranteed not to have it.
+   *
+   * Unreadable still means absent, the direction every optional read here chooses: a
    * vocabulary that could not be loaded must leave the prompt asking for a checklist
    * exactly as it did before, never hold the stage. A stage declaring one and getting
    * none writes a wider list than it could have, which is the failure this replaces
@@ -829,7 +845,7 @@ export class PipelineRunner {
       ticket: taskTicket(task),
     });
     try {
-      return await this.readWorktreeFile(task.worktreePath, path);
+      return await this.readWorktreeFile(task.repositoryRoot, path);
     } catch {
       return undefined;
     }
