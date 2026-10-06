@@ -833,6 +833,44 @@ describe("checklists", () => {
     ]);
   });
 
+  it("keeps a judgement off the list it would otherwise gate", () => {
+    // The whole point: a gate cannot pass while an item is outstanding, so an item
+    // nothing could ever settle leaves a tick nobody earned or a route left stopped.
+    const pipeline = must(
+      recordChecklist(createPipeline(GATED), "build", [
+        { text: "Check exports" },
+        { text: "The figures are right", isJudgement: true, judgement: "no baseline is held" },
+      ]),
+    );
+    expect(pipeline.stages[0].checklist?.map((i) => i.text)).toEqual(["Check exports"]);
+    expect(pipeline.stages[0].judgements).toEqual([
+      { text: "The figures are right", why: "no baseline is held" },
+    ]);
+  });
+
+  it("numbers items from the list it keeps", () => {
+    // Ids come from position, so counting the judgements would leave a gap -- and the
+    // same review run twice would then number the same item differently depending on
+    // how many judgements it happened to raise.
+    const pipeline = must(
+      recordChecklist(createPipeline(GATED), "build", [
+        { text: "A judgement", isJudgement: true },
+        { text: "Check exports" },
+      ]),
+    );
+    expect(pipeline.stages[0].checklist?.map((i) => i.id)).toEqual(["build-c1"]);
+  });
+
+  it("drops judgements a re-run no longer raises", () => {
+    let pipeline = must(
+      recordChecklist(createPipeline(GATED), "build", [
+        { text: "The figures are right", isJudgement: true },
+      ]),
+    );
+    pipeline = must(recordChecklist(pipeline, "build", ["Check exports"]));
+    expect(pipeline.stages[0].judgements).toBeUndefined();
+  });
+
   it("replaces its own earlier output when a review re-runs", () => {
     let pipeline = must(recordChecklist(createPipeline(GATED), "build", ["old"]));
     pipeline = must(recordChecklist(pipeline, "build", ["new one", "new two"]));

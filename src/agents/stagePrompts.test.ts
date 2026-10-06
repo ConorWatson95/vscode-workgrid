@@ -620,6 +620,32 @@ describe("parseChecklistReply", () => {
     ).toEqual([{ text: "Edit an existing customer" }]);
   });
 
+  it("marks a judgement rather than listing it as an item", () => {
+    expect(
+      parseChecklistReply(
+        [
+          "- The export carries the From period [check: export-from]",
+          "- The figures are right for this dealer [judgement: no baseline is held]",
+        ].join(String.fromCharCode(10)),
+      ),
+    ).toEqual([
+      { text: "The export carries the From period", coveredBy: "export-from" },
+      {
+        text: "The figures are right for this dealer",
+        isJudgement: true,
+        judgement: "no baseline is held",
+      },
+    ]);
+  });
+
+  it("lets a check tag win over a judgement tag on the same line", () => {
+    // The writer has contradicted itself, and the check is the falsifiable half: a
+    // named check either runs and settles the item or is reported as naming nothing.
+    expect(
+      parseChecklistReply("- The export carries the From period [judgement] [check: export-from]"),
+    ).toEqual([{ text: "The export carries the From period", coveredBy: "export-from" }]);
+  });
+
   it("treats NONE as an empty but valid answer", () => {
     // Distinct from a parse failure: the reviewer decided nothing needs a human.
     expect(parseChecklistReply("NONE")).toEqual([]);

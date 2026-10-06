@@ -11,6 +11,7 @@ import { redactSecrets } from "../domain/secretRedaction";
 import { approvalAdvice, formatApprovalAdvice } from "../domain/approvalAdvice";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
 import { checklistGates, gateFor } from "../domain/checklistScope";
+import { formatJudgement } from "../domain/judgementItems";
 import { formatCoverageLine, formatUntaggedNotes, summariseCoverage } from "../domain/checkCoverage";
 import {
   UsageTotals,
@@ -653,6 +654,23 @@ export function formatStageReport(
       );
       for (const item of actions) lines.push(render(item));
     }
+  }
+
+  // Outside the checklist block, because these are not checklist items and a stage can
+  // raise them having written no list at all. Reported rather than dropped: a review
+  // that keeps finding the specification asks for things nothing can ever settle is
+  // the finding, and a route whose judgements vanish looks identical to one whose
+  // specification is wholly checkable.
+  const judgements = stage.judgements ?? [];
+  if (judgements.length > 0) {
+    lines.push("", "## Nothing can check these, so they were not asked", "");
+    lines.push(
+      "_Written by the review and deliberately kept off the gate's list. A gate cannot" +
+        " pass while an item is outstanding, so an item nothing could ever settle" +
+        " leaves only a tick nobody earned. Read them; they are not verified._",
+      "",
+    );
+    for (const entry of judgements) lines.push(`- ${formatJudgement(entry)}`);
   }
 
   // Above the guidance, because a held route is usually what the report was

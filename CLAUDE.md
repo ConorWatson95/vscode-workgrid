@@ -3581,6 +3581,66 @@ reason on the row.
 Nothing is lost by clearing it, for the reason the two fields above it already give: the
 re-run raises the hold again if it is still true.
 
+### An item nothing can ever check was still written as a checklist item
+
+`domain/judgementItems.ts` + `TaskStage.judgements`, 6 Oct 2026, and it is the sixth
+attempt at one problem — which is the finding, not the fix. The operator's complaint was
+*"still two checklist items unchecked"*, after two weeks, and he was right that the
+leftovers are the bug rather than the residue.
+
+The five attempts before it were all at the **prompt**: write the list in the vocabulary
+the suite can express; say which untagged items are judgements and which are capability
+gaps; read the vocabulary document before declaring an item inexpressible; a stage of its
+own whose work product is the manifest; `retireChecklistItem`, so the operator can
+withdraw one by hand. Every one of them made the list better and none of them changed
+what happens at the gate, because the gate reads the list and an outstanding item holds
+it whatever anybody wrote about why.
+
+`retireChecklistItem` is the one worth separating, because it looks like this and is not.
+It is the operator, after the fact, deciding a question should not have been asked — *"the
+operator's act, never a stage's"*, since a gate that may withdraw its own questions passes
+trivially. That rule is unchanged and the command stays. What it answers is a list already
+written; what it cannot answer is why the list was written that way. Measured: on
+`rc-local-verify` the same two items came back on **every** run, so the withdrawal was
+work the operator did again each time, which is the conscription this runtime exists to
+retire.
+
+**The distinction the parser now reads is the one the prompt has asked for since 5 Oct
+and nothing acted on.** A *capability gap* is a property a check could settle and nobody
+wrote the check — it stays an item, untagged and counted, because the coverage number
+must fall when the suite grows and a gap relabelled is a check nobody will ever write. A
+*judgement* is a property no check could ever settle: whether the figures are right for
+this dealer, with no baseline held anywhere. A review that writes one is correct to say
+so and was being punished for it, since the gate then offered exactly two moves — tick it,
+asserting a verification nobody performed, or leave the route stopped. The first is the
+one taken under pressure, and it is what makes every other tick on the list worth less.
+
+So the review tags it `[judgement: <why>]`, `parseChecklistReply` reads the tag, and
+`recordChecklist` puts it on `TaskStage.judgements` rather than on the checklist. Four
+rules:
+
+- **Stripped either way, honoured only one way.** A line carrying both a check tag and a
+  judgement tag is the writer contradicting itself, and the check wins — it is the
+  falsifiable half. The judgement tag is still removed from the text, because leaving it
+  would put the word `[judgement]` in front of a person at the gate.
+- **Ids are allocated from the items that are kept.** Numbering across the judgements too
+  would leave gaps, and the same review run twice would number one item differently
+  depending on how many judgements it happened to raise.
+- **Reported, never dropped.** They render in the stage report under their own heading,
+  marked as not verified. A route whose judgements vanish looks identical to one whose
+  specification is wholly checkable, and that difference is the finding — a review that
+  keeps producing them is one whose specification keeps asking for things nothing can
+  settle.
+- **Absence means unchanged.** A review that tags nothing writes the list it always wrote.
+
+Worth separating from the twelve reply-claims-an-outcome instances, which this is not,
+and from the heading-hid-the-marker one too. Nothing was misparsed. The model said in
+plain words, in `untaggedNotes`, that an item was a judgement; the harness recorded that
+correctly; and then blocked the gate on it anyway. **A parsed, recorded, correct fact with
+no disposition attached to it** — the same shape as `untaggedNotes` gating a route in
+`retireChecklistItem`'s own section, closed this time by making the writer's distinction
+reach the list rather than by giving the operator another button.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

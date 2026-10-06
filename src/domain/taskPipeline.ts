@@ -7,6 +7,7 @@
  * untouched. All transitions live in ./pipelineEngine and are pure.
  */
 
+import { JudgementItem } from "./judgementItems";
 import {
   ChecklistAudience,
   StageAuthority,
@@ -506,6 +507,18 @@ export interface TaskStage {
    * items; the count of those is derived from the checklist and always available.
    */
   untaggedNotes?: string[];
+
+  /**
+   * Claims no check can settle, recorded for a person to read and never to tick.
+   *
+   * Kept off `checklist` deliberately: an item there is a claim that a specific
+   * verification was performed, and a gate cannot pass while one is outstanding — so a
+   * judgement written as an item leaves exactly two moves, assert a verification
+   * nobody performed or leave the route stopped. See `judgementItems.ts`.
+   *
+   * Absent on every stage recorded before this existed, which reads as none.
+   */
+  judgements?: JudgementItem[];
   /**
    * What this verification gate is responsible for confirming, as a short label —
    * `"local"`, `"dev-site"`. Copied from the route so a persisted pipeline stays

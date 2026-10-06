@@ -1,3 +1,4 @@
+import { JudgementItem } from "./judgementItems";
 import { Result, ok, err } from "../utilities/result";
 import {
   ChecklistItem,
@@ -1787,7 +1788,16 @@ export function recordChecklist(
    * that declares no scopes produces no scoped items, and a bare string is the same
    * item it always was.
    */
-  items: readonly (string | { text: string; scope?: string; coveredBy?: string })[],
+  items: readonly (
+    | string
+    | {
+        text: string;
+        scope?: string;
+        coveredBy?: string;
+        isJudgement?: true;
+        judgement?: string;
+      }
+  )[],
   /**
    * The stage's account of why each untagged item is untagged. Replaced with the
    * checklist, never merged: both come from one reply, so a run that wrote a new list
@@ -1798,22 +1808,42 @@ export function recordChecklist(
   const stage = pipeline.stages.find((s) => s.id === stageId);
   if (!stage) return err(unknownStage(stageId));
 
-  const checklist: ChecklistItem[] = items.map((entry, index) => {
-    const parsed = typeof entry === "string" ? { text: entry } : entry;
-    return {
+  const entries = items.map((entry) => (typeof entry === "string" ? { text: entry } : entry));
+
+  // A claim nothing can settle never becomes an item. A gate cannot pass while an item
+  // is outstanding, so a judgement written as one leaves exactly two moves -- tick it,
+  // asserting a verification nobody performed, or leave the route stopped. Recorded
+  // beside the list instead, where the approval is the moment it is read.
+  //
+  // The ids are allocated from the *kept* items, not from the original positions: an id
+  // is what a tick and a coverage claim are attached to, and leaving gaps in the
+  // sequence would make two runs of the same review produce different ids for the same
+  // item. Nothing reads an id as an index.
+  const checklist: ChecklistItem[] = entries
+    .filter((parsed) => !parsed.isJudgement)
+    .map((parsed, index) => ({
       id: `${stage.id}-c${index + 1}`,
       text: parsed.text,
       checked: false,
       raisedByStage: stage.id,
       ...(parsed.scope ? { scope: parsed.scope } : {}),
       ...(parsed.coveredBy ? { coveredBy: parsed.coveredBy } : {}),
-    };
-  });
+    }));
+
+  const judgements: JudgementItem[] = entries
+    .filter((parsed) => parsed.isJudgement)
+    .map((parsed) => ({
+      text: parsed.text,
+      ...(parsed.judgement ? { why: parsed.judgement } : {}),
+    }));
 
   return ok(
     replaceStage(pipeline, {
       ...stage,
       checklist,
+      // Replaced with the checklist, never merged, for `untaggedNotes`' reason: both
+      // come from one reply, so a run that wrote a new list has withdrawn the old.
+      judgements: judgements.length > 0 ? judgements : undefined,
       ...(untaggedNotes.length > 0 ? { untaggedNotes: [...untaggedNotes] } : {}),
     }),
   );

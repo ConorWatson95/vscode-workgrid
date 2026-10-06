@@ -13,6 +13,7 @@ import { invariantProtocolBlock } from "./claudeAdapter";
 import { isNothingReported } from "../domain/nothingReported";
 import { splitScopeTag } from "../domain/checklistScope";
 import { splitCheckTag } from "../domain/checkCoverage";
+import { splitJudgementTag } from "../domain/judgementItems";
 import { referenceGuidance } from "../domain/taskReferences";
 import { markerLine, markerText } from "../domain/replyMarkers";
 
@@ -1021,36 +1022,55 @@ Three rules, and each is about the two lists staying the same list:
 - **Name only a check you have written or that already exists.** A made-up id is
   reported as an item nothing verified, which is worse than leaving the tag off.
 
-An item no check can answer stays untagged, and that is a normal answer, not a
-failure: whether a **number is right**, whether a layout reads well, whether the thing
-a person asked for is what they got — none of those have an exit code. Those items are
-counted as gaps and shown at the gate, so the list is a record of what is genuinely
-left for a person rather than a pile nobody has sorted through.
+An item no check can answer is one of exactly two things, and they are written
+differently because one of them is not a checklist item at all.
 
-The two kinds of untagged item are not the same thing and the difference is the whole
-value of the section below. One is a **judgement** — nothing could ever answer it, and
-a person is the right answer forever. The other is a **capability gap** — the suite
-cannot express it *yet*, and naming precisely what is missing is what gets it added.
-Say which, every time. A suite that grows answers more of the specification, so the
-same checklist written against a richer vocabulary leaves less for a person; that only
-happens if the gaps were written as the missing step rather than as a shrug.
+A **capability gap** is a property a check could settle and nobody has written the
+check yet — or the vocabulary cannot reach it *yet*. It stays an item, untagged, and
+it is counted as a gap. Naming precisely what is missing is what gets it added: a
+suite that grows answers more of the specification, so the same checklist written
+against a richer vocabulary leaves less for a person. That only happens if the gap was
+written as the missing step rather than as a shrug.
+
+A **judgement** is a property no check could ever settle — whether a **number is
+right** for this dealer, whether a layout reads well, whether the thing a person asked
+for is what they got. Nothing you or anyone else could write would prove it, now or
+after the suite grows. Do not write it as a checklist item. End its line with
+**[judgement: <why>]** instead:
+
+  - The figures shown are right for this dealer [judgement: no baseline is held anywhere]
+
+A line tagged that way is kept and reported, and it is **not** put on the gate's list.
+That is deliberate, and it is the only reason the tag exists: a gate cannot pass while
+an item is outstanding, so an item nothing can ever answer leaves exactly two moves —
+tick it, which asserts a verification nobody performed, or leave the route stopped.
+The first is the one taken under pressure, and it makes every other tick on the list
+worth less.
+
+So the test is not *can I check this today* — that is the gap. It is *could a check
+ever say this*. Where the answer is yes, it is an item and the gap is the work. Where
+the answer is no, tag it. Guess the wrong way and you cost something real: a gap
+mislabelled a judgement is a check nobody will ever write, and a judgement left as an
+item is a gate nobody can honestly pass.
 
 **Then say, in one line each, why every untagged item is untagged**, under a final
 section headed exactly:
 
   Untagged items:
 
-One line per item, naming the item and the reason — "no exit code", "the control is
-not offered on this tenant", "needs a before-and-after comparison nothing holds".
-A reason that is a claim about the **tooling** rather than about the item is the one to
-distrust, and check before writing: "the format has no step for this" has already been
-written about a sequence the format expressed perfectly well, and cost that item to a
-person on every run since.
+One line per item, naming the item and what is missing — "needs a before-and-after
+comparison the format cannot express", "the control is not offered on this tenant".
+By this point every untagged item is a **capability gap**, since a judgement carries
+its tag and is not on the list, so the reason has to name the missing step rather than
+restate that a person will do it. A reason that is a claim about the **tooling** is
+the one to distrust, and check before writing: "the format has no step for this" has
+already been written about a sequence the format expressed perfectly well, and cost
+that item to a person on every run since.
 Write the section even when every item is tagged, saying so. This is not paperwork: an
-item left untagged because nothing could answer it and one left untagged because
-nobody tried look identical at the gate, and the person standing there cannot tell
-them apart. Saying which is the only thing that turns the untagged count into a list
-of real gaps.
+item left untagged because the check is genuinely missing and one left untagged
+because nobody tried look identical at the gate, and the person standing there cannot
+tell them apart. Naming the missing step is the only thing that turns the untagged
+count into a list of work.
 `;
 }
 
@@ -1558,6 +1578,22 @@ export function parseUntaggedNotes(text: string): string[] {
 }
 
 /** Parses a checklist reply. "NONE" yields an empty list, which is a valid answer. */
+/**
+ * One line of a checklist reply, after its tags have been read off it.
+ *
+ * `isJudgement` is set by the marker rather than inferred from the absence of a check:
+ * an item with no check is a **gap** -- work a check could do that nobody has written
+ * -- and conflating the two would let a coverage figure be improved by relabelling.
+ */
+export interface ChecklistEntry {
+  text: string;
+  scope?: string;
+  coveredBy?: string;
+  isJudgement?: true;
+  /** Why nothing can settle it, where the writer said. */
+  judgement?: string;
+}
+
 export function parseChecklistReply(
   text: string,
   /**
@@ -1565,10 +1601,10 @@ export function parseChecklistReply(
    * these — see `splitScopeTag` for why anything else stays in the item's text.
    */
   declaredScopes: readonly string[] = [],
-): { text: string; scope?: string; coveredBy?: string }[] {
+): ChecklistEntry[] {
   if (/^\s*none\s*$/i.test(text)) return [];
 
-  const items: { text: string; scope?: string; coveredBy?: string }[] = [];
+  const items: ChecklistEntry[] = [];
   for (const raw of unfencedLines(text)) {
     const line = raw.trim();
     const bullet = /^(?:[-*+•]|\d+[.)])\s+(.*)$/.exec(line);
@@ -1586,10 +1622,21 @@ export function parseChecklistReply(
     // single item legitimately carries both: `[dev-site] ... [check: pyramid-export]`.
     const covered = splitCheckTag(split.text);
     if (!covered.text) continue;
+    // Read last, and from the same end of the line as the check tag, because the two
+    // are mutually exclusive by construction: a claim that names a check is settled by
+    // it, and one marked a judgement is settled by nobody. A line carrying both is the
+    // writer contradicting itself, and the check wins -- it is the falsifiable half.
+    // Stripped either way: the tag is markup, and leaving it on the text of an item
+    // the check tag rescued would put "[judgement]" in front of a person at the gate.
+    const judged = splitJudgementTag(covered.text);
+    if (!judged.text) continue;
+    const isJudgement = !covered.coveredBy && "judgement" in judged;
     items.push({
-      text: covered.text,
+      text: judged.text,
       ...(split.scope ? { scope: split.scope } : {}),
       ...(covered.coveredBy ? { coveredBy: covered.coveredBy } : {}),
+      ...(isJudgement && judged.judgement !== undefined ? { judgement: judged.judgement } : {}),
+      ...(isJudgement ? { isJudgement: true } : {}),
     });
   }
   return items;
