@@ -472,6 +472,16 @@ describe("revertToStage", () => {
     ]);
   });
 
+  // The hold is a statement about what a run produced, so it goes with the run.
+  // Measured on the Pyramid export task: `rc-local-verify` sat pending displaying a
+  // check-authoring hold raised by a session an earlier revert had discarded, and no
+  // second revert could clear it -- the one field in this map nothing cleared.
+  it("clears a hold raised by the run it is discarding", () => {
+    const held = { ...ran("verify"), blocked: "this stage changed no files" };
+    const result = revertToStage(pipeline([ran("deploy"), held]), "deploy")!;
+    expect(result.pipeline.stages[1].blocked).toBeUndefined();
+  });
+
   it("clears the discarded run's output rather than showing stale results", () => {
     const result = revertToStage(pipeline([ran("deploy")]), "deploy")!;
     const subtask = result.pipeline.stages[0].subtasks[0];

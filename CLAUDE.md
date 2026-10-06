@@ -3553,6 +3553,34 @@ itself measured, through a signal that was a proxy for the work rather than the 
 The nearest relative is a record destroyed by the mechanism acting on it — same family,
 one layer up, where the mechanism reads the wrong column rather than clearing it.
 
+### And the revert cleared every field about the discarded run but one
+
+`revertToStage`, 6 Oct 2026. The map that re-opens a stage clears `checklist` and
+`planSteps` with a comment beside each saying why — they were raised by a run that no
+longer exists — and clears every subtask's `reply` and `activity` on the same argument.
+It left `blocked`.
+
+A hold is the same kind of fact: *it wrote no files*, *it declined the correction*, *its
+manifest did not move*. Each is a statement about output a revert has just destroyed, so
+the reason survives describing a run nobody can read. `reopenAfter` had always cleared it
+for the stages behind a correction; the stage being re-run itself kept it, which is the
+one place the rule was never applied — the third time that exact omission has been found
+in this function.
+
+Measured on the Pyramid export task: `rc-local-verify` sat **pending** showing a
+check-authoring hold raised by the session an earlier revert had discarded, and **no
+second revert could clear it either**, since the only code that clears a hold is the
+approval path and a pending stage has no approval to give.
+
+It does not stop `nextAction`, which is why it went unnoticed: a held pending stage still
+runs. What it reaches is `certifyStage`, which refuses an evidence-authority pass on a
+held stage — so a route declaring `authority: "evidence"` would have stopped for a reason
+about a run that had been thrown away — and `stagePresentation`, which puts the stale
+reason on the row.
+
+Nothing is lost by clearing it, for the reason the two fields above it already give: the
+re-run raises the hold again if it is still true.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

@@ -748,6 +748,17 @@ export function revertToStage(
       // re-run inherit credit for work that no longer exists, which is the exact
       // confusion per-step accounting exists to remove.
       planSteps: undefined,
+      // And the hold, which is the same field a third time. A hold is a statement
+      // about what a run produced -- it wrote no files, it declined the correction,
+      // its manifest did not move -- so a revert that throws the run away leaves a
+      // reason describing output nobody can read any more. `reopenAfter` has always
+      // cleared it for the stages behind a correction; the stage being re-run itself
+      // kept it. Measured on the Pyramid export task: `rc-local-verify` sat *pending*
+      // displaying a check-authoring hold raised by the session a revert had already
+      // discarded, and no second revert could clear it either. Nothing is lost -- the
+      // re-run raises the hold again if it is still true, which is what makes
+      // discarding safe here exactly as it does for the two fields above.
+      blocked: undefined,
       // Repairs are dropped, not re-opened. A correction exists to fix one specific
       // version of a stage's output and an amendment to absorb one specific upstream
       // change; a revert throws that output away and re-runs the stage cold, so every
