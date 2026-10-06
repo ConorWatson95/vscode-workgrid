@@ -3480,6 +3480,36 @@ the diagnosis by hand this runtime exists to retire. Captured at the moment of r
 rather than by index afterwards, because a stage added for an earlier slot shifts every
 index behind it.
 
+**And the stage it produced was killed by the 45-minute timeout** (6 Oct 2026). Not
+idling: 15 commands, ten or more of them full browser-suite runs, `pathsWritten []`,
+`site-checks.json` untouched, `costUsd` null because a killed session never emits its
+result event. The stage was doing exactly what the new intent asked — *"PROVE THE CHECK
+CATCHES THE BUG"*, by restoring the old behaviour, running, and restoring the fix — and
+`Invoke-SiteChecks.ps1` **had no way to run one check**. So each proof cost the whole
+manifest, twice over, and the stage reached for the workaround itself by writing a
+one-check manifest to a scratch file.
+
+So the instruction was right and the tool could not express it, which is the
+expressiveness case one layer down from where it usually lands: not the harness
+language this time but the project's own runner. `-Only <id>` greps Playwright on the
+check id already in the describe title — 13 tests become 4 on that manifest — and
+**records no outcomes**, the load-bearing half: `site-checks-result.json` is cleared
+before a run and read whole to tick checklist items, so a one-check run would clear the
+rest and assert a verification that never happened. The same rule `-Describe` already
+follows.
+
+Two things worth keeping from the reading, neither a harness change:
+
+- **A cautionary example reads as a challenge.** The intent named the timing race as the
+  case where two checks passed against the broken commit — and a third of the session
+  went on probing for it, re-deriving a measurement this file already records. An
+  instruction that cites an open-looking problem gets it worked on; it now says the race
+  is settled and names the capability gap instead.
+- **A timed-out stage reports no cost at all.** 45 minutes of Opus spend is absent from
+  `discarded` and `pipelineUsage`, because cost arrives only on the result event. Partly
+  recoverable from the last `message.usage`, and not done — recorded so the next person
+  reading a cheap-looking route knows which way the number is wrong.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and
