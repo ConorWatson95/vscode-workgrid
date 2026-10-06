@@ -3073,12 +3073,18 @@ Note: ${covered.skipped}`
     // depends on the stage saying it did not do its work; this observes that it did
     // not. Read from the pipeline as it now stands, so it sees this subtask's activity
     // and every earlier one's.
+    //
+    // Read once and shared with the authoring check below: a stage declaring
+    // `checkManifest` owes a named file, and this reading is what `changedNothing`
+    // judges it on instead of `pathsWritten`. Undefined wherever nothing was declared
+    // or the read failed, which is what makes it fall back.
+    const manifestAfter = reply.ok ? await this.readCheckManifest(task, stage) : undefined;
     if (reply.ok) {
       const settled = pipeline.stages.find((s) => s.id === stage.id);
       if (
         settled &&
         !settled.subtasks.some((s) => s.status === "pending" || s.status === "active") &&
-        changedNothing(settled)
+        changedNothing(settled, { before: manifestBefore, after: manifestAfter })
       ) {
         pipeline = recordStageBlocked(pipeline, stage.id, CHANGED_NOTHING_REASON);
         const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
@@ -3105,7 +3111,7 @@ Note: ${covered.skipped}`
       ) {
         const reason = checkAuthoringSkipped(pipeline, stage.id, {
           before: manifestBefore,
-          after: await this.readCheckManifest(task, stage),
+          after: manifestAfter,
         });
         if (reason) {
           pipeline = recordStageBlocked(pipeline, stage.id, reason);

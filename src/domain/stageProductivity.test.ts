@@ -289,6 +289,54 @@ describe("a stage whose work may not apply", () => {
     expect(changedNothing(wrote)).toBe(false);
   });
 });
+
+/**
+ * The live failure, 6 Oct 2026. `rc-write-checks` took its check manifest from 1,659 to
+ * 2,232 bytes through two `python - <<EOF` heredocs, recorded `toolCounts {Bash: 9}` and
+ * no written paths, and was held under *"this stage changed no files"* — a confident
+ * wrong fact about an artefact the harness had already read, twice, either side of the
+ * session.
+ */
+describe("a stage judged on the artefact it owes", () => {
+  const owes = (over: Partial<TaskStage> = {}): TaskStage =>
+    stage({
+      checkManifest: "tools/e2e/site-checks.json",
+      subtasks: [subtask({ activity: { toolCounts: { Bash: 9 } } })],
+      ...over,
+    });
+
+  it("is not held when the manifest moved, however the session wrote it", () => {
+    expect(changedNothing(owes(), { before: "{}", after: '{"checks":[]}' })).toBe(false);
+  });
+
+  // Stronger, not weaker: the shell excuse `wroteOutsideTheWriteTools` makes on the
+  // correction path would have let this one pass. A declared manifest that did not move
+  // is a stage that did not do its work, whatever tools it reached for.
+  it("is held when the manifest did not move, though it used the shell", () => {
+    expect(changedNothing(owes(), { before: "{}", after: "{}" })).toBe(true);
+  });
+
+  // One unreadable reading is not evidence either way. The rule `checkAuthoringSkipped`
+  // already follows, and the fallback is the behaviour every existing stage has.
+  it("falls back to written paths when only one reading exists", () => {
+    expect(changedNothing(owes(), { before: "{}" })).toBe(true);
+    expect(
+      changedNothing(
+        owes({ subtasks: [subtask({ activity: { pathsWritten: ["site-checks.json"] } })] }),
+        { after: "{}" },
+      ),
+    ).toBe(false);
+  });
+
+  // Absence means unchanged: a stage declaring no manifest owes no named artefact, so
+  // readings about one say nothing about it.
+  it("ignores readings for a stage that declares no manifest", () => {
+    expect(changedNothing(stage({ subtasks: [subtask({ activity: { toolCounts: { Bash: 9 } } })] }), {
+      before: "{}",
+      after: '{"checks":[]}',
+    })).toBe(true);
+  });
+});
 describe("correctionChangedNothing — a shell-only run is unmeasured", () => {
   // The live failure: a correction fixed the code with `printf`/`cat >>`, recorded no
   // written paths, and the runner withdrew the downstream cascade — putting the code

@@ -39,8 +39,30 @@ import { Subtask, SubtaskActivity, TaskStage } from "./taskPipeline";
  * heredoc — is not counted as having written, and will be held. That is the right way
  * round: the point of the check is a stage that only looked, and asking a human to
  * glance at a stage that edited files unusually costs one click.
+ *
+ * **Except where the harness measured the artefact itself.** A stage declaring
+ * `checkManifest` owes one named file, and `pipelineRunner` already samples it either
+ * side of the session for `checkAuthoringSkipped` — so for those stages there is a
+ * direct reading of whether the owed thing moved, which beats inferring it from which
+ * tools were used. `rc-write-checks` is the case: its whole work product is a JSON
+ * manifest, the natural way to edit one is a `python - <<EOF` heredoc, and the run that
+ * took it from 1,659 to 2,232 bytes was held under a message reading *"this stage
+ * changed no files"* — a confident wrong fact about work the harness had already
+ * measured, which is the shape this codebase pays for twice over.
+ *
+ * This is the durable fix the note on `wroteOutsideTheWriteTools` asks for, applied
+ * where the measurement happens to exist already: **measure the worktree, not the tool
+ * calls.** It makes the check *stronger* rather than weaker, which is why it is
+ * preferred to borrowing that function's abstention — a declared manifest that did not
+ * move is now held however the session wrote, instead of being excused for having
+ * touched a shell.
+ *
+ * Both readings must exist, the rule `checkAuthoringSkipped` already follows: one
+ * unreadable reading is not evidence either way, and falls back to `pathsWritten`
+ * exactly as before. So does a stage that declares no manifest — absence means
+ * unchanged.
  */
-export function changedNothing(stage: TaskStage): boolean {
+export function changedNothing(stage: TaskStage, manifest?: ManifestReadings): boolean {
   if (stage.kind !== "implementation") return false;
   // A stage whose work may not apply to a given change has no signal here at all.
   //
@@ -77,7 +99,30 @@ export function changedNothing(stage: TaskStage): boolean {
   // making the change is not the harness's business. See `stageEvidence`: verified beats
   // selfReported, and this is a substitute for the latter.
   if (stage.verification?.exitCode === 0) return false;
+  const moved = manifestMoved(stage, manifest);
+  if (moved !== undefined) return !moved;
   return !stage.subtasks.some((subtask) => (subtask.activity?.pathsWritten?.length ?? 0) > 0);
+}
+
+/** The manifest a stage owes, as it stood either side of the session. */
+export interface ManifestReadings {
+  before?: string;
+  after?: string;
+}
+
+/**
+ * Whether the manifest this stage owes moved, or `undefined` where that is unknowable.
+ *
+ * Undefined covers two cases and they mean the same thing here: the stage declared no
+ * manifest, so it owes no named artefact and there is nothing to measure; or one of the
+ * two reads failed, so there is no comparison to make. Absence of measurement is not
+ * permission to act, and it is not permission to excuse either — both fall back to
+ * `pathsWritten`.
+ */
+function manifestMoved(stage: TaskStage, manifest?: ManifestReadings): boolean | undefined {
+  if (!stage.checkManifest) return undefined;
+  if (manifest?.before === undefined || manifest.after === undefined) return undefined;
+  return manifest.before !== manifest.after;
 }
 
 /** How the hold explains itself, in the stage's `blocked` line. */

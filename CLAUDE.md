@@ -3510,6 +3510,49 @@ Two things worth keeping from the reading, neither a harness change:
   recoverable from the last `message.usage`, and not done — recorded so the next person
   reading a cheap-looking route knows which way the number is wrong.
 
+### The stage wrote its one file and was held for writing nothing
+
+`ManifestReadings` in `stageProductivity.ts`, 6 Oct 2026. `rc-write-checks` took
+`site-checks.json` from 1,659 to 2,232 bytes, settled, and was held under
+*"this stage changed no files"*. `toolCounts {Bash: 9}`, `pathsWritten []` — a JSON
+manifest is naturally edited with a `python - <<EOF` heredoc, and the activity watcher
+records file-writing *tools*, not files.
+
+The module had already argued the whole case against itself. `wroteOutsideTheWriteTools`
+exists on the *correction* path precisely because a shell-only run is **unmeasured, not
+zero**, and its own note says the durable fix is to **measure the worktree rather than
+the tool calls**. What had changed since is that for one class of stage the worktree
+measurement already existed: `checkAuthoringSkipped` samples the `checkManifest` either
+side of the session, so a stage declaring one has a direct reading of whether the thing
+it owes moved.
+
+**Stronger, not weaker, which is why it is not the abstention.** Borrowing
+`wroteOutsideTheWriteTools` here would have excused every shell-driven stage — the
+majority — to fix one false hold. Judging on the manifest instead means a declared
+manifest that did **not** move is now held however the session wrote, which is a case
+`pathsWritten` could never have caught.
+
+Four rules:
+
+- **Both readings must exist**, the rule `checkAuthoringSkipped` already follows. One
+  unreadable reading is not evidence either way and falls back to `pathsWritten`
+  exactly as before.
+- **Absence means unchanged.** A stage declaring no manifest owes no named artefact, so
+  readings about one say nothing about it.
+- **Read once and shared.** The `after` sample was already being taken for the authoring
+  check, twenty lines down; taking a second would have been a second read of the same
+  file in the same instant, and two readings of one fact are how they come to disagree.
+- **The declaration is the project's.** Which stage owes which artefact is a property of
+  the route, and `rc-write-checks` declared `checkVocabulary` and no `checkManifest` —
+  so the runtime change reached it only once config said what it owed. That is the trio
+  behaving as designed and also the reason the fix is two edits rather than one.
+
+Worth separating from the twelve reply-claims-an-outcome instances. Nothing was
+misparsed and no marker was missing: the harness held a stage for not doing work it had
+itself measured, through a signal that was a proxy for the work rather than the work.
+The nearest relative is a record destroyed by the mechanism acting on it — same family,
+one layer up, where the mechanism reads the wrong column rather than clearing it.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and
