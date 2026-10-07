@@ -1276,7 +1276,37 @@ Note: ${covered.skipped}`
       // review stages appear too — a stage told a route that omits them would raise
       // the very work those reviews exist to do.
       routeStages: stageId ? routeOutline(task.pipeline, stageId) : undefined,
+      checkManifest: this.manifestPathFor(task, stageId),
     };
+  }
+
+  /**
+   * The stage's declared manifest with its placeholders resolved, so the prompt names
+   * the same file `readCheckManifest` reads. Left out where a placeholder has no value:
+   * stating a path with `${ticket}` still in it would send the stage to a file that
+   * cannot exist.
+   *
+   * Falls back to any stage of the route that declares one, because implementation
+   * stages write the manifest without declaring it — and must not declare it, since a
+   * declared manifest that did not move holds the stage (`stageProductivity`), which
+   * would hold every change that touched no page.
+   */
+  private manifestPathFor(task: TaskWorkspace, stageId?: string): string | undefined {
+    const stages = task.pipeline?.stages ?? [];
+    const declared =
+      stages.find((stage) => stage.id === stageId)?.checkManifest ??
+      stages.find((stage) => stage.checkManifest)?.checkManifest;
+    if (!declared) return undefined;
+    const { command, missing } = substitutePlaceholders(declared, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      baseCommit: task.baseCommit,
+      worktreePath: task.worktreePath,
+      repoRoot: task.repositoryRoot,
+      ticket: taskTicket(task),
+    });
+    return missing.length > 0 ? undefined : command;
   }
 
   /**

@@ -101,7 +101,26 @@ const KNOWN = [
   "ticket",
   "baseCommit",
   "mergeBase",
+  "worktreeName",
 ] as const;
+
+/**
+ * The last segment of the worktree path — `${worktreeName}`.
+ *
+ * For naming a file that belongs to one task inside a tracked directory. A check
+ * manifest at one shared path was committed by one task, merged into the base, and
+ * then collided with every other task's copy the moment they merged the base in —
+ * or, worse, was silently inherited and ran another ticket's checks. The folder name
+ * is unique per task by construction (`MAX_WORKTREE_FOLDER_NAME` ends a truncated
+ * name in a digest of the whole slug) and short enough for a path, where the branch
+ * name is neither.
+ *
+ * Derived rather than passed, so no call site can forget it.
+ */
+export function worktreeNameOf(worktreePath: string): string {
+  const segments = worktreePath.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? worktreePath;
+}
 
 /**
  * What to do about a placeholder this knows and has no value for.
@@ -183,7 +202,7 @@ export function substitutePlaceholders(
       if (!unknown.includes(name)) unknown.push(name);
       return whole;
     }
-    const value = values[known];
+    const value = known === "worktreeName" ? worktreeNameOf(values.worktreePath) : values[known];
     if (value === undefined) {
       if (!missing.includes(known)) missing.push(known);
       return whole;

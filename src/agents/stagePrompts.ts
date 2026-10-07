@@ -102,6 +102,18 @@ export interface StageContext {
    * brief and the route outline: twenty-two sessions pay for it once.
    */
   references?: { path: string; note?: string; origin?: "operator" | "discovered" }[];
+  /**
+   * This task's check manifest, resolved and relative to the worktree, when the stage
+   * or its route declares one.
+   *
+   * Stated by the harness because the path is now per task
+   * (`.taskworkspaces/checks/${worktreeName}.json`): one shared path was committed by
+   * one task, merged into the base, and collided with every other task's copy. An
+   * intent cannot spell a per-task path, so before this every intent hardcoded the
+   * shared one — and a correction, handed no intent restatement, had nothing at all.
+   * Per stage, so it sits below the cached prefix.
+   */
+  checkManifest?: string;
 }
 
 /**
@@ -230,6 +242,12 @@ function preamble(context: StageContext, stage: TaskStage): string {
           `${context.branchName} when you are finished, and say so — the stages after`,
           `you refuse to run until it is back, since they would otherwise report on`,
           `whatever tree you left behind.`,
+        ]
+      : []),
+    ...(context.checkManifest
+      ? [
+          `This task's check manifest is \`${context.checkManifest}\`. It is this task's`,
+          `alone: wherever the instructions mention the check manifest, it means this file.`,
         ]
       : []),
     ...(context.handoffs && context.handoffs.length > 0

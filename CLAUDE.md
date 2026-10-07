@@ -3778,6 +3778,29 @@ shares the local gate's manifest, nothing upstream writes its list, and the firs
 made it a reader with no items; caught by running the derivation over the live config,
 not by a test. **Never on a repair round**, for `checkAuthoringSkipped`'s reason.
 
+### One manifest path, tracked, shared by every task
+
+`${worktreeName}` + `StageContext.checkManifest`, 7 Oct 2026. `checkManifest` was declared
+as `.taskworkspaces/site-checks.json` on every route: one path inside a **tracked**
+directory, written per task. The Pyramid task committed its copy, the branch reached DEV,
+and the next task to merge DEV was refused outright, since git would overwrite its own
+untracked copy. Had that task committed its copy too, the merge would have conflicted, or
+quietly handed one ticket's checks to another.
+
+- **The folder is the key, never the branch.** Worktree folder names are unique by
+  construction (`MAX_WORKTREE_FOLDER_NAME` ends a truncated name in a digest of the whole
+  slug) and short enough for a path. Branch names run to 170 characters. The value is
+  derived inside `substitutePlaceholders`, so no call site can forget to pass it.
+- **The harness states the resolved path** in the preamble, because an intent cannot
+  spell a per-task path and a correction gets no intent restatement at all. It falls back
+  to any stage in the route that declares a manifest, because implementation stages
+  write the manifest without declaring it. Nor should they declare it: a declared
+  manifest that did not move holds the stage (`stageProductivity`), and that would hold
+  every change that touched no page.
+- **The verify passes `-Manifest` explicitly**, which is the `${repoRoot}` rule: a
+  placeholder that redirects which script runs must be paired with one that states what
+  that script reads. The script's own default changed to match.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and

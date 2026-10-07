@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { remediesFor, substitutePlaceholders } from "./commandPlaceholders";
+import { remediesFor, substitutePlaceholders, worktreeNameOf } from "./commandPlaceholders";
 
 const VALUES = {
   taskName: "NMGB-2792",
@@ -8,6 +8,21 @@ const VALUES = {
   worktreePath: "C:/repos/app-NMGB-2792",
   repoRoot: "C:/Dev/qubeautoapp",
 };
+
+describe("${worktreeName}", () => {
+  // One tracked manifest path shared by every task: a task committed its copy, it
+  // reached the base, and the next task merging the base collided with it.
+  it("names a per-task file from the worktree folder", () => {
+    const result = substitutePlaceholders(".taskworkspaces/checks/${worktreeName}.json", VALUES);
+    expect(result.command).toBe(".taskworkspaces/checks/app-NMGB-2792.json");
+    expect(result.used).toEqual(["worktreeName"]);
+  });
+
+  it("reads either separator and ignores a trailing one", () => {
+    expect(worktreeNameOf("C:\\Dev\\worktrees\\qubeautoapp-x\\")).toBe("qubeautoapp-x");
+    expect(worktreeNameOf("/home/me/wt/y")).toBe("y");
+  });
+});
 
 describe("${repoRoot}", () => {
   it("lets a check name its own script from the root", () => {

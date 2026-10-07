@@ -144,6 +144,17 @@ describe("the interjection channel is declared before anything arrives", () => {
   });
 });
 
+describe("check manifest path", () => {
+  it("names this task's manifest when the stage declares one", () => {
+    const prompt = splitPrompt({ ...CONTEXT, checkManifest: ".taskworkspaces/checks/app-x.json" }, stage());
+    expect(prompt).toContain("check manifest is `.taskworkspaces/checks/app-x.json`");
+  });
+
+  it("says nothing otherwise", () => {
+    expect(splitPrompt(CONTEXT, stage())).not.toContain("check manifest is");
+  });
+});
+
 describe("governing documents", () => {
   const withRefs = {
     ...CONTEXT,
