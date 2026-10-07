@@ -28,6 +28,14 @@ import {
   tickAnsweredItems,
 } from "../domain/checkCoverage";
 import { checkAuthoringSkipped } from "../domain/checkAuthoring";
+import {
+  applyItemAccounts,
+  checklistToImplement,
+  checksStageFor,
+  gateReadsUpstreamChecklist,
+  parseItemAccounts,
+  unaccountedItemsReason,
+} from "../domain/checkDerivation";
 import { coverageFromCorrection } from "../domain/correctionCoverage";
 import {
   resolveAmendmentModel,
@@ -2053,6 +2061,15 @@ Note: ${covered.skipped}`
     // the one that needs the vocabulary, and that is an implementation stage.
     const vocabulary = subtask.correction ? undefined : await this.readCheckVocabulary(task, stage);
 
+    // The checklist a checks stage implements, and whether this gate only reads a list
+    // written upstream -- see `domain/checkDerivation.ts`. Both absent on a route that has
+    // not adopted the write-the-list-first shape, which leaves every prompt unchanged.
+    const toImplement = subtask.correction
+      ? undefined
+      : checklistToImplement(task.pipeline!, stage.id);
+    const readsUpstreamList =
+      stage.kind === "humanVerification" && gateReadsUpstreamChecklist(task.pipeline!, stage.id);
+
     const prompt = subtask.correction
       ? correctionPrompt(
           context,
@@ -2062,7 +2079,7 @@ Note: ${covered.skipped}`
         )
       : stage.kind === "assessment"
         ? assessmentPrompt(context, stage)
-        : producesChecklist(stage.kind)
+        : producesChecklist(stage.kind) && !readsUpstreamList
           ? behaviourReviewPrompt(
               context,
               stage,
@@ -2079,8 +2096,9 @@ Note: ${covered.skipped}`
                 (candidate) => candidate.kind === "humanVerification" && candidate.checkResults,
               ),
               vocabulary,
+              checksStageFor(task.pipeline!, stage.id)?.name,
             )
-          : subtaskPrompt(context, stage, subtask, planSteps, vocabulary);
+          : subtaskPrompt(context, stage, subtask, planSteps, vocabulary, toImplement);
 
     let pipeline = task.pipeline!;
     // Registered before the session runs, so the steps exist to be unaccounted for
@@ -2537,7 +2555,12 @@ Note: ${covered.skipped}`
         );
       }
     }
-    if (reply.ok && producesChecklist(stage.kind) && !subtask.correction) {
+    // A gate reading a list written upstream records none of its own: a second list from
+    // the same specification is the defect `checkDerivation` exists to end, and its items
+    // would have no checks behind them because the checks stage has already run.
+    if (reply.ok && producesChecklist(stage.kind) && !subtask.correction && readsUpstreamList) {
+      steps.push(`Completed "${subtask.title}".`);
+    } else if (reply.ok && producesChecklist(stage.kind) && !subtask.correction) {
       // The *parser* keeps the full set, deliberately, where the prompt is narrowed to
       // one scope: a tag is read as a scope only when it names one the route declared,
       // so a review that tags beyond what it was asked for still has the tag stripped
@@ -3110,6 +3133,69 @@ Note: ${covered.skipped}`
           this.logger.warn(
             `Harness [${task.name}] ${stage.name} is an implementation stage that wrote ` +
               "no files. Holding rather than passing: read what it did before approving.",
+          );
+        }
+      }
+    }
+
+    // A checks stage's account of the checklist it was handed: which check implements
+    // each item, or what the suite is missing. Coverage is attached either way; only an
+    // ordinary run is held for silence, since a correction is answering one finding and
+    // `correctionChangedNothing` already covers one that did nothing. Corrections are
+    // read for accounts too, which is what makes the hold's remedy the cheap one.
+    if (reply.ok && !producesChecklist(stage.kind)) {
+      // Re-derived for a correction, which is never handed the list in its prompt but may
+      // still answer items with the checks it writes.
+      const handed = toImplement ?? checklistToImplement(pipeline, stage.id);
+      if (handed) {
+        const applied = applyItemAccounts(
+          pipeline,
+          handed.items,
+          parseItemAccounts(reply.text),
+          manifestAfter,
+        );
+        pipeline = applied.pipeline;
+        if (applied.attached.length > 0) {
+          steps.push(
+            `"${stage.name}": ${applied.attached.length} checklist item(s) now name the check ` +
+              `that implements them; "${handed.gate.name}" ticks each one its run passes.`,
+          );
+        }
+        if (applied.gaps.length > 0) {
+          steps.push(
+            `"${stage.name}" named ${applied.gaps.length} item(s) as gaps the suite cannot ` +
+              "express yet — see the stage report.",
+          );
+        }
+        for (const entry of applied.ignored) {
+          this.logger.warn(
+            `Harness [${task.name}] ${stage.name}: ignored an item account (${entry.why}): ` +
+              entry.line,
+          );
+        }
+        if (applied.ignored.length > 0) {
+          steps.push(
+            `"${stage.name}": ${applied.ignored.length} item account(s) answered nothing — ` +
+              "see the log.",
+          );
+        }
+        const settled = pipeline.stages.find((s) => s.id === stage.id);
+        if (
+          !subtask.correction &&
+          applied.unaccounted.length > 0 &&
+          settled &&
+          !settled.subtasks.some((s) => s.status === "pending" || s.status === "active")
+        ) {
+          pipeline = recordStageBlocked(
+            pipeline,
+            stage.id,
+            unaccountedItemsReason(applied.unaccounted),
+          );
+          const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+          if (held.ok) pipeline = held.value;
+          steps.push(
+            `"${stage.name}" left ${applied.unaccounted.length} checklist item(s) ` +
+              "unaccounted for — held for you.",
           );
         }
       }

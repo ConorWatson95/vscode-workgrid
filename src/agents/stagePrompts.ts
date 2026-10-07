@@ -16,6 +16,7 @@ import { splitCheckTag } from "../domain/checkCoverage";
 import { splitJudgementTag } from "../domain/judgementItems";
 import { referenceGuidance } from "../domain/taskReferences";
 import { markerLine, markerText } from "../domain/replyMarkers";
+import { ChecklistToImplement, itemAccountInstruction } from "../domain/checkDerivation";
 
 /**
  * Prompts and reply parsers for driving a pipeline.
@@ -786,13 +787,20 @@ export function subtaskPrompt(
    * Absent means unchanged — this is exactly the prompt it always was.
    */
   vocabulary?: string,
+  /**
+   * The checklist this stage's checks implement, written upstream by a review.
+   *
+   * The checks derive from the list rather than being written beside it -- see
+   * `domain/checkDerivation.ts`. Absent means unchanged.
+   */
+  toImplement?: ChecklistToImplement,
 ): string {
   const body = `${preamble(context, stage)}
 
 Objective: ${subtask.title}
 
 ${subtask.prompt}
-${vocabularySection(vocabulary)}
+${vocabularySection(vocabulary)}${toImplement ? `${itemAccountInstruction(toImplement)}\n\n` : ""}
 Stay within this objective.${deferralInstruction()}${blockedInstruction(stage)}${actionInstruction()}${
     stage.planFile && planSteps && planSteps.length > 0
       ? planStepInstruction(stage.planFile, planSteps)
@@ -844,6 +852,14 @@ export function behaviourReviewPrompt(
    * Absent means unchanged — the prompt asks for a checklist the way it always did.
    */
   vocabulary?: string,
+  /**
+   * The stage that will write the checks for this list, when one follows this review.
+   *
+   * Then this review writes the list alone, and the checks stage implements it item by
+   * item. Asking this review for checks as well would have the same checks written
+   * twice, by two sessions, and matched up by nobody. Absent means unchanged.
+   */
+  checksWrittenBy?: string,
 ): string {
   return `${preamble(context, stage)}
 
@@ -861,7 +877,11 @@ that follows it.
 
 Do not include items that could be settled by reading the code or by running the
 automated tests — those are covered by other stages.
-${coverageInstruction(coverageRecorded, vocabulary)}
+${
+    checksWrittenBy
+      ? specificationInstruction(checksWrittenBy, vocabulary)
+      : coverageInstruction(coverageRecorded, vocabulary)
+  }
 If nothing needs manual verification, reply with exactly: NONE${deferralInstruction()}${actionInstruction()}`;
 }
 
@@ -971,6 +991,51 @@ time, and a re-run of this stage reads it as it is then.
 
 ${body}
 
+`;
+}
+
+/**
+ * Asks a review for the checklist alone, because a later stage implements it.
+ *
+ * The first half of `coverageInstruction` -- the list from the specification, in the
+ * suite's terms, one property per item, judgements tagged -- with the second half handed
+ * to the stage that owns it. The order between the two stages is what makes the checks
+ * derive from the list; see `domain/checkDerivation.ts`.
+ */
+function specificationInstruction(checksWrittenBy: string, vocabulary?: string): string {
+  return `
+This list is the specification the automated checks are written from. "${checksWrittenBy}"
+runs after you and writes one check per item, so **write no checks and tag no item with
+one** -- your output is the list, and it is the only list. Anything you leave off it will
+not be checked by anyone.
+${vocabularySection(vocabulary)}
+Write it from the **specification** — the ticket, the plan and any governing document
+named above — stating what must be observably true of this change. Not what you imagine
+somebody clicking: what the specification requires, in claims that can be settled by
+looking at the running application.
+${
+    vocabulary
+      ? `Write it **in the vocabulary above**, which is what decides what a check can say.
+An item stated in those terms is one the next stage can prove. Where the specification
+requires something the vocabulary cannot reach, write the item anyway: the next stage
+names it as a capability gap, which is what gets the suite extended.
+`
+      : ""
+  }
+Write **one property per item**, in the smallest form that is still worth checking — an
+item is the unit one check implements, so a bundled item is one no single check can
+establish the whole of.
+
+Only what the running application shows. A claim about data an overnight job produces,
+about an object's definition, or about a resource file is settled by the stages that
+own those things, not by a person or a browser here.
+
+A **judgement** is a property no check could ever settle — whether a **number is
+right** for this dealer, whether a layout reads well. Do not write it as an item. End its
+line with **[judgement: <why>]** instead, and it is reported rather than put on the
+gate's list:
+
+  - The figures shown are right for this dealer [judgement: no baseline is held anywhere]
 `;
 }
 

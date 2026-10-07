@@ -1,5 +1,6 @@
 import type { TaskPipeline } from "./taskPipeline";
 import { coverageForGate } from "./checkCoverage";
+import { delegatedAuthoring } from "./checkDerivation";
 
 /**
  * Whether a gate asked to express its checklist as checks actually tried.
@@ -77,6 +78,11 @@ export function checkAuthoringSkipped(
 ): string | undefined {
   const gate = pipeline.stages.find((stage) => stage.id === stageId);
   if (!gate?.checkManifest) return undefined;
+  // Not the gate's job once a stage before it writes the checks. The hold was built for
+  // a gate asked to author its own; held for not authoring where the route moved that
+  // work upstream, it told the operator to correct the one stage that owed nothing. The
+  // checks stage answers for each item instead -- see `domain/checkDerivation.ts`.
+  if (delegatedAuthoring(pipeline, stageId)) return undefined;
 
   if (sample.before === undefined || sample.after === undefined) return undefined;
   if (sample.before !== sample.after) return undefined;

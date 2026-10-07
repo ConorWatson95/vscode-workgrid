@@ -1464,3 +1464,47 @@ describe("markers written as markdown", () => {
     expect(parseVerdict("we reached no VERDICT: pass was never stated")).toBeUndefined();
   });
 });
+
+// The list is written first and the checks implement it: the review is asked for the
+// list alone, and the checks stage is handed it by id.
+describe("checks derived from an upstream checklist", () => {
+  it("asks a review followed by a checks stage for the list and no checks", () => {
+    const prompt = behaviourReviewPrompt(
+      CONTEXT,
+      stage({ kind: "behaviourReview" }),
+      [],
+      true,
+      undefined,
+      "Write the automated checks",
+    );
+    expect(prompt).toContain("write no checks and tag no item with");
+    expect(prompt).toContain('"Write the automated checks"');
+    expect(prompt).not.toContain("[check: export-carries-from]");
+  });
+
+  it("hands a checks stage the items it implements", () => {
+    const gate = stage({ id: "gate", name: "Verify locally", kind: "humanVerification" });
+    const prompt = subtaskPrompt(
+      CONTEXT,
+      stage(),
+      { id: "s1", title: "T", prompt: "P", status: "pending" },
+      undefined,
+      undefined,
+      {
+        gate,
+        items: [{ id: "qa-c1", text: "The label reads X", checked: false, raisedByStage: "qa" }],
+      },
+    );
+    expect(prompt).toContain("qa-c1: The label reads X");
+    expect(prompt).toContain("ITEM <item id>: check <check id>");
+  });
+
+  it("leaves both prompts unchanged where the route has not adopted the shape", () => {
+    expect(behaviourReviewPrompt(CONTEXT, stage({ kind: "behaviourReview" }), [], true)).toContain(
+      "[check: export-carries-from]",
+    );
+    expect(
+      subtaskPrompt(CONTEXT, stage(), { id: "s1", title: "T", prompt: "P", status: "pending" }),
+    ).not.toContain("ITEM <item id>");
+  });
+});

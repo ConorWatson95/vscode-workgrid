@@ -3742,6 +3742,42 @@ reading a rule the codebase had already written down and checking whether anythi
 implemented it. **A rule stated in a comment and enforced nowhere is the same failure as
 a marker nothing parses**, one layer up from the model.
 
+### Two lists written from one ticket, and nobody matching them
+
+`domain/checkDerivation.ts`, 7 Oct 2026. `rc-write-checks` was spliced in front of the
+gate so that *somebody* would write checks, and it worked — it wrote them **from the
+ticket**, before any checklist existed. The gate then wrote its checklist from the same
+ticket and was told to tag each item with the check that answered it. Two lists derived
+independently from one specification, joined afterwards by a session told to match
+them: on the checkbox-rename task four items had no check, and one of those four was a
+claim about a DEV overnight job the running app cannot show. "Either the checklist is
+wrong or the tests are" — both, and for the same reason.
+
+The rule is the one `checks-derive-from-the-checklist` states: **the list is written
+first and each check implements exactly one item.** So the route is three stages, and
+the harness derives the roles from the shared `checkManifest` rather than from new
+declarations:
+
+- **A `behaviourReview` before the checks stage writes the list and nothing else.**
+  `checksStageFor` tells its prompt a stage after it implements the list, so it is asked
+  for one observable property per item in the suite's vocabulary, with no check tags.
+- **The checks stage is handed the items by id** (`checklistToImplement`) and answers
+  every one with `ITEM <id>: check <check id>` or `ITEM <id>: gap — <why>`, the
+  `STEP <n>` shape. An item it says nothing about **holds the stage**: silence is the
+  failure, so silence is what cannot pass. A claimed check must exist in the manifest
+  afterwards, an id it was not handed is ignored and announced, and nothing is ticked —
+  whether an item is answered stays `tickAnsweredItems`' question, decided by the run.
+- **The gate reads.** `gateReadsUpstreamChecklist` skips `recordChecklist` on it, so it
+  cannot replace the list its checks were written against, and `checkAuthoringSkipped`
+  no longer holds it — the hold was for a gate asked to author, and here nothing is.
+
+Three narrowings. **Absence means unchanged**: a checks stage with no review ahead of it
+leaves the gate writing its list as before, or nothing would write one at all. **Only
+the first gate after the checks stage is served** — `report-change`'s DEV-site sign-off
+shares the local gate's manifest, nothing upstream writes its list, and the first build
+made it a reader with no items; caught by running the derivation over the live config,
+not by a test. **Never on a repair round**, for `checkAuthoringSkipped`'s reason.
+
 ### A retracted rule went on asking its questions
 
 `domain/retractedRules.ts`, 1 Oct 2026. **Nothing removes a stage from a pipeline**, and
