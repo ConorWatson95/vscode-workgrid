@@ -17,6 +17,13 @@ describe("deriveAgentActivity", () => {
   it("treats a busy waiting state as still working", () => {
     expect(deriveAgentActivity("waiting", true)).toBe("working");
   });
+
+  it("is working while the route runner drives the task, even between turns", () => {
+    // The stage's checks run after its session's turn has ended.
+    expect(deriveAgentActivity("waiting", false, true)).toBe("working");
+    expect(deriveAgentActivity(undefined, false, true)).toBe("working");
+    expect(deriveAgentActivity("starting", false, true)).toBe("starting");
+  });
   it("maps stopped/completed to finished and failed to failed", () => {
     expect(deriveAgentActivity("stopped", false)).toBe("finished");
     expect(deriveAgentActivity("completed", false)).toBe("finished");

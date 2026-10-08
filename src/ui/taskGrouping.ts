@@ -1,4 +1,3 @@
-import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { outstandingPullRequests } from "../domain/pipelineEngine";
 import { ExternalFeedback, hasUnreadFeedback } from "../domain/externalFeedback";
@@ -91,18 +90,11 @@ export interface GroupInput {
 /**
  * The gate this task is stopped at, if somebody other than the operator answers it.
  *
- * Three outcomes rather than two, and the third is the one a first attempt got wrong.
- * Items are counted **per gate** via `itemsForGate`, never pipeline-wide, so a task is
- * not filed as waiting on testers over an item belonging to a gate two rows further on:
- *
- * - **Something outstanding** → waiting on others. The plain case.
- * - **Items exist and every one is ticked** → *yours*. Somebody has fed back and what is
- *   left is the approval, which only the operator can give.
- * - **No items at all** → waiting on others, which is the correction. Keying purely on
- *   outstanding items read an empty checklist as an answered one, so a DEV sign-off that
- *   raised nothing — or whose items predate scoping and route elsewhere — sat in "needs
- *   you" with nothing for the operator to read. Absence of a checklist is not evidence
- *   that a verification happened; the audience says who performs it, and nobody has.
+ * Keyed on the gate alone — reached, declared `"others"`, and the first thing the route
+ * is stopped on — never on its checklist. Every checklist rule tried here (outstanding
+ * items, an empty list, a person's tick, a check's tick) was a guess at whether the
+ * audience had answered, and each guess was wrong in some case. The audience answers on
+ * the ticket, so that is what brings the task back (`domain/externalFeedback.ts`).
  */
 export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | undefined {
   if (!pipeline) return undefined;
@@ -145,32 +137,13 @@ export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | un
   );
   if (firstUnresolved && firstUnresolved.id !== gate.id) return undefined;
 
-  if (itemsForGate(pipeline, gate.id).length > 0) return gate;
-
-  // Nothing outstanding: was anything ever asked of this gate? A ticked item is somebody
-  // having answered, and the approval that follows is the operator's.
-  //
-  // Only a tick a *person* made. A gate whose checks ticked every item has been answered
-  // by the suite, not by the audience it declared — on the Pyramid export task all five
-  // DEV sign-off items were ticked by checks and the task sat in "Needs you" while the
-  // testers had not looked at it. Same argument as the empty checklist above: the
-  // audience says who performs the verification, and they have not.
-  const answered = pipeline.stages
-    .filter((stage) => stage.status !== "skipped")
-    .flatMap((stage) => stage.checklist ?? [])
-    .some(
-      (item) =>
-        item.checked &&
-        item.checkedBy !== "check" &&
-        gateForItem(pipeline, item.scope) === gate.id,
-    );
-
-  return answered ? undefined : gate;
-}
-
-/** Which gate answers for a scope, by id, so a ticked item can be attributed. */
-function gateForItem(pipeline: TaskPipeline, scope: string | undefined): string | undefined {
-  return gateFor(checklistGates(pipeline), scope)?.stageId;
+  // Ticks no longer bring it back, whoever made them. The operator ticking items as they
+  // read the testers' feedback is not the testers having finished, and filing the task
+  // as yours on the first tick pulled a sign-off back while the testers were still
+  // working through it. What says the people it waits on have spoken is a comment on the
+  // ticket, which `groupForTask` reads through `hasUnreadFeedback`; approving the gate
+  // is still available from either group.
+  return gate;
 }
 
 function externalGateInPlay(pipeline: TaskPipeline | undefined): boolean {

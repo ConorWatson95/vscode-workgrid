@@ -244,14 +244,13 @@ describe("a gate somebody else answers", () => {
     expect(of(p)).toBe("waiting-others");
   });
 
-  it("is yours again once the items are ticked", () => {
-    // Approving is a decision only the operator makes, so a gate with nothing
-    // outstanding is a click and belongs back in the list they scan.
+  it("still waits on others once the items are ticked", () => {
+    // Ticks are not the audience answering; only a comment on the ticket brings it back.
     const p = pipeline([
       stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: true, scope: "uat", raisedByStage: "a" }] }),
       gate({ status: "awaiting-approval" }),
     ]);
-    expect(of(p)).toBe("needs-you");
+    expect(of(p)).toBe("waiting-others");
   });
 
   it("still waits on others when only checks ticked the items", () => {
@@ -269,7 +268,7 @@ describe("a gate somebody else answers", () => {
     expect(of(p)).toBe("waiting-others");
   });
 
-  it("is yours once a person ticked any item, even beside check-ticked ones", () => {
+  it("still waits on others when a person ticked items beside check-ticked ones", () => {
     const p = pipeline([
       stage({
         id: "a",
@@ -281,7 +280,7 @@ describe("a gate somebody else answers", () => {
       }),
       gate({ status: "awaiting-approval" }),
     ]);
-    expect(of(p)).toBe("needs-you");
+    expect(of(p)).toBe("waiting-others");
   });
 
   it("comes back to you when the ticket has a comment newer than the wait", () => {

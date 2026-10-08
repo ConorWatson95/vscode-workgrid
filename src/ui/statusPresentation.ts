@@ -48,7 +48,18 @@ export type AgentActivity =
 export function deriveAgentActivity(
   status: AgentSessionStatus | undefined,
   busy: boolean,
+  /**
+   * The route runner is driving this task right now.
+   *
+   * A stage session's turn ends in `waiting` and the runner then runs the stage's
+   * checks — a browser suite can take minutes — or starts the next subtask. Nobody is
+   * being asked anything, but `waiting` alone read as "Awaiting input" and the row
+   * showed the yellow bubble for the whole test run. A stage that genuinely needs a
+   * person stops the runner (`NEEDS-INFO`) or holds a call, which is shown separately.
+   */
+  driving = false,
 ): AgentActivity | undefined {
+  if (driving && status !== "starting") return "working";
   switch (status) {
     case "starting":
       return "starting";

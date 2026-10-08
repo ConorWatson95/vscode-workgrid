@@ -2819,6 +2819,13 @@ items that exist and are all **ticked** → yours, because somebody has fed back
 approval is yours alone; nothing ever asked → others, since absence of a checklist is not
 evidence that a verification happened.
 
+**Superseded 8 Oct 2026: the checklist no longer decides it at all.** Every rule above was a
+guess at whether the audience had answered, and the tick rule kept being wrong — first a
+check's tick, then the operator's own tick pulling a DEV sign-off back while testers were
+still working through it. The audience answers on the ticket, so an `"others"` gate the
+route has stopped on is waiting on others until a comment from somebody else arrives
+(`domain/externalFeedback.ts`). Approving stays available from either group.
+
 ### A reply on the ticket brings a delegated task back
 
 `domain/externalFeedback.ts` + `services/externalFeedbackService.ts` +

@@ -371,6 +371,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ever reads the last scan, and a scan needs a session runner that is built later.
   let suggestionScans: SuggestionScanService | undefined;
 
+  // Bound once the pipeline runner exists, which is after the tree: a render can
+  // happen in between, and reading the runner's binding then would throw.
+  let isDrivingRoute: (taskId: string) => boolean = () => false;
   const tree = new TaskWorkspaceTreeProvider(
     service,
     () => repositoryRoot,
@@ -378,7 +381,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     (task) => {
       // A built-in chat session (which we drive) is authoritative.
       const session = sessions.get(task.id);
-      if (session) return deriveAgentActivity(session.status, session.busy);
+      const driving = isDrivingRoute(task.id);
+      if (session || driving) {
+        return deriveAgentActivity(session?.status, session?.busy ?? false, driving);
+      }
       // Otherwise, best-effort native activity from transcript freshness.
       if (configuration.trackNativeActivity(repositoryUri)) {
         nativeWatcher.ensure(task.worktreePath);
@@ -423,7 +429,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     getLiveState: (task) => service.getLiveState(task),
     getActivity: (taskId) => {
       const session = sessions.get(taskId);
-      return session ? deriveAgentActivity(session.status, session.busy) : undefined;
+      const driving = isDrivingRoute(taskId);
+      return session || driving
+        ? deriveAgentActivity(session?.status, session?.busy ?? false, driving)
+        : undefined;
     },
     detectVisualStudio: (worktreePath) => visualStudio.detect(worktreePath),
     run: (taskId, action) => {
@@ -1081,6 +1090,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // deploying the merge -- is asked again before the stage is held rather than failed.
     () => configuration.environmentWaitMinutes(repositoryUri) * 60_000,
   );
+  isDrivingRoute = (taskId) => runner.isRunning(taskId);
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a
   // subtask lives in the owning host's memory — the session's status listener, the
