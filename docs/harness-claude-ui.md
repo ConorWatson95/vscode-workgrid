@@ -86,7 +86,17 @@ watcher: 15 of 15 checks passed.
 - nothing written to stdout except JSON-RPC
 
 The demo also confirmed that a plain `save()` from a stale copy is still last-writer-wins.
-That is why the in-flight guard exists.
+That is why the in-flight guard exists, and why the runner no longer uses one (below).
+
+**The runner merges rather than overwrites** (`domain/pipelineMerge.ts`). An advance holds
+its pipeline for the whole of a session and used to write it back over whatever had landed
+meanwhile: a tick, a guidance note, a gate the config refresh had updated. Its `save` now
+runs inside `update` and does a three-way merge against the disk copy. Values only one side
+changed come from that side. Arrays of records are matched by `id`, and append-only
+ledgers keep both sides' entries. Where both sides changed the same value, the runner's
+value is kept and the path is logged as a warning. The merge is skipped when the disk
+still holds what this runner last wrote, so a route with nobody else writing behaves
+exactly as before.
 
 **Lock defects this work exposed.** All were pre-existing, and the stress tests used four
 processes incrementing one counter 200 times:
@@ -103,8 +113,11 @@ fail-open, and it is announced.
 
 ## Known limits
 
-- `PipelineRunner` still saves the whole pipeline (last writer wins). The in-flight guard
-  covers the window in which that matters; moving the runner onto `update` would close it.
+- A clash with the runner keeps the runner's value and is announced only in the log. The
+  in-flight guard still refuses decisions while a subtask runs. Ticks on a different stage
+  would now survive a session, so that guard could be narrowed later.
+- Other VS Code commands still `save` a task they read before a dialog. Approve, retry and
+  tick are the ones moved onto `update`.
 - What is *running* lives in the extension host's memory: `isRunning`, sessions, held tool
   calls under `globalStorageUri`, and live `ask_user` questions. The second client sees
   their effect on `state.json` (a subtask `active`) and nothing else.

@@ -4814,6 +4814,15 @@ and no daemon. Rules, each load-bearing:
 - **Decision tools are app-only**, and they exist only when the host advertises MCP Apps.
   The model can read a run and never approve one.
 - **VS Code watches the state *directory***, because each atomic rename replaces the file.
+- **The runner merges its pipeline into the disk copy instead of overwriting it**
+  (`domain/pipelineMerge.ts`, `PipelineRunner.save`). An advance holds its pipeline for
+  a whole session, so every write made meanwhile was reverted at the next save. It is a
+  three-way merge, generic over JSON so there is no list of fields to forget. Records
+  are matched by `id`, append-only ledgers keep both sides, and a clash keeps the
+  runner's value with a warning. The merge base is `task.pipeline`, so callers must
+  continue from the task `save` returns: a merged-in change missing from the caller's
+  own copy reads as a removal. The merge is skipped when the disk still holds this
+  runner's last write.
 - **Three pre-existing lock defects**, found by multi-process stress tests:
   - The empty-record window between create and write was broken as a crash (2–4 of 200
     writes lost).

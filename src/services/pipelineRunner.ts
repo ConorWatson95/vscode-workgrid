@@ -162,6 +162,7 @@ import {
 } from "../domain/staleSubtask";
 import { formatHandoffBrief, isEmptyHandoff, parseHandoff } from "../agents/handoff";
 import { MAX_HANDOFF_CHARS } from "../domain/taskPipeline";
+import { mergePipelines, sameJson } from "../domain/pipelineMerge";
 import { TaskRepository } from "../persistence/taskRepository";
 import { Logger } from "../logging/logger";
 import { ReviewPlanService } from "./reviewPlanService";
@@ -979,7 +980,7 @@ export class PipelineRunner {
         stage.id,
         notReadyHoldReason(verification.notReady.reason, verification.notReady.waitedMinutes),
       );
-      await this.repository.save({ ...task, pipeline, updatedAt: new Date().toISOString() });
+      await this.save(task, pipeline);
       return ok({
         ticked: 0,
         command: verification.command,
@@ -1027,11 +1028,10 @@ export class PipelineRunner {
     );
     pipeline = covered.pipeline;
 
-    await this.repository.save({
-      ...task,
-      pipeline,
-      updatedAt: new Date().toISOString(),
-    });
+    // Through `save`, not a whole-task write: the check can run for minutes, and the
+    // task read before it would otherwise put back every field and pipeline edit made
+    // while it ran.
+    await this.save(task, pipeline);
 
     return ok({
       ticked: covered.ticked.length,
@@ -1707,7 +1707,7 @@ Note: ${covered.skipped}`
           const count = (updated.pullRequests ?? []).filter((w) => w.mergedAt).length
             - (pipeline.pullRequests ?? []).filter((w) => w.mergedAt).length;
           current = await this.save(current, updated);
-          pipeline = updated;
+          pipeline = current.pipeline ?? updated;
           steps.push(`${count} pull request(s) have been merged; carrying on.`);
         }
       }
@@ -2224,6 +2224,7 @@ Note: ${covered.skipped}`
       pipeline = started.value;
       this.startedSubtasks.add(subtask.id);
       task = await this.save(task, pipeline);
+      pipeline = task.pipeline ?? pipeline;
     }
 
     const taskId = task.id;
@@ -3640,24 +3641,69 @@ Note: ${covered.skipped}`
    * to its ticket at 09:47:38, and the advance overwrote the link 51 seconds later — the
    * command having worked exactly as designed, twice.
    *
-   * The runner owns `pipeline` for the duration of an advance, and nothing else. So the
-   * pipeline is written from memory and everything else is taken from the freshest read,
-   * which is the same repair `recordStageClaims` already makes for its own field and for
-   * the same stated reason.
+   * Everything but `pipeline` is taken from the freshest read, the same repair
+   * `recordStageClaims` makes for its own field. The pipeline itself had the same
+   * defect one level down: written from memory, it reverted every write another client
+   * made to it during the session — a tick from Claude, a guidance note, a gate the
+   * config refresh brought into line. So it is merged (`mergePipelines`) against the
+   * disk copy, inside `update` so nothing can land between the read and the write.
+   *
+   * `task.pipeline` is the merge base, which holds because every caller derives the
+   * new pipeline from the task it passes — and callers continue from the pipeline this
+   * returns, never their own copy, since a merged-in change missing from their copy
+   * would read as one they removed. The merge is skipped when the disk still holds what
+   * this runner last wrote: nobody else has written, and a caller whose `task` is older
+   * than its own last save would otherwise have that save's changes read as somebody
+   * else's.
    */
   private async save(
     task: TaskWorkspace,
     pipeline: TaskPipeline,
   ): Promise<TaskWorkspace> {
-    const current = (await this.repository.get(task.id)) ?? task;
-    const updated = {
-      ...current,
-      pipeline,
-      updatedAt: new Date().toISOString(),
-    };
-    await this.repository.save(updated);
-    return updated;
+    let conflicts: string[] = [];
+    let absorbed = false;
+    const fallback = { ...task, pipeline, updatedAt: new Date().toISOString() };
+    const written = await this.repository.update(task.id, (current) => {
+      const onDisk = current ?? task;
+      let next = pipeline;
+      const theirs = onDisk.pipeline;
+      if (
+        theirs &&
+        task.pipeline &&
+        !sameJson(theirs, this.lastWritten.get(task.id)) &&
+        !sameJson(theirs, task.pipeline)
+      ) {
+        const merged = mergePipelines(task.pipeline, pipeline, theirs);
+        next = merged.pipeline;
+        conflicts = merged.conflicts;
+        absorbed = true;
+      }
+      return { ...onDisk, pipeline: next, updatedAt: fallback.updatedAt };
+    });
+    const saved = written ?? fallback;
+    if (saved.pipeline) this.lastWritten.set(task.id, saved.pipeline);
+
+    // Announced, because a write that kept one side of a clash is the last-writer-wins
+    // this exists to end, narrowed to one field — and a narrowed loss nobody is told
+    // about is still a loss.
+    if (conflicts.length > 0) {
+      this.logger.warn(
+        `Harness [${task.name}] the route and another client both changed ` +
+          `${conflicts.join(", ")} during this advance; the route's value was kept.`,
+      );
+    } else if (absorbed) {
+      this.logger.info(
+        `Harness [${task.name}] kept a change made elsewhere while the route was running.`,
+      );
+    }
+    return saved;
   }
+
+  /**
+   * The pipeline this runner last wrote, per task. A disk copy equal to it means nobody
+   * else has written since, which is the one case the merge must not run (see `save`).
+   */
+  private readonly lastWritten = new Map<string, TaskPipeline>();
 }
 
 

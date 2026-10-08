@@ -3937,3 +3937,67 @@ describe("checks that answer checklist items", () => {
     expect(stage.checkOutcomes ?? []).toEqual([]);
   });
 });
+
+/**
+ * An advance holds its pipeline for the whole of a session and writes it back at the
+ * end, so anything another client wrote meanwhile used to be reverted by that write.
+ */
+describe("a write made elsewhere during a session", () => {
+  function writingDuring(repo: InMemoryTaskRepository, write: (t: TaskWorkspace) => TaskWorkspace) {
+    const inner = fakeSessions({ "plan:": { text: "1. Only one — do it." } });
+    return {
+      ...inner,
+      async run(t: TaskWorkspace, prompt: string, label: string, options?: unknown) {
+        if (label.startsWith("build:")) {
+          await repo.update("t1", (current) => (current ? write(current) : undefined));
+        }
+        return inner.run(t, prompt, label, options as never);
+      },
+    } as StageSessionRunner;
+  }
+
+  it("survives the runner's save at the end of the subtask", async () => {
+    const repo = new InMemoryTaskRepository();
+    const sessions = writingDuring(repo, (current) => ({
+      ...current,
+      pipeline: {
+        ...current.pipeline!,
+        guidance: [
+          ...(current.pipeline!.guidance ?? []),
+          { id: "g-claude", text: "only Pyramid, not Motability", at: "t9" },
+        ],
+      },
+    }));
+    const { runner } = makeRunner(sessions, { repo });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const after = (await repo.get("t1"))!.pipeline!;
+    expect(after.guidance?.map((g) => g.id)).toContain("g-claude");
+    expect(after.stages.find((s) => s.id === "build")?.status).toBe("passed");
+  });
+
+  it("keeps what the session did where the other write changed the same field", async () => {
+    const repo = new InMemoryTaskRepository();
+    const sessions = writingDuring(repo, (current) => ({
+      ...current,
+      pipeline: {
+        ...current.pipeline!,
+        stages: current.pipeline!.stages.map((s) =>
+          s.id === "build"
+            ? { ...s, subtasks: s.subtasks.map((sub) => ({ ...sub, status: "pending" as const })) }
+            : s,
+        ),
+      },
+    }));
+    const { runner } = makeRunner(sessions, { repo });
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const build = (await repo.get("t1"))!.pipeline!.stages.find((s) => s.id === "build")!;
+    expect(build.subtasks.map((s) => s.status)).toEqual(["done"]);
+    expect(build.status).toBe("passed");
+  });
+});
