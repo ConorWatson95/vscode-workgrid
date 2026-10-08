@@ -184,6 +184,16 @@ export class ClaudeStreamSession {
   exitDetail?: string;
   /** Approximate current context size in tokens (from the latest usage). */
   contextTokens = 0;
+  /**
+   * The largest single prompt this session sent, in tokens.
+   *
+   * Never reset by compaction or a fresh restart, unlike `contextTokens`: it answers
+   * whether any one request crossed a size line, and a request that crossed it before
+   * a compaction was still billed as having done so. Some models price a request by
+   * its prompt size, so a total cannot tell a cheap model run within its cheap band
+   * from one that left it.
+   */
+  peakContextTokens?: number;
   /** Model the CLI reported for this session (short form), once known. */
   activeModel?: string;
   /**
@@ -474,6 +484,9 @@ export class ClaudeStreamSession {
     }
 
     const tokens = contextTokensOf(event);
+    if (tokens !== undefined && tokens > (this.peakContextTokens ?? 0)) {
+      this.peakContextTokens = tokens;
+    }
     if (tokens !== undefined && tokens !== this.contextTokens) {
       this.contextTokens = tokens;
       this.emitter.emit("tokens", tokens);

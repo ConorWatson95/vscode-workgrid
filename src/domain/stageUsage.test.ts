@@ -46,6 +46,20 @@ describe("subtasksUsage", () => {
     expect(totals.unmeasured).toBe(0);
   });
 
+  it("keeps the largest single prompt as a maximum, never a sum", () => {
+    // Two 80k prompts sum past 100k; neither request crossed it, which is what a
+    // size-priced model is billed on.
+    const totals = subtasksUsage([
+      subtask({ id: "a", activity: activity({ peakContextTokens: 80_000 }) }),
+      subtask({ id: "b", activity: activity({ peakContextTokens: 60_000 }) }),
+    ]);
+    expect(totals.peakContextTokens).toBe(80_000);
+  });
+
+  it("reports no largest prompt when nothing measured one", () => {
+    expect(subtasksUsage([subtask({ activity: activity() })]).peakContextTokens).toBeUndefined();
+  });
+
   it("sums time in session rather than spanning the gap between subtasks", () => {
     // Two minutes each, run an hour apart because a human sat in between. The
     // total is four minutes of agent time, not sixty-two.

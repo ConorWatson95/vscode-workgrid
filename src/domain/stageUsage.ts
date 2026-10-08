@@ -48,6 +48,11 @@ export interface UsageTotals {
    * cost comparison is measuring a fallback rather than the choice being tested.
    */
   models: string[];
+  /**
+   * The largest single prompt any of these sessions sent. A maximum, never a sum —
+   * it is about one request's size, not volume. Absent when nothing reported one.
+   */
+  peakContextTokens?: number;
   /** Subtasks that ran and reported cost or tokens. */
   measured: number;
   /**
@@ -127,6 +132,10 @@ export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
     // back silently, and two runs compared on the requested name would then be
     // two runs of the same model reported as a comparison between two.
     if (subtask.activity?.actualModel) models.add(subtask.activity.actualModel);
+    const peak = subtask.activity?.peakContextTokens;
+    if (peak !== undefined && peak > (totals.peakContextTokens ?? 0)) {
+      totals.peakContextTokens = peak;
+    }
 
     const activity = subtask.activity;
     const cost = activity?.costUsd;
@@ -203,6 +212,8 @@ function addDiscarded(live: UsageTotals, pipeline: TaskPipeline): UsageTotals {
     measured: live.measured + gone.measured,
     unmeasured: live.unmeasured + gone.unmeasured,
     models: live.models,
+    // A discarded run records no peak, so the surviving runs' is the only one known.
+    ...(live.peakContextTokens !== undefined ? { peakContextTokens: live.peakContextTokens } : {}),
     tokens: {
       input: live.tokens.input + gone.tokens.input,
       output: live.tokens.output + gone.tokens.output,

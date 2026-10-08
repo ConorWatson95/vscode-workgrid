@@ -45,6 +45,8 @@ export interface StageSession {
   readonly activeModel?: string;
   /** The CLI build that ran it, from the init event. See SubtaskActivity.cliVersion. */
   readonly cliVersion?: string;
+  /** The largest single prompt it sent. See SubtaskActivity.peakContextTokens. */
+  readonly peakContextTokens?: number;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
   on(event: "mcp", listener: (report: McpStartupReport) => void): unknown;
@@ -392,6 +394,9 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           ...activityWatcher.result(),
           ...(session.costUsd !== undefined ? { costUsd: session.costUsd } : {}),
           ...(session.tokenTotals ? { tokens: session.tokenTotals } : {}),
+          ...(session.peakContextTokens !== undefined
+            ? { peakContextTokens: session.peakContextTokens }
+            : {}),
           // What ran, not what was asked for. A model an org policy disallows is
           // substituted without failing, and a stage comparison against the
           // requested name would then be comparing two runs of the same model.

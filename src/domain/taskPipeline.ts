@@ -177,6 +177,17 @@ export interface SubtaskActivity {
   costUsd?: number;
   /** Cumulative tokens for the session, once it reported a result. */
   tokens?: SessionTokenTotals;
+  /**
+   * The largest single prompt the session sent, in tokens (input + cache read +
+   * cache creation of one turn).
+   *
+   * Separate from `tokens` because the two answer different questions: the total is
+   * what a run cost, this is whether any one request crossed a size at which a
+   * model's price changes — Haiku 5.5 charges five times as much per token above
+   * 100k. A cheaper-model pilot that cannot tell those apart is comparing a rate it
+   * may never have been charged. Absent means unmeasured, never small.
+   */
+  peakContextTokens?: number;
 
   /**
    * Of this subtask's span, how long it sat blocked on a human via `ask_user`.

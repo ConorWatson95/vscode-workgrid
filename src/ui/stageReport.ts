@@ -196,6 +196,9 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
 
   // Named rather than assumed: the requested model is not evidence of what ran.
   if (totals.models.length > 0) parts.push(`on ${totals.models.join(", ")}`);
+  if (totals.peakContextTokens !== undefined) {
+    parts.push(`largest prompt ${formatTokens(totals.peakContextTokens)}`);
+  }
 
   if (parts.length === 0) return undefined;
 
