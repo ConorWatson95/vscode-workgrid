@@ -1,3 +1,4 @@
+import { ExternalFeedbackService } from "../services/externalFeedbackService";
 import * as vscode from "vscode";
 import { TaskWorkspaceService } from "../services/taskWorkspaceService";
 import { GitWorktreeService } from "../git/gitWorktreeService";
@@ -73,6 +74,8 @@ export interface CommandContext {
    * agent could not be prepared simply has no scanning, rather than a broken tree.
    */
   suggestionScans?: SuggestionScanService;
+  /** Polls waiting tasks' tickets for replies; optional like scans. */
+  feedback?: ExternalFeedbackService;
   logger: Logger;
   extensionUri: vscode.Uri;
   globalState: vscode.Memento;

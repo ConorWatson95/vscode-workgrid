@@ -29,6 +29,8 @@ const HEADLESS_ROOTS = [
   // told nobody is listening, so it proceeds rather than blocking.
   "src/services/askUserService.ts",
   "src/services/gateFileSystem.ts",
+  // Polling a waiting task's ticket is background work a daemon would own.
+  "src/services/externalFeedbackService.ts",
   "src/persistence/taskStateStore.ts",
   "src/persistence/fileTaskRepository.ts",
   "src/persistence/nodeStateFileIo.ts",

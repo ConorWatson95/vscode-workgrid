@@ -50,6 +50,8 @@ import {
 } from "./agents/suggestionScanSessionRunner";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
+import { ExternalFeedbackService } from "./services/externalFeedbackService";
+import { externalWaitSince, groupForTask } from "./ui/taskGrouping";
 import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { subagentLimitEnv } from "./domain/subagentLimits";
@@ -1122,6 +1124,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
 
   /**
+   * Checks the tickets of tasks waiting on others for replies.
+   *
+   * A chained timeout rather than an interval, so a change to the setting applies from
+   * the next poll without a reload, and `0` stops it until somebody sets a number again.
+   */
+  const externalFeedback = new ExternalFeedbackService({
+    repository,
+    runner: new NodeVerificationRunner(),
+    sources: (root) =>
+      loadHarness(root, {
+        configuredPath: configuration.harnessConfigPath(repositoryUri),
+      }).suggestionSources,
+    // The tree's own rule, asked without the feedback so a task already pulled back
+    // by a reply still counts as one whose wait is in play.
+    waitingSince: (task) =>
+      groupForTask({ status: task.status, pipeline: task.pipeline, heldCalls: 0 }) ===
+      "waiting-others"
+        ? externalWaitSince(task.pipeline)
+        : undefined,
+    clock: { now: () => new Date().toISOString() },
+    logger,
+  });
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  const pollFeedback = async (): Promise<void> => {
+    const minutes = configuration.feedbackPollMinutes(repositoryUri);
+    try {
+      if (repositoryRoot && minutes > 0) {
+        const { arrived } = await externalFeedback.poll(repositoryRoot);
+        if (arrived.length > 0) {
+          tree.refresh();
+          const names = arrived.map((task) => task.origin?.ref ?? task.name).join(", ");
+          void vscode.window.showInformationMessage(
+            `New ticket comment(s) on ${names} — moved back to Needs you.`,
+          );
+        }
+      }
+    } catch (error) {
+      logger.warn(`Could not poll tickets for replies: ${String(error)}`);
+    }
+    feedbackTimer = setTimeout(() => void pollFeedback(), Math.max(minutes, 1) * 60 * 1000);
+  };
+  void repositoryReady.then(() => pollFeedback());
+  context.subscriptions.push({ dispose: () => feedbackTimer && clearTimeout(feedbackTimer) });
+
+  /**
    * Brings gate declarations on every task into line with the project's routes.
    *
    * Its own pass rather than part of the advance path, because the tasks that need it
@@ -1282,6 +1329,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     permissionGate,
     askUser,
     suggestionScans,
+    feedback: externalFeedback,
     stageDefinitions: () => currentHarness() ?? { routes: [], rules: [] },
     reducedMcpConfigPath,
     mcpNarrowed: () => configuration.stageMcpServers(repositoryUri).length > 0,

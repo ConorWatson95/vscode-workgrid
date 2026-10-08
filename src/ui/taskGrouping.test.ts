@@ -284,6 +284,29 @@ describe("a gate somebody else answers", () => {
     expect(of(p)).toBe("needs-you");
   });
 
+  it("comes back to you when the ticket has a comment newer than the wait", () => {
+    const p = pipeline([
+      stage({
+        id: "a",
+        status: "passed",
+        checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }],
+      }),
+      gate({ status: "awaiting-approval", startedAt: "2026-10-07T12:00:00Z" }),
+    ]);
+    const latest = { author: "Tess", at: "2026-10-08T09:00:00Z", excerpt: "still wrong" };
+    expect(
+      groupForTask({ status: "ready", pipeline: p, heldCalls: 0, feedback: { latest, count: 1, checkedAt: "" } }),
+    ).toBe("needs-you");
+    expect(
+      groupForTask({
+        status: "ready",
+        pipeline: p,
+        heldCalls: 0,
+        feedback: { latest, count: 1, checkedAt: "", readAt: "2026-10-08T10:00:00Z" },
+      }),
+    ).toBe("waiting-others");
+  });
+
   it("stays yours when the gate did not declare an audience", () => {
     const p = pipeline([
       stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),

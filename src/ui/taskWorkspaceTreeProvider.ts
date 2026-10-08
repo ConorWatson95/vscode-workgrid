@@ -362,6 +362,7 @@ export class TaskWorkspaceTreeProvider
         status: item.task.status,
         pipeline: item.task.pipeline,
         heldCalls: this.getHeldCalls(item.task.id).length,
+        feedback: item.task.externalFeedback,
       }),
     );
 

@@ -77,6 +77,7 @@ import {
   setTicketReferenceCommand,
   startTaskFromSuggestionCommand,
   unlinkTaskOriginCommand,
+  markFeedbackReadCommand,
 } from "./suggestionCommands";
 import { interjectCommand, setReferencesCommand } from "./taskContextCommands";
 import { mergeIntoTaskCommand } from "./mergeIntoTaskCommand";
@@ -157,6 +158,7 @@ export function registerCommands(ctx: CommandContext): vscode.Disposable[] {
       linkSuggestionToTaskCommand(ctx, arg),
     ),
     register("taskWorkspaces.unlinkTaskOrigin", (arg) => unlinkTaskOriginCommand(ctx, arg)),
+    register("taskWorkspaces.markFeedbackRead", (arg) => markFeedbackReadCommand(ctx, arg)),
     register("taskWorkspaces.recordBaseCommit", (arg) =>
       recordBaseCommitCommand(ctx, arg),
     ),

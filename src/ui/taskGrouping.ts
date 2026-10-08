@@ -1,6 +1,7 @@
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { outstandingPullRequests } from "../domain/pipelineEngine";
+import { ExternalFeedback, hasUnreadFeedback } from "../domain/externalFeedback";
 
 /**
  * Which bucket a task belongs in, so a list of them can be scanned rather than
@@ -83,6 +84,8 @@ export interface GroupInput {
   pipeline?: TaskPipeline;
   /** Tool calls the agent is blocked on right now. Live, not persisted. */
   heldCalls: number;
+  /** What the last poll of the task's ticket found; see `domain/externalFeedback.ts`. */
+  feedback?: ExternalFeedback;
 }
 
 /**
@@ -260,7 +263,15 @@ export function groupForTask(input: GroupInput): TaskGroupId {
 
   // Before the approval check, because an external gate is usually sitting at exactly
   // that status — and it is the reason this group exists.
-  if (externalGateInPlay(input.pipeline)) return "waiting-others";
+  //
+  // Unless the people it is waiting on have replied. Testers answer on the ticket, not in
+  // the tree, so a comment newer than the wait is the task coming back to you — and
+  // leaving it filed as delegated is how a reply sits unread for days.
+  if (externalGateInPlay(input.pipeline)) {
+    return hasUnreadFeedback(input.feedback, externalWaitSince(input.pipeline))
+      ? "needs-you"
+      : "waiting-others";
+  }
 
   // A session in flight outranks a gate awaiting approval, and the order of these two
   // checks is the whole of it: this one used to run first, so a task with an agent

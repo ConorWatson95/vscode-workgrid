@@ -68,6 +68,15 @@ export interface SuggestionSource {
    * the authority on whether the ref exists.
    */
   refPattern?: string;
+  /**
+   * A command that lists comments on one ref since a moment, for tasks waiting on others.
+   *
+   * `${ref}` and `${since}` (ISO 8601) are substituted; it runs from the repository root
+   * and prints `{"comments":[{"author","created","body"}]}`. A command rather than a scan
+   * prompt because it is polled: a scan session costs ~$0.40, and a poll that cheap to
+   * skip is one nobody would leave switched on. See `domain/externalFeedback.ts`.
+   */
+  feedbackCommand?: string;
   /** The source's rank vocabulary and what it hides by default. */
   order: SuggestionSourceOrder;
 }
@@ -190,6 +199,9 @@ export function parseSuggestionSources(raw: unknown): ParsedSuggestionSources {
       label: str(source.label) ?? id,
       scanPrompt,
       ...(refPattern ? { refPattern } : {}),
+      ...(str(source.feedbackCommand)
+        ? { feedbackCommand: str(source.feedbackCommand) as string }
+        : {}),
       // Blank rather than absent leaves the default in place, matching how a route stage
       // treats a blank model: passing an empty --model is worse than passing none.
       ...(str(source.model) ? { model: str(source.model) as string } : {}),

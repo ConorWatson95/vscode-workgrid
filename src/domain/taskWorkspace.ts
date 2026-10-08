@@ -1,3 +1,4 @@
+import { ExternalFeedback } from "./externalFeedback";
 import { AgentSession } from "./agentSession";
 import { TaskPipeline } from "./taskPipeline";
 import { TaskReference } from "./taskReferences";
@@ -120,6 +121,12 @@ export interface TaskWorkspace {
    * Optional, so every task that predates suggestions stays valid.
    */
   origin?: TaskOrigin;
+
+  /**
+   * What the last poll of `origin`'s ticket found while the task waited on others.
+   * See `domain/externalFeedback.ts`; optional, so absence means never polled.
+   */
+  externalFeedback?: ExternalFeedback;
 
   /**
    * Documents the operator says govern this task, handed to every stage.

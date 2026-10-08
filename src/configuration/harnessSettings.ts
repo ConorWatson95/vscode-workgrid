@@ -368,6 +368,16 @@ export class HarnessSettings {
   }
 
   /**
+   * How often a waiting task's ticket is checked for replies. Zero switches it off.
+   *
+   * Fifteen minutes because a tester's reply is answered on a human timescale, and each
+   * poll is one process per waiting task. See `domain/externalFeedback.ts`.
+   */
+  feedbackPollMinutes(): number {
+    return this.atLeastZero("feedbackPollMinutes", 15);
+  }
+
+  /**
    * How many subagents one stage session may run at once.
    *
    * The harness owns concurrency, and it owns it at the *task* level: the point

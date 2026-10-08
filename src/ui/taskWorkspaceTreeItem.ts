@@ -13,6 +13,7 @@ import { outstandingChecklist } from "../domain/pipelineEngine";
 import { declaredRepair, isDeclaredRepair } from "../domain/checkFailureRepair";
 import { outstandingPullRequests } from "../domain/pipelineEngine";
 import { itemsForGate } from "../domain/checklistScope";
+import { hasUnreadFeedback } from "../domain/externalFeedback";
 import { positionOf } from "../domain/routePosition";
 import {
   ChecklistItem,
@@ -115,10 +116,22 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
     // task you forget — testers do not notify the tree. The age is what stops one that
     // has sat for a fortnight looking like one handed over this morning.
     const externalSince = externalWaitSince(task.pipeline);
+    const feedback = task.externalFeedback;
+    const unreadFeedback = hasUnreadFeedback(feedback, externalSince);
     if (externalSince) {
       descriptionParts.unshift(
         `with others — ${formatWaitingSince(externalSince, Date.now())}`,
       );
+    }
+    // The reason the task left "Waiting on others", so it leads: without it the row
+    // looks like the same delegated task filed in the wrong group.
+    if (unreadFeedback && feedback?.latest) {
+      descriptionParts.unshift(
+        feedback.count > 1
+          ? `${feedback.count} replies — latest from ${feedback.latest.author}`
+          : `reply from ${feedback.latest.author}`,
+      );
+      this.contextValue += " hasFeedback";
     }
     // Lead with the block: a route waiting on an answer is doing nothing, and
     // that is invisible otherwise.
@@ -165,6 +178,9 @@ export class TaskWorkspaceTreeItem extends vscode.TreeItem {
         task.description ? `\nBrief: ${task.description}` : "",
         task.origin
           ? `\nFor: ${task.origin.ref}${task.origin.url ? ` — ${task.origin.url}` : ""}`
+          : "",
+        unreadFeedback && feedback?.latest
+          ? `\n💬 ${feedback.latest.author}: ${feedback.latest.excerpt || "(no text)"}`
           : "",
         `Branch: \`${task.branchName}\``,
         `Base: \`${task.baseBranch}\``,

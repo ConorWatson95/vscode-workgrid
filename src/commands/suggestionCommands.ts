@@ -391,6 +391,22 @@ export async function unlinkTaskOriginCommand(
   ctx.tree.refresh();
 }
 
+/**
+ * The operator has read a reply on the ticket and the task is still with others.
+ *
+ * Without it a reply that needs no action — "will test tomorrow" — would hold the task
+ * in "Needs you" until the gate moved. A later comment brings it back again.
+ */
+export async function markFeedbackReadCommand(
+  ctx: CommandContext,
+  arg: unknown,
+): Promise<void> {
+  const task = resolveTaskArg(arg);
+  if (!task || !ctx.feedback) return;
+  await ctx.feedback.markRead(task.id);
+  ctx.tree.refresh();
+}
+
 /** The task a tree item stands for, whichever kind of row the menu was opened on. */
 export function resolveTaskArg(arg: unknown): TaskWorkspace | undefined {
   const candidate = arg as { task?: TaskWorkspace } | undefined;

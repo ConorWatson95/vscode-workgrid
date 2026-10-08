@@ -2819,6 +2819,30 @@ items that exist and are all **ticked** → yours, because somebody has fed back
 approval is yours alone; nothing ever asked → others, since absence of a checklist is not
 evidence that a verification happened.
 
+### A reply on the ticket brings a delegated task back
+
+`domain/externalFeedback.ts` + `services/externalFeedbackService.ts` +
+`SuggestionSource.feedbackCommand`, 8 Oct 2026. `Waiting on others` exists because the next
+move is somebody else's, and its own rule named the cost: testers do not notify the tree.
+They answer on the ticket. The first dry run against live tasks found two of ten waiting
+tasks with a reply sitting on them — one a tester's findings, one a request to run
+September's data — both filed as delegated.
+
+A source may declare a `feedbackCommand` (`${ref}`, `${since}`), polled every
+`feedbackPollMinutes` for tasks the grouping files as waiting on others. A comment newer
+than both the wait and the operator's last **Mark Reply Read** files the task as
+`needs-you`. Three rules:
+
+- **A command, never a session.** A session per poll is ~$0.40, which turns a background
+  check into a bill; the project owns transport and credentials, as it owns the scan
+  prompt. `qubeautoapp`'s is `tools/jira/Get-JiraComments.ps1`, REST with the attachment
+  helper's credentials.
+- **The command drops the operator's own comments**, since only the ticket system knows
+  which account is theirs.
+- **Derived against the wait, never reset.** A recorded reply older than the current gate's
+  wait is simply not new, so moving to a later gate needs no clean-up. A failed or
+  unparseable poll records nothing, rather than reporting a broken script as a quiet ticket.
+
 ### A suggestion can be linked to a task that already exists
 
 `TaskWorkspaceService.setTaskOrigin`, and **Link to an Existing Task…** on a suggestion

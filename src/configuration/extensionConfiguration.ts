@@ -149,6 +149,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).transientRetryAttempts();
   }
 
+  feedbackPollMinutes(scope?: vscode.Uri): number {
+    return this.settings(scope).feedbackPollMinutes();
+  }
+
   stageSubagentConcurrency(scope?: vscode.Uri): number {
     return this.settings(scope).stageSubagentConcurrency();
   }
