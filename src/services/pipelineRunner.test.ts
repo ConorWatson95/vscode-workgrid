@@ -139,8 +139,17 @@ function makeRunner(
     harness?: { routes: RouteDefinition[]; rules: ReviewRule[] };
     /** The branch the worktree reports being on, for the branch guard. */
     currentBranch?: string;
-    /** Canned verification outcomes, keyed by the command run. */
-    verify?: Record<string, { exitCode: number; output?: string; spawnError?: string }>;
+    /**
+     * Canned verification outcomes, keyed by the command run. A list is consumed one
+     * per run, its last entry standing once it runs out.
+     */
+    verify?: Record<
+      string,
+      | { exitCode: number; output?: string; spawnError?: string }
+      | { exitCode: number; output?: string; spawnError?: string }[]
+    >;
+    /** How long a NOT-READY check is asked again, in ms. Defaults to the shipped wait. */
+    environmentWaitMs?: number;
     /**
      * Canned files, keyed by path relative to whichever root is read.
      *
@@ -196,7 +205,12 @@ function makeRunner(
             run: async (command) => {
               verified.push(command);
               events.push(`verify:${command}`);
-              const canned = options.verify?.[command] ?? { exitCode: 0 };
+              const entry = options.verify?.[command] ?? { exitCode: 0 };
+              const canned = Array.isArray(entry)
+                ? entry.length > 1
+                  ? entry.shift()!
+                  : entry[0]
+                : entry;
               return { exitCode: canned.exitCode, output: canned.output ?? "", spawnError: canned.spawnError };
             },
           },
@@ -232,6 +246,10 @@ function makeRunner(
       // The same changed paths the rules engine is given: a failed check asks whether
       // its own script is among them.
       async () => options.paths ?? [],
+      undefined,
+      undefined,
+      undefined,
+      options.environmentWaitMs === undefined ? undefined : () => options.environmentWaitMs!,
     ),
     verified,
     events,
@@ -1501,6 +1519,95 @@ describe("declared verification", () => {
     const build = saved?.pipeline?.stages.find((s) => s.id === "build");
     expect(build?.status).toBe("failed");
     expect(build?.subtasks[0].failureReason).toContain("CS1002");
+  });
+
+  describe("a check whose environment has not caught up", () => {
+    /**
+     * The NMGB-2822 shape: the DEV sign-off's checks ran four minutes after the merge,
+     * before CI/CD had deployed it, and the old build failed the stage as though the
+     * work were wrong.
+     */
+    const NOT_READY = {
+      exitCode: 3,
+      output: "NOT-READY: DEV is serving 28fb76b29, which predates this branch",
+    };
+    // A stage that did its work, so the only hold in play is the one under test.
+    const WROTE = { text: "Done.", activity: { pathsWritten: ["src/a.cs"] } };
+
+    it("asks again while it waits, and passes once the environment is ready", async () => {
+      const sessions = fakeSessions({ "": WROTE });
+      const { runner, repo, verified, events } = makeRunner(sessions, {
+        verify: { "dotnet build": [NOT_READY, NOT_READY, { exitCode: 0 }] },
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      expect(verified).toEqual(["dotnet build", "dotnet build", "dotnet build"]);
+      expect(events.filter((e) => e === "wait:true")).toHaveLength(2);
+      const build = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "build");
+      expect(build?.status).toBe("passed");
+      expect(build?.blocked).toBeUndefined();
+      expect(build?.verification?.exitCode).toBe(0);
+    });
+
+    it("holds rather than fails when the wait runs out, recording no check", async () => {
+      const sessions = fakeSessions({ "": WROTE });
+      const { runner, repo, verified } = makeRunner(sessions, {
+        verify: { "dotnet build": NOT_READY },
+        environmentWaitMs: 2 * 60_000,
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      // One run, then one per minute of the budget.
+      expect(verified).toHaveLength(3);
+      const saved = await repo.get(subject.id);
+      const build = saved?.pipeline?.stages.find((s) => s.id === "build");
+      expect(build?.status).not.toBe("failed");
+      expect(build?.subtasks[0].status).toBe("done");
+      expect(build?.subtasks[0].failureReason).toBeUndefined();
+      expect(build?.verification).toBeUndefined();
+      expect(build?.blocked).toContain("still not ready after 2 minutes");
+      expect(build?.blocked).toContain("predates this branch");
+      expect(saved?.pipeline?.failures ?? []).toHaveLength(0);
+    });
+
+    it("never reads a pass as a wait, whatever it printed", async () => {
+      const sessions = fakeSessions({ "": WROTE });
+      const { runner, repo, verified } = makeRunner(sessions, {
+        verify: { "dotnet build": { exitCode: 0, output: NOT_READY.output } },
+      });
+      const subject = verifiedTask();
+      await repo.save(subject);
+
+      await runner.advance(subject);
+
+      expect(verified).toHaveLength(1);
+      const build = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "build");
+      expect(build?.status).toBe("passed");
+    });
+
+    it("lets Re-run Check clear the hold once the environment is ready", async () => {
+      const sessions = fakeSessions({ "": WROTE });
+      const verify = { "dotnet build": [NOT_READY, { exitCode: 0 }] };
+      const { runner, repo } = makeRunner(sessions, { verify, environmentWaitMs: 0 });
+      const subject = verifiedTask();
+      await repo.save(subject);
+      await runner.advance(subject);
+      const held = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "build");
+      expect(held?.blocked).toContain("not ready");
+
+      const rerun = await runner.rerunVerification(subject.id, "build");
+
+      expect(rerun.ok && rerun.value.exitCode).toBe(0);
+      const cleared = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "build");
+      expect(cleared?.blocked).toBeUndefined();
+      expect(cleared?.verification?.exitCode).toBe(0);
+    });
   });
 
   describe("a check its own branch has already fixed", () => {

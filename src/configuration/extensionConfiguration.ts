@@ -149,6 +149,10 @@ export class ExtensionConfiguration {
     return this.settings(scope).transientRetryAttempts();
   }
 
+  environmentWaitMinutes(scope?: vscode.Uri): number {
+    return this.settings(scope).environmentWaitMinutes();
+  }
+
   feedbackPollMinutes(scope?: vscode.Uri): number {
     return this.settings(scope).feedbackPollMinutes();
   }

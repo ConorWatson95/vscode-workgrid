@@ -1,5 +1,6 @@
 import { CopyEntry } from "../domain/worktreeCopyPlan";
 import { SiblingLinkEntry } from "../domain/siblingLinkPlan";
+import { DEFAULT_ENVIRONMENT_WAIT_MINUTES } from "../domain/environmentReadiness";
 
 /**
  * Every setting the harness reads, with its default and its normalisation.
@@ -365,6 +366,16 @@ export class HarnessSettings {
    */
   transientRetryAttempts(): number {
     return this.atLeastZero("transientRetryAttempts", 3);
+  }
+
+  /**
+   * How long a check that reports its environment `NOT-READY` is asked again before
+   * the stage is held. Twenty minutes because a DEV deploy is a build plus a copy, and
+   * each ask is a cheap probe. Zero holds on the first report. See
+   * `domain/environmentReadiness.ts`.
+   */
+  environmentWaitMinutes(): number {
+    return this.atLeastZero("environmentWaitMinutes", DEFAULT_ENVIRONMENT_WAIT_MINUTES);
   }
 
   /**

@@ -3904,6 +3904,28 @@ holds the item. In practice a review writes onto its own stage and the two agree
 attribution is what *states* it, and reading the location instead would quietly stop
 working if an item ever landed on the gate that reads it.
 
+### A check run before the environment had caught up
+
+`domain/environmentReadiness.ts` + `taskWorkspaces.environmentWaitMinutes`, 8 Oct 2026.
+NMGB-2822's DEV sign-off ran its browser checks four minutes after the merge into DEV,
+while CI/CD was still building it, and failed the stage because the CRM page still showed
+the old label. True of the site, nothing to do with the work.
+
+Only the check can know whether its environment is ready, so it says so: a line
+`NOT-READY: <why>` and a non-zero exit, having run nothing. `runVerification` asks again
+once a minute up to the setting (20 by default), and when that runs out the stage is
+**held, not failed**, with the check's sentence — no `verification` recorded, no failure
+ledgered, since nothing judged anything. **Re-run Check** waits the same way and clears
+the hold on a pass. Counted in polls rather than wall clock, so the budget is the same
+however long each probe takes; read only on a non-zero exit, so a pass is never a wait.
+
+The project half (`qubeautoapp` `tools/e2e/src/deployment.ts`): sign-in asks the
+authenticated `/Site/Deployed` for the deploy marker's commit and fails with
+`SITE-NOT-DEPLOYED:` when it lacks any of the branch's app commits, which the script turns
+into `NOT-READY:`. **DEV only** — UAT and live receive cherry-picks with other hashes, so
+ancestry would never be satisfied there and every gate would wait out its budget. Every
+uncertain case (no marker, no endpoint, an unfetched commit) proceeds to the checks.
+
 ### And the base it compared against was moving
 
 `${mergeBase}`, 16 Sep 2026. The third quantity, after *which script runs* and *what it

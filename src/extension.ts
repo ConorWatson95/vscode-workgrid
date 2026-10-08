@@ -1077,6 +1077,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       return found;
     },
+    // How long a check that says its environment is NOT-READY -- a DEV site still
+    // deploying the merge -- is asked again before the stage is held rather than failed.
+    () => configuration.environmentWaitMinutes(repositoryUri) * 60_000,
   );
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a

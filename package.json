@@ -1067,6 +1067,13 @@
           "scope": "resource",
           "markdownDescription": "How many times a subtask whose session died on the **transport** — a 529, a 503, a dropped connection — is simply run again before you are told.\n\nA failure like that says nothing about the stage, but every failure used to be recorded the same way: the stage is `failed`, the route reports blocked, and the only command that could move it was **Re-run This Stage…**, which discards that stage *and everything after it*. So an overloaded API cost exactly what a wrong approach costs — worst of all on a correction run, whose whole purpose is to keep what the stage already produced.\n\nRetries are reverted, never judged: nothing is recorded against the stage, no intervention is counted, and the backoff is exponential and jittered so several tasks failing on one outage do not retry in lockstep. When the budget runs out the stage is **held**, not failed — Advance Route runs it again once the API is back.\n\nSet to `0` to switch the retry off. A transient failure then holds the stage on its first occurrence, which is still not a failure, so nothing is discarded either way."
         },
+        "taskWorkspaces.environmentWaitMinutes": {
+          "type": "number",
+          "default": 20,
+          "minimum": 0,
+          "scope": "resource",
+          "markdownDescription": "How long a stage's check is asked again, once a minute, when it reports that the environment it inspects is **not ready** — a line beginning `NOT-READY:` in its output, typically a DEV site still deploying the merge.\n\nWithout this a check run minutes after a merge reported the old build as the work being wrong, and failed the stage. When the wait runs out the stage is **held**, not failed, with the check's own reason; **Re-run Check** picks it up once the environment has caught up, and nothing is discarded.\n\nSet to `0` to hold on the first report without waiting."
+        },
         "taskWorkspaces.feedbackPollMinutes": {
           "type": "number",
           "default": 15,

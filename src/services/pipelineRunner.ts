@@ -107,6 +107,13 @@ import {
   isTransientFailure,
 } from "../domain/transientFailure";
 import {
+  DEFAULT_ENVIRONMENT_WAIT_MINUTES,
+  ENVIRONMENT_POLL_MS,
+  isNotReadyHold,
+  notReadyHoldReason,
+  parseNotReady,
+} from "../domain/environmentReadiness";
+import {
   CommandOutcome,
   VerificationCommandRunner,
   annotateOutcome,
@@ -571,6 +578,13 @@ export class PipelineRunner {
       paths: readonly string[],
       signal?: AbortSignal,
     ) => Promise<readonly Contamination[]>,
+    /**
+     * How long a check reporting `NOT-READY` is asked again before the stage is held.
+     * A function, because it derives from a setting. Zero holds on the first report.
+     * Last, because every argument here is positional.
+     */
+    private readonly environmentWaitMs: () => number = () =>
+      DEFAULT_ENVIRONMENT_WAIT_MINUTES * 60_000,
   ) {}
 
   /**
@@ -924,7 +938,17 @@ export class PipelineRunner {
     stageId: string,
     signal?: AbortSignal,
   ): Promise<
-    Result<{ command: string; exitCode: number; output: string; ticked: number }, string>
+    Result<
+      {
+        command: string;
+        exitCode: number;
+        output: string;
+        ticked: number;
+        /** Set when the check never ran because its environment was not ready. */
+        notReady?: string;
+      },
+      string
+    >
   > {
     const task = await this.repository.get(taskId);
     if (!task?.pipeline) return err("That task has no pipeline.");
@@ -947,6 +971,23 @@ export class PipelineRunner {
     }
 
     let pipeline = task.pipeline;
+    if (verification.notReady) {
+      // Nothing ran, so nothing is recorded as having run and no outcome file is read.
+      // Held with the check's own sentence, replacing any earlier not-ready hold.
+      pipeline = recordStageBlocked(
+        clearStageBlocked(pipeline, stage.id, isNotReadyHold),
+        stage.id,
+        notReadyHoldReason(verification.notReady.reason, verification.notReady.waitedMinutes),
+      );
+      await this.repository.save({ ...task, pipeline, updatedAt: new Date().toISOString() });
+      return ok({
+        ticked: 0,
+        command: verification.command,
+        exitCode: verification.outcome.exitCode,
+        notReady: verification.notReady.reason,
+        output: verification.outcome.output,
+      });
+    }
     const noted = recordVerification(pipeline, stage.id, {
       command: verification.command,
       exitCode: verification.outcome.exitCode,
@@ -970,7 +1011,11 @@ export class PipelineRunner {
       // `BLOCKED` marker, a declined correction and `stageProductivity` all raise holds
       // about the work rather than about the check, and a green check says nothing
       // about any of them.
-      pipeline = clearStageBlocked(pipeline, stage.id, isVerificationFailure);
+      pipeline = clearStageBlocked(
+        pipeline,
+        stage.id,
+        (reason) => isVerificationFailure(reason) || isNotReadyHold(reason),
+      );
     }
 
     const covered = await this.applyCheckOutcomes(
@@ -1024,6 +1069,11 @@ Note: ${covered.skipped}`
         toolingAbsent?: string;
         /** Placeholders nothing established, when the check was not run at all. */
         unresolved?: string[];
+        /**
+         * The check reported its environment not ready, and the wait ran out. Nothing
+         * was checked, so this certifies nothing and judges nothing.
+         */
+        notReady?: { reason: string; waitedMinutes: number };
       }
     | undefined
   > {
@@ -1132,7 +1182,39 @@ Note: ${covered.skipped}`
       `Harness [${task.name}] verifying "${stage.name}": ${redactSecrets(command)}` +
         (used.length > 0 ? ` (substituted ${used.join(", ")})` : ""),
     );
-    const outcome = await this.verifier!.run(command, task.worktreePath, signal);
+    let outcome = await this.verifier!.run(command, task.worktreePath, signal);
+    // A check whose environment has not caught up says so and runs nothing — see
+    // `domain/environmentReadiness.ts`. Asked again on a fixed interval rather than
+    // failed, because the commonest cause is a deploy that is minutes from landing.
+    // Counted in polls rather than measured against the clock, so the budget means the
+    // same thing however long each probe takes. Only a non-zero exit: a check that
+    // passed has said everything, whatever else it printed.
+    let notReady = outcome.exitCode !== 0 ? parseNotReady(outcome.output) : undefined;
+    const polls = Math.floor(Math.max(0, this.environmentWaitMs()) / ENVIRONMENT_POLL_MS);
+    let polled = 0;
+    while (notReady && polled < polls && !signal?.aborted) {
+      this.logger.warn(
+        `Harness [${task.name}] "${stage.name}" check is waiting: ${notReady} ` +
+          `(asking again in ${ENVIRONMENT_POLL_MS / 1000}s, ${polled + 1} of ${polls}).`,
+      );
+      await this.delay(ENVIRONMENT_POLL_MS);
+      if (signal?.aborted) break;
+      polled++;
+      outcome = await this.verifier!.run(command, task.worktreePath, signal);
+      notReady = outcome.exitCode !== 0 ? parseNotReady(outcome.output) : undefined;
+    }
+    if (notReady) {
+      this.logger.warn(`Harness [${task.name}] "${stage.name}" check never ran: ${notReady}`);
+      return {
+        command,
+        outcome,
+        notReady: {
+          reason: notReady,
+          waitedMinutes: Math.round((polled * ENVIRONMENT_POLL_MS) / 60_000),
+        },
+        ...(discarded ? { discarded } : {}),
+      };
+    }
     // Only on a failure. A stale checker that *passes* is what `${repoRoot}` is for
     // rather than a defect -- the root's copy is the authoritative one -- so saying so
     // on every green stage of every branch that touched tooling is the noise that
@@ -2471,7 +2553,7 @@ Note: ${covered.skipped}`
     if (verification?.toolingAbsent) {
       steps.push(`"${stage.name}": ${verification.toolingAbsent.split("\n")[0]}`);
     }
-    if (verification && !verification.unresolved) {
+    if (verification && !verification.unresolved && !verification.notReady) {
       // Only a check that ran. `TaskStage.verification` means "something other than the
       // agent certified this", and a command the runner declined to execute certifies
       // nothing — recording it would make the stage report claim a check happened.
@@ -2512,6 +2594,13 @@ Note: ${covered.skipped}`
           "reference in the task's name, then re-run this stage.",
       };
       steps.push(`"${stage.name}" could not be verified: ${named} is not established.`);
+    } else if (verification?.notReady) {
+      // Not a failure: the session did its work and no check judged it. The stage
+      // settles and is held below, once its status is final, so the remedy is to run
+      // the check again rather than to pay for the session again.
+      steps.push(
+        `"${stage.name}": the check did not run — ${verification.notReady.reason}`,
+      );
     } else if (verification && verification.outcome.exitCode !== 0) {
       // Overrides the reply: the session ended cleanly and the work is not proven.
       reply = {
@@ -3148,6 +3237,18 @@ Note: ${covered.skipped}`
     // judges it on instead of `pathsWritten`. Undefined wherever nothing was declared
     // or the read failed, which is what makes it fall back.
     const manifestAfter = reply.ok ? await this.readCheckManifest(task, stage) : undefined;
+    if (reply.ok && verification?.notReady) {
+      pipeline = recordStageBlocked(
+        pipeline,
+        stage.id,
+        notReadyHoldReason(verification.notReady.reason, verification.notReady.waitedMinutes),
+      );
+      // Moves a stage that settled `passed`; a gate is already awaiting approval and
+      // keeps that status, with the hold as its reason.
+      const held = holdStageForFindings(pipeline, stage.id, new Date().toISOString());
+      if (held.ok) pipeline = held.value;
+      steps.push(`"${stage.name}" is held until its environment is ready.`);
+    }
     if (reply.ok) {
       const settled = pipeline.stages.find((s) => s.id === stage.id);
       if (

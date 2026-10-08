@@ -1390,6 +1390,13 @@ async function rerunVerificationCommand(
   }
   ctx.tree.refresh();
 
+  if (outcome.value.notReady) {
+    void vscode.window.showInformationMessage(
+      `The check for "${arg.stage.name}" did not run: ${outcome.value.notReady} ` +
+        "Nothing is wrong with the stage; try again once it has caught up.",
+    );
+    return;
+  }
   if (outcome.value.exitCode === 0) {
     void vscode.window.showInformationMessage(
       outcome.value.ticked > 0
