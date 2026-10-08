@@ -2008,6 +2008,30 @@ paragraph can be read off the state file instead of off somebody's memory of whe
 installed a vsix. The dated probe records elsewhere in this file still say 2.1.223 because
 that is when they were run, and changing them would assert probes that never happened.
 
+**Re-probed on 2.1.294, 8 Oct 2026**, the day the CLI was upgraded from 2.1.284. Three
+facts, each re-checked against the real `ask_user` server script, not a stand-in:
+
+- **The `ask_user` handshake survives the MCP protocol change** (2.1.292 negotiates
+  `2026-07-28` first). The CLI sends `server/discover`; our server answers it with the
+  empty success it gives every unknown method, and the CLI falls straight back to
+  `initialize` at `2025-11-25`. Connected in ~4.3s on both of two runs, so the "remembered
+  after one slow connection" path was never taken. The server still advertises
+  `2024-11-05` and nothing needed changing — but the fallback is carried by that
+  catch-all, so a server that started *rejecting* unknown methods would break here.
+- **The per-server `timeout` field is still honoured**: a 20s value aborted a blocking
+  `ask_user` with `timed out after 20s`.
+- **`ask_user` now arrives as a deferred tool**, so a stage loads its schema through
+  `ToolSearch` before the first call. Works, because `ToolSearch` is in the measured stage
+  set — and it is a second reason that tool must never be pruned from it.
+
+**A CLI that predates a model misprices it, silently.** On 2.1.284, `--model
+claude-haiku-5-5` ran Haiku 5.5 (`canonicalModel` says so) with `costBasis: "unknown"`:
+$0.093 for a one-word reply worth ~$0.002, and a 200k context window instead of 1M. The
+harness records `total_cost_usd` as `SubtaskActivity.costUsd`, so a cheaper-model pilot on
+that build would have shown the cheap model as ~40× dearer. 2.1.294 prices it at `list`.
+So **a model is adoptable only on a CLI whose `modelUsage` reports a known `costBasis` for
+it** — check that before declaring it on any stage.
+
 Each item below is a
 behaviour a later release changed or introduced that can alter stage execution *without
 failing*, which is the only kind worth the startup cost of a probe. Run them when the
