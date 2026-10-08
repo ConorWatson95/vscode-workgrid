@@ -106,6 +106,7 @@ import {
   createPipeline,
 } from "../domain/pipelineEngine";
 import { appendIntervention } from "../domain/interventions";
+import { pipelineRevision } from "../domain/pipelineRevision";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { AgentChatPanel, ChatPanelOptions, ChatController, HistoryEntry } from "../ui/agentChatPanel";
 import { providerVisual } from "../agents/agentProviderMeta";
@@ -1296,12 +1297,14 @@ async function retryStageCommand(ctx: CommandContext, arg: unknown): Promise<voi
     ? refreshPendingStages(retried.value, ctx.stageDefinitions())
     : { pipeline: retried.value, changed: [] as string[] };
 
-  await ctx.repository.save({
-    ...task,
-    pipeline: refreshed.pipeline,
-    updatedAt: new Date().toISOString(),
-  });
+  const outcome = await savePipelineIfUnchanged(ctx, task, refreshed.pipeline);
   ctx.tree.refresh();
+  if (!outcome.saved) {
+    void vscode.window.showWarningMessage(
+      `"${task.name}" changed before the retry was saved — possibly retried from Claude. Nothing was retried twice; look at the stage again.`,
+    );
+    return;
+  }
   ctx.logger.info(
     `Harness [${task.name}] retrying "${arg.stage.name}"; nothing was discarded` +
       (refreshed.changed.length > 0
@@ -1938,11 +1941,17 @@ async function approveStageCommand(
 
   approved = await capturePullRequest(ctx, arg.stage, approved, task.name);
 
-  await ctx.repository.save({
-    ...task,
-    pipeline: approved,
-    updatedAt: new Date().toISOString(),
-  });
+  const outcome = await savePipelineIfUnchanged(ctx, task, approved);
+  if (!outcome.saved) {
+    ctx.tree.refresh();
+    const now = outcome.current?.stages.find((stage) => stage.id === arg.stage.id);
+    void vscode.window.showWarningMessage(
+      now?.status === "passed"
+        ? `"${arg.stage.name}" was approved elsewhere while you were deciding — in another window or from Claude. Nothing was approved twice; your note was not recorded.`
+        : `"${task.name}" changed while you were deciding, so this approval was not saved. Look at the stage again and approve it if it still stands.`,
+    );
+    return;
+  }
   ctx.tree.refresh();
   ctx.logger.info(
     `Harness [${task.name}] approved "${arg.stage.name}"` +
@@ -2070,23 +2079,29 @@ async function toggleChecklistItemCommand(
   if (!task) return;
 
   const checking = !arg.item.checked;
-  const result = setChecklistItem(task.pipeline, arg.item.id, {
-    checked: checking,
-    at: new Date().toISOString(),
+  // Applied to the task as it stands inside the write, not to the copy read above. A
+  // tick is one item set to one value, so re-applying it is always right — and saving
+  // the stale copy instead would silently untick an item ticked meanwhile from Claude.
+  let failure: string | undefined;
+  let written: TaskPipeline | undefined;
+  await ctx.repository.update(task.id, (current) => {
+    if (!current?.pipeline) return undefined;
+    const at = new Date().toISOString();
+    const result = setChecklistItem(current.pipeline, arg.item.id, { checked: checking, at });
+    if (!result.ok) {
+      failure = result.error.message;
+      return undefined;
+    }
+    written = result.value;
+    return { ...current, pipeline: result.value, updatedAt: at };
   });
-  if (!result.ok) {
-    void vscode.window.showErrorMessage(result.error.message);
+  ctx.tree.refresh();
+  if (!written) {
+    if (failure) void vscode.window.showErrorMessage(failure);
     return;
   }
 
-  await ctx.repository.save({
-    ...task,
-    pipeline: result.value,
-    updatedAt: new Date().toISOString(),
-  });
-  ctx.tree.refresh();
-
-  const remaining = outstandingChecklist(result.value).length;
+  const remaining = outstandingChecklist(written).length;
   if (checking && remaining === 0) {
     void vscode.window.showInformationMessage(
       "All verification items are checked — the human gate can now be approved.",
@@ -3661,6 +3676,37 @@ async function rowPipelineTask(
     `Could not ${action} for task ${row.task.id}: no task with a pipeline was loaded.`,
   );
   return undefined;
+}
+
+/**
+ * Saves a decision only if the pipeline on disk is still the one it was made against.
+ *
+ * `save` replaces the whole task, and a command that reads, waits on a dialog and then
+ * saves is writing a copy that may be minutes old. With one client that was a narrow
+ * race against the runner; with Claude able to approve the same gate through the
+ * harness MCP server it is the ordinary case — the operator opens the note box, Claude's
+ * dashboard approves, and the save either overwrites that approval or approves a second
+ * time. The comparison runs inside the repository's lock, so nothing can land between
+ * the check and the write. Returns the pipeline as it now stands when it refused, so
+ * the caller can say *why* rather than just that it did nothing.
+ */
+async function savePipelineIfUnchanged(
+  ctx: CommandContext,
+  read: TaskWorkspace & { pipeline: TaskPipeline },
+  next: TaskPipeline,
+): Promise<{ saved: true } | { saved: false; current?: TaskPipeline }> {
+  const expected = pipelineRevision(read.pipeline);
+  let refused: TaskPipeline | undefined;
+  let saved = false;
+  await ctx.repository.update(read.id, (current) => {
+    if (!current || pipelineRevision(current.pipeline) !== expected) {
+      refused = current?.pipeline;
+      return undefined;
+    }
+    saved = true;
+    return { ...current, pipeline: next, updatedAt: new Date().toISOString() };
+  });
+  return saved ? { saved: true } : { saved: false, current: refused };
 }
 
 export async function resolveTask(

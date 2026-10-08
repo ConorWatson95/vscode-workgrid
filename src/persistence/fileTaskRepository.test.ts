@@ -229,6 +229,65 @@ describe("FileTaskRepository concurrent mutation", () => {
   });
 });
 
+describe("FileTaskRepository.update", () => {
+  it("decides against the task on disk, not a copy read earlier", async () => {
+    const io = new FakeIo();
+    const subject = repo(io);
+    await subject.save(task({ description: "first" }));
+    const stale = await subject.get("t1");
+
+    // Another process writes between this client's read and its decision.
+    await repo(io).save(task({ description: "written elsewhere" }));
+
+    let seen: string | undefined;
+    await subject.update("t1", (current) => {
+      seen = current?.description;
+      return current && { ...current, name: "renamed" };
+    });
+
+    expect(stale?.description).toBe("first");
+    expect(seen).toBe("written elsewhere");
+    const saved = await subject.get("t1");
+    expect(saved?.description).toBe("written elsewhere");
+    expect(saved?.name).toBe("renamed");
+  });
+
+  it("writes nothing when the change declines", async () => {
+    const io = new FakeIo();
+    const subject = repo(io);
+    await subject.save(task());
+    const writes = io.writes.length;
+
+    const result = await subject.update("t1", () => undefined);
+
+    expect(result).toBeUndefined();
+    expect(io.writes.length).toBe(writes);
+  });
+
+  it("applies two overlapping updates of one task, losing neither", async () => {
+    const io = new SlowReadIo();
+    const subject = repo(io);
+    await subject.save(task({ description: "0" }));
+
+    const bump = (current: TaskWorkspace | undefined) =>
+      current && { ...current, description: String(Number(current.description) + 1) };
+    await Promise.all([subject.update("t1", bump), subject.update("t1", bump)]);
+
+    expect((await subject.get("t1"))?.description).toBe("2");
+  });
+
+  it("gives an absent id to the change as undefined", async () => {
+    const subject = repo(new FakeIo());
+    let called = false;
+    await subject.update("missing", (current) => {
+      called = true;
+      expect(current).toBeUndefined();
+      return undefined;
+    });
+    expect(called).toBe(true);
+  });
+});
+
 describe("FileTaskRepository cross-process lock", () => {
   /** Records the order of lock and write, which is the only thing worth asserting. */
   function recordingLock(events: string[]) {

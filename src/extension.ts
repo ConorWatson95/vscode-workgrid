@@ -58,7 +58,8 @@ import { subagentLimitEnv } from "./domain/subagentLimits";
 import { stageTools } from "./domain/stageTools";
 import { askTimeoutEnv, askTimeoutMs } from "./domain/askTimeout";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
-import { taskStateDir } from "./persistence/taskStateFile";
+import { STATE_FILE_NAME, taskStateDir } from "./persistence/taskStateFile";
+import { StateFileWatch, watchStateFile } from "./persistence/stateFileWatcher";
 import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
 import { filterMcpConfig } from "./agents/mcpConfigFilter";
 import * as fs from "node:fs";
@@ -166,6 +167,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   /** Where the harness's protocol skill lives, once a repository is resolved. */
   let protocolPluginDir: string | undefined;
 
+  // Fired when the state file is replaced by another process — a headless run, or
+  // Claude through the harness MCP server. An emitter rather than a direct call
+  // because the tree it refreshes is built after this, and re-armed per resolved
+  // repository because the state file belongs to the repository, not the window.
+  const stateFileChanged = new vscode.EventEmitter<void>();
+  context.subscriptions.push(stateFileChanged);
+  let stateFileWatch: StateFileWatch | undefined;
+  context.subscriptions.push({ dispose: () => stateFileWatch?.dispose() });
+
   // --- Active repository resolution -------------------------------------
   const resolveRepository = async (): Promise<void> => {
     repositoryRoot = undefined;
@@ -189,10 +199,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // common dir, so every worktree of this repository shares the one copy. Resolved
     // here because `optionsFor` below is synchronous and the git call is not.
     protocolPluginDir = undefined;
+    stateFileWatch?.dispose();
+    stateFileWatch = undefined;
     if (repositoryRoot) {
       const commonDir = await worktreeService.getGitCommonDir(repositoryRoot);
       if (commonDir.ok) {
         protocolPluginDir = skillInstaller.install(taskStateDir(commonDir.value))?.pluginDir;
+        stateFileWatch = watchStateFile(
+          taskStateDir(commonDir.value),
+          STATE_FILE_NAME,
+          () => stateFileChanged.fire(),
+          logger,
+        );
       }
     }
   };
@@ -488,6 +506,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Live-update the tree as sessions or native transcripts change.
   context.subscriptions.push(sessions.onDidChange(() => tree.refresh()));
   context.subscriptions.push(nativeWatcher.onDidChange(() => tree.refresh()));
+  // A write by another client. The detail view and any open report follow, since both
+  // already re-read on every tree refresh.
+  context.subscriptions.push(stateFileChanged.event(() => tree.refresh()));
 
   // When an agent terminal closes, refresh so its status updates.
   context.subscriptions.push(

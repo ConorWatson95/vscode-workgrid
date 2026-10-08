@@ -1,28 +1,41 @@
-// Bundles the extension for the Node (extension host) target.
+// Bundles the extension, and the harness MCP server it ships beside it, for Node.
 const esbuild = require("esbuild");
 
 const production = process.argv.includes("--production");
 const watch = process.argv.includes("--watch");
 
+const shared = {
+  bundle: true,
+  format: "cjs",
+  platform: "node",
+  target: "node18",
+  sourcemap: !production,
+  minify: production,
+  logLevel: "info",
+};
+
 async function main() {
-  const ctx = await esbuild.context({
-    entryPoints: ["src/extension.ts"],
-    bundle: true,
-    format: "cjs",
-    platform: "node",
-    target: "node18",
-    outfile: "dist/extension.js",
-    external: ["vscode"],
-    sourcemap: !production,
-    minify: production,
-    logLevel: "info",
-  });
+  const contexts = await Promise.all([
+    esbuild.context({
+      ...shared,
+      entryPoints: ["src/extension.ts"],
+      outfile: "dist/extension.js",
+      external: ["vscode"],
+    }),
+    // The harness MCP server: a standalone process Claude starts, reading the same
+    // state file as the extension. No `vscode` external, because it must not need one.
+    esbuild.context({
+      ...shared,
+      entryPoints: ["src/mcp/main.ts"],
+      outfile: "dist/harnessMcpServer.js",
+    }),
+  ]);
 
   if (watch) {
-    await ctx.watch();
+    await Promise.all(contexts.map((ctx) => ctx.watch()));
   } else {
-    await ctx.rebuild();
-    await ctx.dispose();
+    await Promise.all(contexts.map((ctx) => ctx.rebuild()));
+    await Promise.all(contexts.map((ctx) => ctx.dispose()));
   }
 }
 

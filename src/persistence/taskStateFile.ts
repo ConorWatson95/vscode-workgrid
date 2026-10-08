@@ -22,7 +22,7 @@ import {
 
 /** Directory under the git common dir that holds everything the harness owns. */
 export const STATE_DIR_NAME = "task-workspaces";
-const STATE_FILE_NAME = "state.json";
+export const STATE_FILE_NAME = "state.json";
 /** Where an unreadable file is parked, so a bad blob is recoverable by hand. */
 const QUARANTINE_FILE_NAME = "state.quarantine.json";
 

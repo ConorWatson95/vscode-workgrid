@@ -160,6 +160,7 @@ describe("TaskStateStore", () => {
       get: async () => undefined,
       save: async () => undefined,
       delete: async () => undefined,
+      update: async () => undefined,
     };
     const store = new TaskStateStore({
       io: new FakeIo(),

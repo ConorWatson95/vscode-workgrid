@@ -184,6 +184,30 @@ export class FileTaskRepository implements TaskRepository {
     });
   }
 
+  /**
+   * See `TaskRepository.update`. The read happens inside the queue and the lock, so
+   * the task `change` sees is the one on disk at the moment of writing — which is
+   * the whole difference from a caller doing `get` then `save`.
+   */
+  async update(
+    id: string,
+    change: (current: TaskWorkspace | undefined) => TaskWorkspace | undefined,
+  ): Promise<TaskWorkspace | undefined> {
+    return this.mutate(async () => {
+      const tasks = await this.read();
+      const index = tasks.findIndex((t) => t.id === id);
+      const next = change(index === -1 ? undefined : tasks[index]);
+      if (!next) return undefined;
+      if (index === -1) {
+        tasks.push(next);
+      } else {
+        tasks[index] = next;
+      }
+      await this.write(tasks);
+      return next;
+    });
+  }
+
   async delete(id: string): Promise<void> {
     await this.mutate(async () => {
       const tasks = await this.read();

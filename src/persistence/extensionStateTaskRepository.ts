@@ -81,4 +81,23 @@ export class ExtensionStateTaskRepository implements TaskRepository {
   async delete(id: string): Promise<void> {
     await this.write(this.read().filter((t) => t.id !== id));
   }
+
+  async update(
+    id: string,
+    change: (current: TaskWorkspace | undefined) => TaskWorkspace | undefined,
+  ): Promise<TaskWorkspace | undefined> {
+    // The Memento lives in one process and `read` is synchronous, so nothing can
+    // interleave between the read and the decision.
+    const tasks = this.read();
+    const index = tasks.findIndex((t) => t.id === id);
+    const next = change(index === -1 ? undefined : tasks[index]);
+    if (!next) return undefined;
+    if (index === -1) {
+      tasks.push(next);
+    } else {
+      tasks[index] = next;
+    }
+    await this.write(tasks);
+    return next;
+  }
 }

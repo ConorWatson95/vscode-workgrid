@@ -50,6 +50,11 @@ const HEADLESS_ROOTS = [
   "src/domain/taskRoute.ts",
   "src/domain/reviewRules.ts",
   "src/domain/harnessConfigFile.ts",
+  // A second client of the same state file — Claude, through MCP — is the proof that
+  // the harness is not its UI host. It is a separate process, so it cannot reach
+  // `vscode` at all; this says where the chain broke instead of a bundle failing.
+  "src/mcp/main.ts",
+  "src/services/harnessControlService.ts",
 ];
 
 function resolveImport(fromFile: string, specifier: string): string | undefined {

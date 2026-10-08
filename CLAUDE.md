@@ -4799,6 +4799,28 @@ constraints and gate rather than accepting them — an inserted stage must inher
 environment policy, never author one. Neither is reproduced here, and neither gets a
 workaround until it is.
 
+### Claude as a second client
+
+`src/mcp/` + `docs/harness-claude-ui.md`, 8 Oct 2026. An MCP server
+(`dist/harnessMcpServer.js --repo <path>`) and an MCP App dashboard over the **same**
+state file, which proves the harness does not depend on VS Code. There is no second store
+and no daemon. Rules, each load-bearing:
+
+- **Decisions go through `repository.update` and carry a `pipelineRevision`.** If the
+  pipeline moved since the person looked, the decision is refused and nothing is written.
+  A decision is also refused while any subtask is `active`, because the runner's
+  whole-pipeline save would overwrite it. VS Code's approve and retry now check the same
+  revision, so neither client can approve twice or approve over a change.
+- **Decision tools are app-only**, and they exist only when the host advertises MCP Apps.
+  The model can read a run and never approve one.
+- **VS Code watches the state *directory***, because each atomic rename replaces the file.
+- **Three pre-existing lock defects**, found by multi-process stress tests:
+  - The empty-record window between create and write was broken as a crash (2–4 of 200
+    writes lost).
+  - Millisecond clock skew between processes was read as another machine (43 of 200
+    lost).
+  - A missing state directory made every first write wait 2 s and go unlocked.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`

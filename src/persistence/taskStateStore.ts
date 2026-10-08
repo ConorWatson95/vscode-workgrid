@@ -163,4 +163,11 @@ export class RoutedTaskRepository implements TaskRepository {
   async delete(id: string): Promise<void> {
     return (await this.target()).delete(id);
   }
+
+  async update(
+    id: string,
+    change: (current: TaskWorkspace | undefined) => TaskWorkspace | undefined,
+  ): Promise<TaskWorkspace | undefined> {
+    return (await this.target()).update(id, change);
+  }
 }
