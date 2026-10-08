@@ -46,12 +46,25 @@ export interface LockPolicy {
   giveUpAfterMs: number;
   /** Pause between attempts. */
   retryEveryMs: number;
+  /**
+   * How old an *unreadable* lock file must be before it may be broken.
+   *
+   * Taking the lock is two syscalls — an exclusive create, then the write of its
+   * record — so a live holder's lock file is empty for an instant, and every
+   * contender that reads it then sees exactly what a holder killed mid-acquire
+   * leaves. Breaking on sight handed the lock to two writers at once: measured with
+   * four processes incrementing one counter, 2–4 of 200 increments were lost per
+   * run. A second is far longer than that window and still far shorter than
+   * `staleAfterMs`, which is the wait a crashed holder would otherwise cost.
+   */
+  unreadableAfterMs: number;
 }
 
 export const DEFAULT_LOCK_POLICY: LockPolicy = {
   staleAfterMs: 10_000,
   giveUpAfterMs: 2_000,
   retryEveryMs: 25,
+  unreadableAfterMs: 1_000,
 };
 
 /**
@@ -92,16 +105,38 @@ export function parseLockRecord(contents: string | undefined): LockRecord | unde
  */
 export function isBreakable(
   record: LockRecord | undefined,
-  options: { now: string; owner: string; policy: LockPolicy },
+  options: {
+    now: string;
+    owner: string;
+    policy: LockPolicy;
+    /**
+     * When the unreadable lock file was last written, if known. Without it an
+     * unreadable lock is breakable at once, as before; with it, only once it is old
+     * enough not to be a hold still being written (`unreadableAfterMs`).
+     */
+    modifiedAt?: string;
+  },
 ): boolean {
-  if (!record) return true;
+  if (!record) {
+    if (options.modifiedAt === undefined) return true;
+    const age = Date.parse(options.now) - Date.parse(options.modifiedAt);
+    if (!Number.isFinite(age)) return true;
+    return age >= options.policy.unreadableAfterMs || age <= -options.policy.staleAfterMs;
+  }
   if (record.owner === options.owner) return true;
   const age = Date.parse(options.now) - Date.parse(record.at);
-  // A lock stamped in the future is a clock difference between two machines
+  if (!Number.isFinite(age)) return true;
+  // A lock stamped far in the future is a clock difference between two machines
   // sharing a checkout, not a fresh hold — and treating it as fresh would wait
   // out the whole give-up window on every write.
-  if (!Number.isFinite(age)) return true;
-  return age >= options.policy.staleAfterMs || age < 0;
+  //
+  // *Slightly* in the future is the opposite, and it is the common case. V8's clock
+  // on Windows can disagree between two processes on one machine by a few
+  // milliseconds, so a lock another process took a moment ago routinely reads as
+  // stamped ahead of now. Breaking that on sight handed the file to two writers:
+  // four processes incrementing one counter lost 43 of 200 in one run. Skew within
+  // the stale window is read as a live hold.
+  return age >= options.policy.staleAfterMs || age <= -options.policy.staleAfterMs;
 }
 
 /** The path a lock takes beside the file it guards. */

@@ -82,6 +82,8 @@ describe("NodeStateFileLock", () => {
 
   it("breaks an unreadable lock rather than waiting it out", async () => {
     await fs.writeFile(lockPathFor(file), "{ half-writ");
+    const old = new Date(Date.now() - 5_000);
+    await fs.utimes(lockPathFor(file), old, old);
 
     let ran = false;
     await new NodeStateFileLock(file).withLock(async () => {
@@ -89,6 +91,24 @@ describe("NodeStateFileLock", () => {
     });
 
     expect(ran).toBe(true);
+  });
+
+  // The bug: a live holder's lock is empty between its create and its write, and
+  // breaking that on sight put two writers in the file at once — 1 to 6 lost
+  // increments in 200 across four processes, with no give-up involved.
+  it("waits on an unreadable lock that is still being written", async () => {
+    await fs.writeFile(lockPathFor(file), "");
+    const messages: string[] = [];
+    const lock = new NodeStateFileLock(
+      file,
+      { info: (m) => messages.push(m) },
+      { ...DEFAULT_LOCK_POLICY, giveUpAfterMs: 60, retryEveryMs: 5 },
+    );
+
+    await lock.withLock(async () => undefined);
+
+    // It gave up after waiting, rather than breaking a hold in progress.
+    expect(messages.join(" ")).toContain("without it");
   });
 
   // Fail open. An unwritable transition is the failure the lock exists to
