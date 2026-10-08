@@ -203,4 +203,44 @@ describe("HARNESS_DASHBOARD_HTML", () => {
     const script = HARNESS_DASHBOARD_HTML.split("<script>")[1].split("</script>")[0];
     expect(() => new Function(script)).not.toThrow();
   });
+
+  // Claude's panel sat at "Rendering widget" because the page sent `clientInfo`
+  // where the spec says `appInfo`; a host validating the request never answered it.
+  it("opens with the spec's ui/initialize, and reports size only once initialised", async () => {
+    const sent: { method?: string; id?: number; params?: Record<string, unknown> }[] = [];
+    let onMessage: (event: { source: unknown; data: unknown }) => void = () => undefined;
+    const parent = { postMessage: (msg: (typeof sent)[number]) => sent.push(msg) };
+    const observed: unknown[] = [];
+    const element = { style: { setProperty: () => undefined }, scrollWidth: 1, scrollHeight: 1, innerHTML: "" };
+    const window = {
+      parent,
+      addEventListener: (_: string, listener: typeof onMessage) => (onMessage = listener),
+    };
+    const document = { documentElement: element, body: element, getElementById: () => element };
+    class ResizeObserver {
+      constructor(private readonly callback: () => void) {}
+      observe(target: unknown) {
+        observed.push(target);
+        this.callback();
+      }
+    }
+    const script = HARNESS_DASHBOARD_HTML.split("<script>")[1].split("</script>")[0];
+    new Function("window", "document", "ResizeObserver", "setTimeout", "setInterval", script)(
+      window, document, ResizeObserver, () => 0, () => 0,
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].method).toBe("ui/initialize");
+    expect(sent[0].params).toMatchObject({ appInfo: { name: expect.any(String) }, protocolVersion: "2026-01-26" });
+    expect(sent[0].params).not.toHaveProperty("clientInfo");
+
+    onMessage({ source: parent, data: { jsonrpc: "2.0", id: sent[0].id, result: { hostCapabilities: { serverTools: {} } } } });
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+
+    const methods = sent.map((m) => m.method);
+    expect(methods.indexOf("ui/notifications/initialized")).toBeGreaterThan(0);
+    expect(methods.indexOf("ui/notifications/size-changed")).toBeGreaterThan(
+      methods.indexOf("ui/notifications/initialized"),
+    );
+  });
 });

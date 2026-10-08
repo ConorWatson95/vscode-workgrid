@@ -424,19 +424,24 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     return;
   }
 
-  new ResizeObserver(function () {
-    notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
-  }).observe(document.body);
-
+  // appInfo, not clientInfo: the spec names it so, and a host validating the
+  // request rejects the other spelling, leaving the view never initialised and
+  // never shown — Claude's panel sat at "Rendering widget" on exactly that.
   request("ui/initialize", {
     protocolVersion: "2026-01-26",
     appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
-    clientInfo: { name: "task-workspaces-harness-dashboard", version: "0.1.0" }
+    appInfo: { name: "task-workspaces-harness-dashboard", version: "0.1.0" }
   }).then(function (result) {
     applyContext(result && result.hostContext);
     var caps = (result && result.hostCapabilities) || {};
     if (caps.serverTools === undefined && Object.keys(caps).length > 0) state.canCall = false;
     notify("ui/notifications/initialized", {});
+    // Size is reported only once initialised, as the reference App does: a host may
+    // drop a size-changed that arrives before the handshake, and the first
+    // observation is the one that sizes the panel.
+    new ResizeObserver(function () {
+      notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
+    }).observe(document.body);
     startPolling();
     // If the tool result does not arrive (some hosts deliver it before the view
     // asks), fetch the snapshot ourselves rather than sit on "Connecting".
