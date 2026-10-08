@@ -254,6 +254,36 @@ describe("a gate somebody else answers", () => {
     expect(of(p)).toBe("needs-you");
   });
 
+  it("still waits on others when only checks ticked the items", () => {
+    // A passing suite is not the testers having looked; the audience has not answered.
+    const p = pipeline([
+      stage({
+        id: "a",
+        status: "passed",
+        checklist: [
+          { id: "c1", text: "sign off", checked: true, checkedBy: "check", scope: "uat", raisedByStage: "a" },
+        ],
+      }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("waiting-others");
+  });
+
+  it("is yours once a person ticked any item, even beside check-ticked ones", () => {
+    const p = pipeline([
+      stage({
+        id: "a",
+        status: "passed",
+        checklist: [
+          { id: "c1", text: "sign off", checked: true, checkedBy: "check", scope: "uat", raisedByStage: "a" },
+          { id: "c2", text: "and this", checked: true, scope: "uat", raisedByStage: "a" },
+        ],
+      }),
+      gate({ status: "awaiting-approval" }),
+    ]);
+    expect(of(p)).toBe("needs-you");
+  });
+
   it("stays yours when the gate did not declare an audience", () => {
     const p = pipeline([
       stage({ id: "a", status: "passed", checklist: [{ id: "c1", text: "sign off", checked: false, scope: "uat", raisedByStage: "a" }] }),

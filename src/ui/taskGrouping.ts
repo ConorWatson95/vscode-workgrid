@@ -146,10 +146,21 @@ export function externalGate(pipeline: TaskPipeline | undefined): TaskStage | un
 
   // Nothing outstanding: was anything ever asked of this gate? A ticked item is somebody
   // having answered, and the approval that follows is the operator's.
+  //
+  // Only a tick a *person* made. A gate whose checks ticked every item has been answered
+  // by the suite, not by the audience it declared — on the Pyramid export task all five
+  // DEV sign-off items were ticked by checks and the task sat in "Needs you" while the
+  // testers had not looked at it. Same argument as the empty checklist above: the
+  // audience says who performs the verification, and they have not.
   const answered = pipeline.stages
     .filter((stage) => stage.status !== "skipped")
     .flatMap((stage) => stage.checklist ?? [])
-    .some((item) => item.checked && gateForItem(pipeline, item.scope) === gate.id);
+    .some(
+      (item) =>
+        item.checked &&
+        item.checkedBy !== "check" &&
+        gateForItem(pipeline, item.scope) === gate.id,
+    );
 
   return answered ? undefined : gate;
 }
