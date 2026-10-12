@@ -466,6 +466,56 @@ export function decideAnswers(
   });
 }
 
+export interface HeldCallRequest {
+  callId: string;
+  allow: boolean;
+  scope: "once" | "session";
+  at: string;
+}
+
+/**
+ * Records a decision on a call the gate is holding, for the process holding it to
+ * apply (`heldCalls.ts`).
+ *
+ * No revision and no in-flight refusal, for `decideAnswers`' reason: a held call
+ * exists only while a session is running, so in flight is the normal case. The call
+ * id is the guard — a call no longer mirrored is refused rather than decided.
+ */
+export function decideHeldCall(
+  task: TaskWorkspace | undefined,
+  request: HeldCallRequest,
+): Result<ControlOutcome, ControlRefusal> {
+  if (!task) return err({ kind: "unknownTask", message: "That task no longer exists." });
+  const pipeline = task.pipeline;
+  const call = pipeline?.heldCalls?.find((candidate) => candidate.id === request.callId);
+  if (!pipeline || !call) {
+    return err({
+      kind: "stale",
+      message: "That call is no longer waiting — the stage moved on or timed out.",
+    });
+  }
+  if (call.decision) {
+    return ok({ task, changed: false, message: "Already decided; waiting for the stage to receive it." });
+  }
+  const decision = { allow: request.allow, scope: request.scope, at: request.at };
+  return ok({
+    task: withPipeline(
+      task,
+      {
+        ...pipeline,
+        heldCalls: pipeline.heldCalls!.map((candidate) =>
+          candidate.id === call.id ? { ...candidate, decision } : candidate,
+        ),
+      },
+      request.at,
+    ),
+    changed: true,
+    message: request.allow
+      ? `Allowed ${call.tool}${request.scope === "session" ? " for the rest of this run" : ""}. The stage carries on.`
+      : `Denied ${call.tool}. The stage is told why and carries on.`,
+  });
+}
+
 /**
  * Ticking an item states a fact — "this behaviour was confirmed" — so it carries no
  * revision: setting it to the value it already has is a no-op, and setting it again

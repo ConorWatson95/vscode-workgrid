@@ -366,6 +366,7 @@ function drawTask($, ui, run, hotkey, columns) {
     const advance = drawAdvance($, ui, snapshot, view.focus === run.taskId);
     if (advance) rows.push(advance);
   }
+  rows.push(...drawHeldCalls($, ui, snapshot, columns));
   for (const part of foldStages(snapshot)) {
     if (part.stage) {
       rows.push(...drawStage($, ui, snapshot, part.stage, columns));
@@ -480,6 +481,47 @@ function drawStage($, ui, run, stage, columns) {
 }
 
 /**
+ * Tool calls the running stage is blocked on. The stage is stopped mid-turn until
+ * one is decided, so they sit above the stages rather than inside one. Adding a
+ * permission rule is VS Code's: it writes the project's settings.
+ */
+function drawHeldCalls($, ui, run, columns) {
+  const { Text, Button } = ui;
+  return (run.heldCalls ?? []).map((call) => {
+    const choose = (allow, scope, label) => (
+      <Button
+        key={"held:" + scope + ":" + allow + ":" + call.id}
+        plain
+        label={label}
+        onPress={() =>
+          view.busy
+            ? undefined
+            : decide($, allow ? "Allowing…" : "Denying…", "harness_decide_held_call", {
+                taskId: run.taskId,
+                callId: call.id,
+                allow,
+                scope,
+              })
+        }
+      />
+    );
+    return (
+      <Row ui={ui} depth={2}>
+        <Text> </Text>
+        <Icon ui={ui} glyph="!" color="warning" />
+        <Text wrap="truncate-end">{clip(call.tool + " · " + call.detail, Math.floor(columns * 0.45))}</Text>
+        <Text> </Text>
+        {call.decided ? (
+          <Text dimColor>decided · waiting for the stage to receive it</Text>
+        ) : (
+          [choose(true, "once", "Allow"), <Text> · </Text>, choose(true, "session", "Allow for run"), <Text> · </Text>, choose(false, "once", "Deny")]
+        )}
+      </Row>
+    );
+  });
+}
+
+/**
  * Each question in full, then a box for its answer. Answers are kept here until
  * the last one is given, then sent together: the stage asked them together, and
  * a live session receives them in one reply.
@@ -491,7 +533,7 @@ function drawQuestion($, ui, run) {
     return [
       <Row ui={ui} depth={3}>
         <Icon ui={ui} glyph="✓" color="success" />
-        <Text dimColor>Answered · waiting for VS Code to {question.live ? "hand it to the session" : "add it to the brief"}</Text>
+        <Text dimColor>Answered · waiting for {question.live ? "the stage to receive it" : "it to be added to the brief"}</Text>
       </Row>,
     ];
   }

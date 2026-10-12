@@ -9,6 +9,7 @@
 
 import { JudgementItem } from "./judgementItems";
 import type { RunLease } from "./runLease";
+import type { HeldCall } from "./heldCalls";
 import {
   ChecklistAudience,
   StageAuthority,
@@ -790,6 +791,12 @@ export interface TaskPipeline {
    * state file and cancels its own run, since it may be another process.
    */
   stopRequestedAt?: string;
+  /**
+   * Tool calls the permission gate is holding open right now, mirrored by the process
+   * holding them so a client that is not that process can decide them
+   * (`domain/heldCalls.ts`).
+   */
+  heldCalls?: HeldCall[];
   /**
    * Tool calls the permission layer refused, held until dealt with.
    *

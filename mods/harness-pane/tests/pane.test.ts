@@ -348,6 +348,18 @@ test("a run already asked to stop says so and offers nothing", async ($, on) => 
   await ui.unmount();
 });
 
+test("a held tool call is allowed or denied from the pane", async ($, on) => {
+  const heldCalls = [{ id: "g1", tool: "Bash", detail: "git push", since: "2026-10-09T07:00:00Z", decided: false }];
+  const { ui, calls } = await mountWith($, on, { ...snapshot, heldCalls }, () => ({ ok: true, message: "Allowed Bash." }));
+  expect(await ui.find({ type: "Text", text: /^Bash · git push/ })).toBeDefined();
+  await ui.press({ key: "held:session:true:g1" });
+  await settle(() => ui.find({ type: "Text", text: /^Allowed Bash\.$/ }));
+  expect(calls).toEqual([
+    { name: "harness_decide_held_call", arguments: { taskId: "t1", callId: "g1", allow: true, scope: "session" } },
+  ]);
+  await ui.unmount();
+});
+
 test("a long route folds what has passed and what is still to come around the stage that needs you", async ($, on) => {
   const done = (n: number) => ({ ...stage, id: "d" + n, name: "Done " + n, state: "done", checklist: [], canApprove: false });
   const later = (n: number) => ({ ...stage, id: "p" + n, name: "Later " + n, state: "pending", checklist: [], canApprove: false });

@@ -44,7 +44,8 @@ advertises the `io.modelcontextprotocol/ui` extension, and marks them
 button a person presses, so "Claude says it looks good, so approved" has no path.
 
 Also app-only: `harness_correct_stage`, `harness_rerun_stage`, `harness_send_back`,
-`harness_answer_questions`, `harness_advance_route` and `harness_stop_route`. Approving a
+`harness_answer_questions`, `harness_decide_held_call`, `harness_advance_route` and
+`harness_stop_route`. Approving a
 stage that owes a pull request stays in VS Code, which has the dialog for it.
 
 ## Running a route without VS Code
@@ -78,11 +79,20 @@ never depends on a window.
   The storage folder is shared with the extension, so its activation sweep reaps sessions
   a crashed runner left behind.
 
-**Phase 1 limits.** Live `ask_user` and the permission gate are forced off headlessly,
-because nobody is attached to answer either mid-turn. A stage that needs information
-replies NEEDS-INFO and the route stops. Answering it in the pane adds the answers to the
-brief, and with `advanceAfterAnswering` on it starts the run again. A refused tool call
-stops the stage, the same as with the gate off in VS Code.
+**Questions and held tool calls work headlessly** (`services/liveRequestBridge.ts`).
+`interactiveQuestions` and `interactivePermissions` apply as they do in VS Code. Only the
+process running a stage can release a blocked `ask_user` call or gate hook, so that
+process mirrors what it is waiting on into the state file: the question as
+`pendingQuestion` with a `liveCallId`, held calls as `heldCalls`. A client records the
+answer or decision there, and the owner, watching the state directory, applies it and the
+stage carries on mid-turn. VS Code builds the same bridge, so its own questions and holds
+can be answered from the pane too. VS Code's answer panel hands a question owned by a
+headless run to that run rather than putting it in the brief.
+
+A held call offers **Allow**, **Allow for run** and **Deny** outside VS Code. Adding a
+permission rule stays in VS Code, because it writes the project's settings. A process that
+dies mid-hold leaves its `heldCalls` behind; clients show them only while a session is
+running, and the next hold on that task rewrites the list.
 
 ## Concurrency
 
@@ -155,9 +165,10 @@ fail-open, and it is announced.
   would now survive a session, so that guard could be narrowed later.
 - Other VS Code commands still `save` a task they read before a dialog. Approve, retry and
   tick are the ones moved onto `update`.
-- What is *running* lives in the extension host's memory: `isRunning`, sessions, held tool
-  calls under `globalStorageUri`, and live `ask_user` questions. The second client sees
-  their effect on `state.json` (a subtask `active`) and nothing else.
+- What is *running* lives in the owning process's memory: `isRunning` and the sessions.
+  Live questions and held calls are mirrored into `state.json`; nothing else is.
+- VS Code's tree counts a headless run's held calls when grouping, but decides only its
+  own. Decide a headless run's held calls from the pane.
 - A repository with no state file has no runs to show. The server does not adopt the
   legacy Memento; that stays the extension's job.
 
@@ -167,6 +178,16 @@ After `npm run build`, the server is `dist/harnessMcpServer.js`, and it ships in
 On activation the extension also copies it, with the runner it starts, to a path that does
 not change between releases (`services/serverBundleInstaller.ts`):
 `%APPDATA%/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server/harnessMcpServer.js`.
+**Without VS Code**, each GitHub release carries `harnessMcpServer.js` and
+`harnessRunner.js` beside the vsix, and one command puts them in the same folder:
+
+```bash
+gh release download --repo ConorWatson95/vscode-workgrid --pattern "harness*.js" --clobber --dir "$APPDATA/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server"
+```
+
+The folder is kept rather than moved to one the harness owns, so a host's config never
+changes, and the runner's logs and gate files already live beside it.
+
 Point a host there rather than into `~/.vscode/extensions/task-workspaces.task-workspaces-<version>`,
 which names one release and goes on running it after an upgrade. The extension's output
 channel logs the path at startup. Example entry for a host's MCP config:

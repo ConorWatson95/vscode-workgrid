@@ -664,6 +664,27 @@ async function openQuestionsCommand(ctx: CommandContext, arg: unknown): Promise<
         void vscode.window.showWarningMessage(
           "That stage stopped waiting, so your answers were added to the brief instead.",
         );
+      } else if (liveCallId && (await ctx.leases.heldElsewhere(latest))) {
+        // Asked by a stage another process is running — a headless runner — so only
+        // that process can hand the answers over. Marked submitted, and it delivers
+        // them when it sees the write (`liveRequestBridge.ts`). Putting them in the
+        // brief here would leave the agent blocked until its timeout.
+        const submitted = await ctx.repository.update(taskId, (current) => {
+          const question = current?.pipeline?.pendingQuestion;
+          if (!current?.pipeline || question?.liveCallId !== liveCallId || question.submittedAt) return undefined;
+          return {
+            ...current,
+            pipeline: {
+              ...current.pipeline,
+              pendingQuestion: { ...question, submittedAt: new Date().toISOString() },
+            },
+          };
+        });
+        if (submitted) {
+          QuestionPanel.update(taskId, undefined);
+          ctx.tree.refresh();
+          return;
+        }
       }
 
       // Answers go into the brief, not back into the session that asked: that

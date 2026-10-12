@@ -334,6 +334,24 @@ export class HarnessMcpServer {
         _meta: appOnly,
       },
       {
+        name: "harness_decide_held_call",
+        title: "Allow or deny a held tool call",
+        description:
+          "Dashboard-only: allows or denies a tool call the running stage is blocked on. " +
+          "The process running the stage applies it and the stage carries on mid-turn.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            callId: { type: "string" },
+            allow: { type: "boolean" },
+            scope: { type: "string", enum: ["once", "session"] },
+          },
+          required: ["taskId", "callId", "allow"],
+        },
+        _meta: appOnly,
+      },
+      {
         name: "harness_advance_route",
         title: "Advance route",
         description: "Dashboard-only: starts the route advancing in a headless runner.",
@@ -490,6 +508,15 @@ export class HarnessMcpServer {
         const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
         return decision(ok({ ...answered.value, message: `${answered.value.message} ${then}` }));
       }
+      case "harness_decide_held_call":
+        return decision(
+          await this.service.decideHeldCall(
+            text("taskId") ?? "",
+            text("callId") ?? "",
+            args.allow === true,
+            text("scope") === "session" ? "session" : "once",
+          ),
+        );
       case "harness_advance_route":
         return decision(await this.service.advance(text("taskId") ?? ""));
       case "harness_stop_route":
@@ -564,6 +591,9 @@ export function describeRun(run: RunSnapshot): string {
     `Route: ${run.route ?? "none"} · branch ${run.branch}`,
   ];
   if (run.inFlight) lines.push(`A session is running on "${run.inFlight}".`);
+  for (const call of run.heldCalls) {
+    lines.push(`Waiting for permission: ${call.tool} — ${call.detail}${call.decided ? " (decided, on its way)" : ""}`);
+  }
   lines.push("", "Stages:");
   for (const stage of run.stages) {
     lines.push(

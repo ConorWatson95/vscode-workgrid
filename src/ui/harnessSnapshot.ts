@@ -1,3 +1,4 @@
+import { liveHeldCalls } from "../domain/heldCalls";
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { fatigueAdvice } from "../domain/correctionBrief";
 import { isRetryable, sessionInFlight, stageFindings } from "../domain/harnessControl";
@@ -162,6 +163,8 @@ export interface RunSnapshot extends RunSummary {
    * the next advance takes its lease over.
    */
   advancing?: { by: "vscode" | "headless"; pid: number; since: string; logPath?: string; stopRequested: boolean };
+  /** Tool calls the running stage is blocked on, waiting for a person to allow or deny. */
+  heldCalls: { id: string; tool: string; detail: string; since: string; decided: boolean }[];
   deferrals: { id: string; text: string; raisedBy: string }[];
   evidenceLine?: string;
   /** Name of a stage with a session running right now, if any. */
@@ -173,14 +176,12 @@ export interface RunSnapshot extends RunSummary {
 export const EXCERPT_CHARS = 1_200;
 
 export function summariseRun(task: TaskWorkspace): RunSummary {
-  // Held tool calls live in the extension's own inbox, outside the state file, so a
-  // client reading the file alone cannot see them. Counted as none; the cost is that
-  // a task stopped only on a held call reads as its route position says rather than
-  // as needing you.
+  // Held calls are mirrored into the state file by the process holding them
+  // (`domain/heldCalls.ts`); one already decided is on its way and needs nobody.
   const group = groupForTask({
     status: task.status,
     pipeline: task.pipeline,
-    heldCalls: 0,
+    heldCalls: undecidedHeldCalls(task.pipeline).length,
     feedback: task.externalFeedback,
   });
   const stages = task.pipeline?.stages ?? [];
@@ -214,6 +215,18 @@ export function attentionOf(task: TaskWorkspace, group: TaskGroupId): Attention 
   if (!pipeline || stages.length === 0) return { status: "No route", tone: "idle" };
 
   if (group === "needs-you") {
+    // First, as `groupForTask` ranks it: the CLI is stopped mid-turn on it.
+    const held = undecidedHeldCalls(pipeline);
+    if (held.length > 0) {
+      const running = sessionInFlight(pipeline);
+      return {
+        need: `Allow or deny ${held[0].tool}${held.length > 1 ? ` and ${plural(held.length - 1, "more call")}` : ""}`,
+        status: `${running?.name ?? "A stage"} is waiting for permission`,
+        since: held[0].waitingSince,
+        tone: "ask",
+        stageId: running?.id,
+      };
+    }
     const question = pipeline.pendingQuestion;
     const unanswered = (question?.items ?? []).filter((i) => !(i.answer ?? "").trim()).length;
     if (question && unanswered > 0) {
@@ -345,6 +358,13 @@ export function snapshotRun(task: TaskWorkspace): RunSnapshot {
       itemIds: pipeline.pendingQuestion.items.filter((item) => !item.answer).map((item) => item.id),
       submitted: !!pipeline.pendingQuestion.submittedAt,
     },
+    heldCalls: liveHeldCalls(pipeline).map((call) => ({
+      id: call.id,
+      tool: call.tool,
+      detail: call.detail,
+      since: call.waitingSince,
+      decided: !!call.decision,
+    })),
     advancing: pipeline?.runLease && {
       by: pipeline.runLease.by,
       pid: pipeline.runLease.pid,
@@ -515,4 +535,8 @@ function withoutLabel(description: string, label: string): string {
   return parts[0]?.trim().toLowerCase() === label.trim().toLowerCase()
     ? parts.slice(1).join(" · ")
     : description;
+}
+
+function undecidedHeldCalls(pipeline: TaskWorkspace["pipeline"]) {
+  return liveHeldCalls(pipeline).filter((call) => !call.decision);
 }

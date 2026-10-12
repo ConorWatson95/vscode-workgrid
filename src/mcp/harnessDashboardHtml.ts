@@ -552,7 +552,13 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     if (s.failure) html += '<div class="callout bad"><b>Failed:</b> ' + esc(s.failure.split("\n")[0]) + "</div>";
     if (run.question && run.question.items.length && run.question.stageName === s.name) {
       html += '<div class="callout warn"><b>' + esc(run.question.stageName) + "</b> is asking" + (run.question.live ? " (waiting now)" : "") +
-        ":<ul>" + run.question.items.map(function (q) { return "<li>" + esc(q) + "</li>"; }).join("") + "</ul>Answer it in VS Code.</div>";
+        ":<ul>" + run.question.items.map(function (q) { return "<li>" + esc(q) + "</li>"; }).join("") + "</ul>Answer it in the harness pane or VS Code.</div>";
+    }
+    var held = (run.heldCalls || []).filter(function (c) { return !c.decided; });
+    if (held.length && run.inFlight === s.name) {
+      html += '<div class="callout warn"><b>' + esc(s.name) + "</b> is waiting for permission:<ul>" +
+        held.map(function (c) { return "<li><code>" + esc(c.tool) + "</code> " + esc(c.detail) + "</li>"; }).join("") +
+        "</ul>Allow or deny it in the harness pane.</div>";
     }
 
     if (s.checklist.length) {

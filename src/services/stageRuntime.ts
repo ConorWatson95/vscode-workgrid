@@ -19,6 +19,7 @@ import { GitWorktreeService } from "../git/gitWorktreeService";
 import { Logger } from "../logging/logger";
 import { TaskRepository } from "../persistence/taskRepository";
 import { AskUserService } from "./askUserService";
+import { LiveRequestBridge, LiveRequestBridgeOptions } from "./liveRequestBridge";
 import { nodeGateFileSystem } from "./gateFileSystem";
 import { NodeVerificationRunner } from "./nodeVerificationRunner";
 import { PermissionGateService } from "./permissionGateService";
@@ -70,6 +71,12 @@ export interface StageRuntimeOptions {
    * shows it; a host with nobody to show it to leaves it to the log and the stage row.
    */
   onUnheldDenial?: (task: TaskWorkspace, denial: PermissionDenial) => void;
+  /**
+   * How this host takes part in carrying questions and held calls to other clients
+   * (`liveRequestBridge.ts`). The bridge itself is always built: a stage either host
+   * runs must be answerable from the dashboard.
+   */
+  liveRequests?: Pick<LiveRequestBridgeOptions, "servesBrief" | "onQuestionRecorded" | "onAnswersDelivered">;
 }
 
 export type StageRuntime = ReturnType<typeof buildStageRuntime>;
@@ -528,11 +535,21 @@ export function buildStageRuntime(options: StageRuntimeOptions) {
     () => settings().environmentWaitMinutes() * 60_000,
   );
 
+  const liveRequests = new LiveRequestBridge({
+    repository: options.repository,
+    askUser,
+    permissionGate,
+    logger,
+    ...options.liveRequests,
+  });
+  const stopLiveRequests = liveRequests.start();
+
   return {
     agentProcesses,
     sessions,
     permissionGate,
     askUser,
+    liveRequests,
     reducedMcpConfigPath,
     stageRunner,
     currentHarness,
@@ -541,6 +558,7 @@ export function buildStageRuntime(options: StageRuntimeOptions) {
     runner,
     /** Ends every session this runtime started and releases what is waiting on them. */
     dispose(): void {
+      stopLiveRequests();
       sessions.dispose();
       permissionGate.dispose();
       askUser.dispose();

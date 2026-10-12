@@ -90,10 +90,10 @@ async function main(): Promise<void> {
   }
 
   const requested = path.resolve(argument("--repo") ?? process.cwd());
-  const host = loadHeadlessSettings(requested, {
-    interactiveQuestions: false,
-    interactivePermissions: false,
-  });
+  // Questions and held calls are on whenever VS Code would have them on: the dashboard
+  // answers both through the state file (`liveRequestBridge.ts`), so a headless stage
+  // waits for a person exactly as one in VS Code does.
+  const host = loadHeadlessSettings(requested);
   const logger = new FileLogger(runnerLogPath(host.storageDir, taskId));
   logger.info(`--- headless advance of ${taskId}, pid ${process.pid}`);
   // Which files were read is part of the run's account: a setting VS Code would apply
@@ -144,7 +144,16 @@ async function main(): Promise<void> {
     gitClient: git,
     statusService,
     worktreeService,
+    // Only this run's own task: an answer delivered into another task's brief may be
+    // followed by an advance, and starting other tasks is not this process's to do.
+    liveRequests: { servesBrief: (id) => id === taskId },
   });
+  // How answers and decisions written by another client reach this run's stage.
+  const stopServing = watchDirectory(
+    stateDirectory,
+    () => void runtime.liveRequests.serve(repositoryRoot),
+    logger,
+  );
 
   // Asked twice is told to go: the first lets the current step settle and the lease
   // be released, the second is somebody who has stopped waiting for that.
@@ -190,6 +199,7 @@ async function main(): Promise<void> {
     logger.error("the advance failed", error);
     exitCode = 1;
   } finally {
+    stopServing();
     runtime.dispose();
   }
   logger.info(`--- exit ${exitCode}`);

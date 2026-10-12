@@ -27,7 +27,6 @@ import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { ReportContentProvider, REPORT_SCHEME } from "./ui/reportContentProvider";
 import { GitBlobContentProvider, BLOB_SCHEME } from "./ui/gitBlobContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
-import { serveHostRequests } from "./commands/hostRequestCommands";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
@@ -59,8 +58,8 @@ import { PermissionRulesService } from "./services/permissionRulesService";
 import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials";
 import { PendingGate } from "./services/permissionGateService";
 import { nextAnnouncements } from "./domain/permissionGatePolicy";
-import { PendingAsk } from "./services/askUserService";
-import { recordInterjection, recordQuestion } from "./domain/pipelineEngine";
+import { recordInterjection } from "./domain/pipelineEngine";
+import { QuestionPanel } from "./ui/questionPanel";
 import {
   CommandContext,
   PENDING_NATIVE_CHAT_KEY,
@@ -288,6 +287,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     gitClient,
     statusService,
     worktreeService,
+    liveRequests: {
+      onQuestionRecorded: (task) => {
+        tree.refresh();
+        // Opened rather than announced: the agent is stopped until it is answered,
+        // and a toast for this competes with every other task's toasts.
+        void vscode.commands.executeCommand("taskWorkspaces.answerQuestions", task.id);
+      },
+      onAnswersDelivered: (task, { live }) => {
+        QuestionPanel.update(task.id, undefined);
+        tree.refresh();
+        if (!live && configuration.advanceAfterAnswering(repositoryUri)) {
+          void vscode.commands.executeCommand("taskWorkspaces.advanceRoute", task.id);
+        }
+      },
+    },
     onUnheldDenial: (task, denial) => {
       const rules = suggestAllowRules([denial], {
         worktreePath: task.worktreePath,
@@ -598,55 +612,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     tree.refresh();
   };
-
-  // A live question goes into the same place a NEEDS-INFO one does, so the tree
-  // row, the panel and the answer flow are all reused — the only difference is
-  // `liveCallId`, which tells the submit handler an agent is still waiting.
-  context.subscriptions.push({
-    dispose: askUser.onAsked((asked: PendingAsk) => {
-      void (async () => {
-        const task = await repository.get(asked.taskId);
-        if (!task?.pipeline) {
-          // Nothing to attach it to; let the agent proceed rather than block.
-          askUser.abandon(asked.taskId);
-          return;
-        }
-        const running = task.pipeline.stages.find((stage) =>
-          stage.subtasks.some((subtask) => subtask.status === "active"),
-        );
-        const subtask = running?.subtasks.find((s) => s.status === "active");
-        const recorded = recordQuestion(task.pipeline, {
-          stageId: running?.id ?? task.pipeline.stages[0]?.id ?? "",
-          stageName: running?.name ?? "Stage",
-          subtaskId: subtask?.id ?? asked.request.id,
-          questions: asked.request.questions,
-          context: asked.request.context,
-          at: asked.waitingSince,
-          liveCallId: asked.request.id,
-        });
-        if (!recorded.ok) {
-          logger.error(`Could not record a live question: ${recorded.error.message}`);
-          askUser.abandon(asked.taskId);
-          return;
-        }
-        await repository.save({
-          ...task,
-          pipeline: recorded.value,
-          updatedAt: new Date().toISOString(),
-        });
-        tree.refresh();
-        logger.info(
-          `Harness [${task.name}] is waiting on ${asked.request.questions.length} question(s) — the agent is paused.`,
-        );
-        // Opened rather than announced: the agent is stopped until it is answered,
-        // and a toast for this competes with every other task's toasts.
-        await vscode.commands.executeCommand(
-          "taskWorkspaces.answerQuestions",
-          task.id,
-        );
-      })();
-    }),
-  });
 
   context.subscriptions.push({
     dispose: permissionGate.onChanged(() => {
@@ -1002,8 +967,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Requests from a client outside VS Code — answers to deliver, a route to advance —
   // arrive as state file changes. Served once at start too, for any filed while no
   // window was open.
-  context.subscriptions.push(stateFileChanged.event(() => void serveHostRequests(commandContext)));
-  void repositoryReady?.then(() => serveHostRequests(commandContext));
+  const serveLiveRequests = (): void => {
+    if (repositoryRoot) void runtime.liveRequests.serve(repositoryRoot);
+  };
+  context.subscriptions.push(stateFileChanged.event(serveLiveRequests));
+  void repositoryReady?.then(serveLiveRequests);
 
   // If this window was opened as a task worktree awaiting a native Claude chat,
   // launch it now via the official extension, then clear the request.

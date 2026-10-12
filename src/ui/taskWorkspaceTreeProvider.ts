@@ -1,3 +1,4 @@
+import { liveHeldCalls } from "../domain/heldCalls";
 import * as vscode from "vscode";
 import { TaskWorkspaceService } from "../services/taskWorkspaceService";
 import { TaskWorkspace, TaskWorkspaceLiveState } from "../domain/taskWorkspace";
@@ -361,7 +362,12 @@ export class TaskWorkspaceTreeProvider
       groupForTask({
         status: item.task.status,
         pipeline: item.task.pipeline,
-        heldCalls: this.getHeldCalls(item.task.id).length,
+        // This window's own holds, or another process's as it mirrors them — the
+        // larger, since this window's are mirrored too.
+        heldCalls: Math.max(
+          this.getHeldCalls(item.task.id).length,
+          liveHeldCalls(item.task.pipeline).filter((call) => !call.decision).length,
+        ),
         feedback: item.task.externalFeedback,
       }),
     );

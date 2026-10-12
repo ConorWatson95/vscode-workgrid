@@ -3,6 +3,7 @@ import {
   ControlRefusal,
   SendBackRequest,
   decideAnswers,
+  decideHeldCall,
   decideApproval,
   decideChecklistItem,
   decideCorrection,
@@ -176,6 +177,16 @@ export class HarnessControlService {
   ): Promise<Result<ControlOutcome, ControlRefusal>> {
     const at = this.clock.now();
     return this.decide(taskId, (task) => decideAnswers(task, { askedAt, answers, at }));
+  }
+
+  decideHeldCall(
+    taskId: string,
+    callId: string,
+    allow: boolean,
+    scope: "once" | "session",
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const at = this.clock.now();
+    return this.decide(taskId, (task) => decideHeldCall(task, { callId, allow, scope, at }));
   }
 
   /**

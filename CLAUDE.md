@@ -4830,6 +4830,13 @@ and no daemon. Rules, each load-bearing:
   state file keeps two processes off one task. `--detach` launches in two steps because
   a tree kill reaches a detached child while its parent lives. Details:
   `docs/harness-claude-ui.md`.
+- **A headless stage can ask and be held** (`services/liveRequestBridge.ts`,
+  `domain/heldCalls.ts`). A blocked `ask_user` call or gate hook can be released only by
+  the process running the stage, so that process mirrors what it waits on into the state
+  file and applies the answers and decisions other clients write back. Built in
+  `stageRuntime`, so VS Code and the runner share it. `heldCalls` is a mirror, never the
+  record: the owner rewrites it from what it is actually holding. Clients show it only
+  while a session is running, since a process that died mid-hold never cleared it.
 - **Three pre-existing lock defects**, found by multi-process stress tests:
   - The empty-record window between create and write was broken as a crash (2–4 of 200
     writes lost).

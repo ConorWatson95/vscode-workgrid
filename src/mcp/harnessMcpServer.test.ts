@@ -238,6 +238,21 @@ describe("running a route from the dashboard", () => {
     items: [{ id: "impl-1-q1", text: "Which tab?" }],
   };
 
+  it("records a decision on a held call for the process holding it, and shows it in the snapshot", async () => {
+    const held = { id: "g1", tool: "Bash", detail: "git push", waitingSince: "2026-10-08T09:00:00.000Z" };
+    const { call, repository } = await setup([implementing("active")], true, { pipeline: { heldCalls: [held] } });
+    const run = await call("harness_get_run", { taskId: "t1" });
+    expect(run.content[0].text).toContain("Waiting for permission: Bash — git push");
+
+    const result = await call("harness_decide_held_call", { taskId: "t1", callId: "g1", allow: false });
+    expect(result.structuredContent).toMatchObject({ ok: true });
+    expect((await repository.get("t1"))?.pipeline?.heldCalls?.[0].decision).toMatchObject({
+      allow: false,
+      scope: "once",
+    });
+    expect((await call("harness_decide_held_call", { taskId: "t1", callId: "gone", allow: true })).isError).toBe(true);
+  });
+
   it("starts a run and reports what the runner said", async () => {
     started.length = 0;
     const { call } = await setup([implementing()], true, { runs });
