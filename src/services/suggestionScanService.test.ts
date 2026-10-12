@@ -245,3 +245,57 @@ describe("lookup", () => {
     expect(result).toEqual({ outcome: { kind: "notFound" } });
   });
 });
+
+describe("SuggestionScanService with a shared store", () => {
+  class MemoryStore {
+    writes: import("../persistence/suggestionScanFile").StoredScan[] = [];
+    constructor(public stored: import("../persistence/suggestionScanFile").StoredScan = {}) {}
+    async read() {
+      return this.stored;
+    }
+    async write(_root: string, stored: import("../persistence/suggestionScanFile").StoredScan) {
+      this.writes.push(stored);
+      this.stored = stored;
+    }
+  }
+
+  it("marks the scan as running while keeping the previous list, then writes the result", async () => {
+    const store = new MemoryStore();
+    const runner = new FakeRunner({ "scan:jira": { ok: true, text: "SUGGESTION: NMGB-1 | Blocker | open | A" } });
+    const service = new SuggestionScanService(runner, clock, store, 99);
+
+    await service.scan("C:/repo", [source()]);
+    await service.scan("C:/repo", [source()]);
+
+    expect(store.writes[0]).toEqual({ scanning: { startedAt: clock.now(), pid: 99 } });
+    expect(store.writes[2].scanning?.pid).toBe(99);
+    expect(store.writes[2].scan?.outcomes[0].suggestions[0].ref).toBe("NMGB-1");
+    expect(store.writes[3]).toEqual({ scan: expect.objectContaining({ scannedAt: clock.now() }) });
+  });
+
+  it("adopts a newer scan another client wrote, and keeps its own when newer", async () => {
+    const store = new MemoryStore({
+      scan: { scannedAt: "2026-08-14T00:00:00.000Z", outcomes: [] },
+      scanning: { startedAt: "x", pid: 1 },
+    });
+    const service = new SuggestionScanService(new FakeRunner({}), clock, store);
+
+    const loaded = await service.load("C:/repo");
+    expect(service.lastScan("C:/repo")?.scannedAt).toBe("2026-08-14T00:00:00.000Z");
+    expect(loaded.scanning?.pid).toBe(1);
+
+    store.stored = { scan: { scannedAt: "2026-08-01T00:00:00.000Z", outcomes: [] } };
+    await service.load("C:/repo");
+    expect(service.lastScan("C:/repo")?.scannedAt).toBe("2026-08-14T00:00:00.000Z");
+  });
+
+  it("still answers when the store cannot be written", async () => {
+    const service = new SuggestionScanService(new FakeRunner({}), clock, {
+      read: async () => ({}),
+      write: async () => {
+        throw new Error("EPERM");
+      },
+    });
+    await expect(service.scan("C:/repo", [source()])).resolves.toMatchObject({ scannedAt: clock.now() });
+  });
+});

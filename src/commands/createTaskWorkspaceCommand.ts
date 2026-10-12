@@ -1,9 +1,8 @@
 import * as vscode from "vscode";
 import { CommandContext } from "./commandContext";
 import { TaskOrigin } from "../domain/taskWorkspace";
-import { ServiceError } from "../services/taskWorkspaceService";
-import { RouteDefinition, assessmentStageDefinition } from "../domain/taskRoute";
-import { createPipeline } from "../domain/pipelineEngine";
+import { RouteDefinition } from "../domain/taskRoute";
+import { createTaskWithRoute, describeCreateError } from "../services/taskCreation";
 import { loadHarness } from "../services/reviewRulesService";
 import { withStatus } from "../ui/statusProgress";
 import { pickBaseBranch } from "./pickBaseBranch";
@@ -191,84 +190,43 @@ export async function createTaskWorkspaceCommand(
   // checking out a large worktree, copying config into it and attaching the
   // route all take time, and the last two used to happen with no indication at
   // all once the git progress had closed.
-  const outcome = await withStatus(`Creating "${name.trim()}"`, async (step) => {
-    step(`checking out ${proposal.value.branchName}`);
-    const created = await ctx.service.createTask({
-      repositoryRoot,
-      name,
-      branchPrefix,
-      baseBranch: baseBranch.trim(),
-      description,
-      configuredParentDir,
-      ...(prefill?.origin ? { origin: prefill.origin } : {}),
-    });
-    if (!created.ok) return { created };
+  const outcome = await withStatus(`Creating "${name.trim()}"`, (step) =>
+    createTaskWithRoute(
+      {
+        service: ctx.service,
+        provisioner: ctx.provisioner,
+        repository: ctx.repository,
+        logger: ctx.logger,
+        now: () => new Date().toISOString(),
+      },
+      {
+        repositoryRoot,
+        name,
+        branchPrefix,
+        baseBranch: baseBranch.trim(),
+        description,
+        configuredParentDir,
+        ...(prefill?.origin ? { origin: prefill.origin } : {}),
+        ...(routeChoice.route ? { route: routeChoice.route, assessFirst } : {}),
+        copyIntoWorktree: ctx.configuration.copyIntoWorktree(scope),
+        linkSiblings: ctx.configuration.linkSiblings(scope),
+      },
+      step,
+    ),
+  );
 
-    // Bring across untracked local config before anything runs in the worktree,
-    // so the first agent session sees the same settings as the main checkout.
-    step("copying local config into the worktree");
-    const provisioned = ctx.provisioner.provision(
-      ctx.configuration.copyIntoWorktree(scope),
-      repositoryRoot,
-      created.value.worktreePath,
-    );
-
-    // Sibling links go beside the worktree, not in it, and are shared by every task
-    // in this parent directory — so this is idempotent and usually does nothing. Run
-    // per task anyway: the first task in a fresh worktree directory is the one that
-    // needs them, and there is no other moment that reliably happens.
-    step("linking sibling repositories");
-    ctx.provisioner.linkSiblings(
-      ctx.configuration.linkSiblings(scope),
-      repositoryRoot,
-      created.value.worktreePath,
-    );
-
-    // Attach the pipeline after the worktree exists, so a failed creation never
-    // leaves a harnessed task with no worktree behind it.
-    let routeFailed = false;
-    if (routeChoice.route) {
-      step(`attaching the ${routeChoice.route.label} route`);
-      const harnessed = {
-        ...created.value,
-        pipeline: createPipeline(
-          assessFirst
-            ? {
-                ...routeChoice.route,
-                stages: [assessmentStageDefinition(), ...routeChoice.route.stages],
-              }
-            : routeChoice.route,
-        ),
-        updatedAt: new Date().toISOString(),
-      };
-      try {
-        await ctx.repository.save(harnessed);
-        created.value.pipeline = harnessed.pipeline;
-      } catch (error) {
-        // The worktree is real and usable; only the route failed to stick.
-        ctx.logger.error(
-          `Created "${created.value.name}" but could not attach the ${routeChoice.route.id} route`,
-          error,
-        );
-        routeFailed = true;
-      }
-    }
-
-    return { created, provisioned, routeFailed };
-  });
-
-  const created = outcome.created;
-  if (!created.ok) {
-    void vscode.window.showErrorMessage(describeCreateError(created.error));
+  if (!outcome.ok) {
+    void vscode.window.showErrorMessage(describeCreateError(outcome.error));
     return;
   }
+  const created = outcome.value.task;
 
-  if (outcome.provisioned && outcome.provisioned.problems.length > 0) {
+  if (outcome.value.provisionProblems > 0) {
     void vscode.window.showWarningMessage(
-      `Task created, but ${outcome.provisioned.problems.length} file(s) could not be copied into the worktree. See the output channel.`,
+      `Task created, but ${outcome.value.provisionProblems} file(s) could not be copied into the worktree. See the output channel.`,
     );
   }
-  if (outcome.routeFailed) {
+  if (outcome.value.routeFailed) {
     void vscode.window.showWarningMessage(
       `Task created, but its route could not be saved. It will behave as an unharnessed task.`,
     );
@@ -277,30 +235,16 @@ export async function createTaskWorkspaceCommand(
   ctx.tree.refresh();
 
   const action = await vscode.window.showInformationMessage(
-    `Task "${created.value.name}" created.`,
+    `Task "${created.name}" created.`,
     "Open Workspace",
     "Start Claude",
     "Copy Path",
   );
   if (action === "Open Workspace") {
-    await vscode.commands.executeCommand("taskWorkspaces.open", created.value.id);
+    await vscode.commands.executeCommand("taskWorkspaces.open", created.id);
   } else if (action === "Start Claude") {
-    await vscode.commands.executeCommand("taskWorkspaces.startAgent", created.value.id);
+    await vscode.commands.executeCommand("taskWorkspaces.startAgent", created.id);
   } else if (action === "Copy Path") {
-    await vscode.env.clipboard.writeText(created.value.worktreePath);
+    await vscode.env.clipboard.writeText(created.worktreePath);
   }
-}
-
-function describeCreateError(error: ServiceError): string {
-  if (error.kind === "validation") {
-    return error.message;
-  }
-  if (error.kind === "notFound") {
-    return error.message;
-  }
-  const inner = error.error;
-  if (inner.kind === "validation" || inner.kind === "dirty" || inner.kind === "unmerged") {
-    return inner.message;
-  }
-  return `Git error: ${inner.error.message}`;
 }

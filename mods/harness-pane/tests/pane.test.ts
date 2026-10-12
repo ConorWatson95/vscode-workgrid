@@ -398,3 +398,199 @@ test("a long route folds what has passed and what is still to come around the st
   expect(await ui.find({ key: "stage:t1:d1" })).toBeDefined();
   await ui.unmount();
 });
+
+const suggestionBoard = {
+  configured: true,
+  sources: [{ id: "jira", label: "JIRA" }],
+  scannedAt: "2026-10-09T05:00:00Z",
+  failures: [],
+  suggestions: [
+    {
+      sourceId: "jira",
+      sourceLabel: "JIRA",
+      ref: "NMGB-7",
+      title: "Dealer league table",
+      rank: "High",
+      state: "To Do",
+      url: "https://jira/NMGB-7",
+      detail: "Phase 2",
+      hidden: false,
+    },
+    { sourceId: "jira", sourceLabel: "JIRA", ref: "NMGB-9", title: "Old clean-up", rank: "Lowest", hidden: true },
+  ],
+};
+
+const taskOptions = {
+  routes: [{ id: "report-change", label: "Report change", description: "A report, end to end", stageCount: 20 }],
+  usingBuiltInRoutes: false,
+  branchPrefixes: ["feature", "fix"],
+  baseBranches: ["DEV", "main"],
+};
+
+/** The board with suggestions beside it; task options are answered, anything else by `reply`. */
+async function mountSuggestions($: any, on: any, board: unknown, reply: (args: any) => unknown = () => ({ ok: true, message: "Done." })) {
+  const calls: any[] = [];
+  const feed = [
+    { type: "run", run: snapshot },
+    { type: "board", repositoryRoot: "C:/repo", runs: [urgent] },
+    { type: "suggestions", board },
+  ]
+    .map((m) => JSON.stringify(m))
+    .join("\n") + "\n";
+  on("ui.open", () => ({ value: { isPlaced: true } }));
+  on("process.spawn", async function* () {
+    yield { stream: "stdout", text: feed };
+    return { value: { code: 0, signal: null } };
+  });
+  on("process.run", ($: unknown, e: any) => {
+    const sent = String(e.init?.stdin ?? "").trim().split("\n").map((line) => JSON.parse(line))[2].params;
+    calls.push({ ...sent, timeoutMs: e.init?.timeoutMs });
+    const result = { structuredContent: sent.name === "harness_task_options" ? taskOptions : reply(sent.arguments) };
+    return { value: { exitCode: 0, stdout: JSON.stringify({ jsonrpc: "2.0", id: 2, result }) + "\n", stderr: "" } };
+  });
+  await $.command.run({ command: "harness", args: "C:/repo" });
+  const ui = await $.ui.mount({
+    plugin: "harness-pane",
+    surface: "desktop",
+    component: "Pane",
+    requestId: "harness",
+    props: PANE_PROPS as never,
+  });
+  await settle(() => ui.find({ key: "run:t1" }));
+  return { ui, calls };
+}
+
+test("a project with no suggestion source gets no Suggested work, rather than an empty list", async ($, on) => {
+  const { ui } = await mountSuggestions($, on, { configured: false, sources: [], failures: [], suggestions: [] });
+  expect(await ui.find({ key: "group:suggested" })).toBeUndefined();
+  expect(await ui.find({ key: "scan" })).toBeUndefined();
+  expect(await ui.find({ type: "Text", text: /Nothing outstanding/ })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("suggestions are listed under the runs, with what is below the rank floor held back", async ($, on) => {
+  const { ui } = await mountSuggestions($, on, suggestionBoard);
+  expect(await ui.find({ key: "group:suggested" })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: /^scanned \d+[mhd] ago$/ })).toBeDefined();
+  expect(await ui.find({ key: "start:jira:NMGB-7" })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: /^Dealer league table$/ })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: /^High · To Do$/ })).toBeDefined();
+  expect(await ui.find({ key: "start:jira:NMGB-9" })).toBeUndefined();
+
+  expect((await ui.find({ key: "suggestions:hidden" }))?.props.label).toBe("Show 1 hidden");
+  await ui.press({ key: "suggestions:hidden" });
+  expect(await ui.find({ key: "start:jira:NMGB-9" })).toBeDefined();
+  await ui.unmount();
+});
+
+test("a scan in progress, and a source that failed, are said rather than shown as a quiet board", async ($, on) => {
+  const scanning = {
+    ...suggestionBoard,
+    scanningSince: "2026-10-09T07:00:00Z",
+    failures: ["JIRA: the atlassian server is not connected"],
+    suggestions: [],
+  };
+  const { ui } = await mountSuggestions($, on, scanning);
+  expect(await ui.find({ type: "Text", text: /^Scanning since \d\d:\d\d · 1 source failed$/ })).toBeDefined();
+  expect(await ui.find({ key: "scan" })).toBeUndefined();
+  expect(await ui.find({ type: "Text", text: /atlassian server is not connected/ })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: /Nothing outstanding in your sources/ })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("a board never scanned asks for a scan, and Scan starts one", async ($, on) => {
+  const never = { ...suggestionBoard, scannedAt: undefined, suggestions: [] };
+  const { ui, calls } = await mountSuggestions($, on, never, () => ({ ok: true, message: "Scanning in a headless runner." }));
+  expect(await ui.find({ type: "Text", text: /^Never scanned\./ })).toBeDefined();
+  await ui.press({ key: "scan" });
+  await settle(() => ui.find({ type: "Text", text: /^Scanning in a headless runner\.$/ }));
+  expect(calls).toEqual([{ name: "harness_scan_suggestions", arguments: {}, timeoutMs: 60000 }]);
+  await ui.unmount();
+});
+
+test("Start task asks VS Code's questions, sends the answers, and opens the run it made", async ($, on) => {
+  const { ui, calls } = await mountSuggestions($, on, suggestionBoard, () => ({
+    ok: true,
+    changed: true,
+    message: 'Created "League table" on fix/league-table with the Report change route.',
+    taskId: "t1",
+    routed: true,
+  }));
+  await ui.press({ key: "start:jira:NMGB-7" });
+  await settle(() => ui.find({ key: "start:name" }));
+
+  // Prefilled from the ticket; the name is the one to shorten, since it becomes the branch.
+  expect((await ui.find({ key: "start:name" }))?.props.value).toBe("Dealer league table");
+  expect((await ui.find({ key: "start:brief" }))?.props.value).toBe("NMGB-7 — https://jira/NMGB-7 — Phase 2");
+  expect((await ui.find({ key: "start:base" }))?.props.value).toBe("DEV");
+  expect((await ui.find({ key: "start:route" }))?.props.value).toBe("report-change");
+
+  await ui.input({ key: "start:name", text: "League table", kind: "change" });
+  await ui.select({ key: "start:prefix", value: "fix" });
+  await ui.press({ key: "start:assess" });
+  await ui.press({ key: "start:create" });
+  await settle(() => ui.find({ type: "Text", text: /^Created "League table"/ }));
+
+  expect(calls).toEqual([
+    { name: "harness_task_options", arguments: {}, timeoutMs: 60000 },
+    {
+      name: "harness_start_task",
+      arguments: {
+        sourceId: "jira",
+        ref: "NMGB-7",
+        name: "League table",
+        branchPrefix: "fix",
+        baseBranch: "DEV",
+        routeId: "report-change",
+        assessFirst: true,
+        brief: "NMGB-7 — https://jira/NMGB-7 — Phase 2",
+      },
+      // A worktree takes longer to make than a decision takes to record.
+      timeoutMs: 180000,
+    },
+  ]);
+  expect(await ui.find({ key: "start:name" })).toBeUndefined();
+  // The run it made is opened, at the stage that needs you.
+  expect(await ui.find({ key: "stage:t1:s-gate" })).toBeDefined();
+  await ui.unmount();
+});
+
+test("a chat task sends no route and offers no assessment", async ($, on) => {
+  const { ui, calls } = await mountSuggestions($, on, suggestionBoard, () => ({
+    ok: true,
+    message: 'Created "Dealer league table" on feature/dealer-league-table.',
+    taskId: "t9",
+    routed: false,
+  }));
+  await ui.press({ key: "start:jira:NMGB-7" });
+  await settle(() => ui.find({ key: "start:route" }));
+  expect(await ui.find({ key: "start:assess" })).toBeDefined();
+  await ui.select({ key: "start:route", value: "" });
+  expect(await ui.find({ key: "start:assess" })).toBeUndefined();
+  await ui.press({ key: "start:create" });
+  await settle(() => ui.find({ type: "Text", text: /^Created "Dealer league table"/ }));
+
+  expect(calls[1].arguments).toEqual({
+    sourceId: "jira",
+    ref: "NMGB-7",
+    name: "Dealer league table",
+    branchPrefix: "feature",
+    baseBranch: "DEV",
+    brief: "NMGB-7 — https://jira/NMGB-7 — Phase 2",
+  });
+  await ui.unmount();
+});
+
+test("a refused start keeps the form, so the answer is edited rather than retyped", async ($, on) => {
+  const { ui } = await mountSuggestions($, on, suggestionBoard, () => ({
+    ok: false,
+    kind: "refused",
+    message: "A branch called feature/dealer-league-table already exists.",
+  }));
+  await ui.press({ key: "start:jira:NMGB-7" });
+  await settle(() => ui.find({ key: "start:create" }));
+  await ui.press({ key: "start:create" });
+  await settle(() => ui.find({ type: "Text", text: /already exists/ }));
+  expect(await ui.find({ key: "start:name" })).toBeDefined();
+  await ui.unmount();
+});

@@ -4837,6 +4837,15 @@ and no daemon. Rules, each load-bearing:
   `stageRuntime`, so VS Code and the runner share it. `heldCalls` is a mirror, never the
   record: the owner rewrites it from what it is actually holding. Clients show it only
   while a session is running, since a process that died mid-hold never cleared it.
+- **Suggested work reaches Claude through a file** (`persistence/suggestionScanFile.ts`,
+  `services/suggestionControlService.ts`, 12 Oct 2026). The pane starts a server process
+  per call with a 60s timeout, so a scan held in memory had nowhere to land and could not
+  finish inside a call anyway. A scan runs as `harnessRunner scan --detach` and writes
+  `suggestions.json` beside `state.json`, with a `scanning` marker carrying its pid so a
+  dead scan does not refuse every later one. VS Code writes and watches the same file, so
+  a scan in either client shows in both. Starting a task goes through
+  `services/taskCreation.ts`, which VS Code's create command now also uses. Reading the
+  list is a model tool; scanning (a paid session) and starting a task are app-only.
 - **Three pre-existing lock defects**, found by multi-process stress tests:
   - The empty-record window between create and write was broken as a crash (2–4 of 200
     writes lost).

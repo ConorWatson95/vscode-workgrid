@@ -28,6 +28,12 @@
  * stale rather than approved over, and the refusal keeps the note and re-arms against
  * what is now on screen — confirming again is a decision about the current run.
  *
+ * **Suggested work sits under the runs**, and only where the project configures a
+ * source: absent rather than empty, so a project without one is not shown a section it
+ * can do nothing with. A scan is a detached paid session, so the page starts it and the
+ * ordinary poll shows the list when it lands. Starting a task asks what VS Code's create
+ * flow asks, in a form held in view state for the same reason the note is.
+ *
  * Written without template literals or `${`, because it lives inside one.
  */
 export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
@@ -60,9 +66,9 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   html, body { overflow-x: hidden; }
   main > section { min-width: 0; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 13.5px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
-  button, input { font: inherit; color: inherit; }
+  button, input, select, textarea { font: inherit; color: inherit; }
   button { cursor: pointer; }
-  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .app { padding: 12px 14px 14px; }
 
   .tone-ask { --tone: var(--ask); } .tone-fail { --tone: var(--fail); } .tone-act { --tone: var(--accent); }
@@ -118,6 +124,28 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   .split .need { white-space: normal; }
   .split .strip { width: 44px; }
   @media (max-width: 420px) { .strip { display: none; } }
+
+  /* suggested work */
+  .sghead { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; padding-bottom: 6px; }
+  .sghead .ghead { flex: 1; width: auto; padding-bottom: 0; }
+  .sghead .age { white-space: nowrap; }
+  .sghead .bad { color: var(--fail); }
+  .group .callout { margin: 0 0 8px; }
+  .group > .flash { margin: 0 0 8px; }
+  .row.sg:hover { background: transparent; }
+  .row.hid { opacity: .6; }
+  a.ref { color: var(--accent); text-decoration: none; }
+  a.ref:hover { text-decoration: underline; }
+  .btn.sm { padding: 3px 10px; font-size: 12px; }
+  .sgform { display: grid; gap: 8px; border-top: 1px solid var(--line); background: var(--bg2); padding: 10px 12px 12px 15px; }
+  .sgform .f { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+  .sgform input[type=text], .sgform select, .sgform textarea { width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; color: var(--fg); font-size: 13px; }
+  .sgform textarea { min-height: 64px; resize: vertical; }
+  .sgform .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .sgform .tick { display: flex; gap: 8px; align-items: center; font-size: 12.5px; cursor: pointer; }
+  .sgform .tick input { accent-color: var(--accent); }
+  .sgform .hint, .sgform .actions, .sgform .flash { margin: 0; }
+  .toggle-hidden { margin-top: 6px; }
 
   /* run */
   .crumbs { display: flex; align-items: center; gap: 6px; margin: -2px 0 8px -8px; }
@@ -206,7 +234,10 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     flash: null, confirming: false, note: "", report: null,
     busy: false, canCall: true, allOpen: false,
     displayMode: "inline", modes: [],
-    closed: { parked: true, done: true, "no-route": true }
+    closed: { parked: true, done: true, "no-route": true },
+    // Suggested work: the board as the server sent it, the new-task options (fetched once),
+    // the one open start form, and the section's own message line.
+    suggestions: null, options: null, form: null, sgFlash: null, showHidden: false, canOpenLinks: false
   };
 
   // --- JSON-RPC over postMessage --------------------------------------------
@@ -268,6 +299,12 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     if (!data || !data.runs) return;
     state.runs = data.runs;
     state.repositoryRoot = data.repositoryRoot || state.repositoryRoot;
+    // "Scan started" stops being true the moment the scan lands.
+    if (state.suggestions && state.suggestions.scanningSince && !(data.suggestions && data.suggestions.scanningSince)) state.sgFlash = null;
+    state.suggestions = data.suggestions || null;
+    // An item that left the list was started elsewhere or dropped by the source, so a form
+    // still open on it would create a task for something no longer offered.
+    if (state.form && !state.busy && !suggestionByKey(state.form.key)) state.form = null;
     var run = data.run || null;
     // The tool that opened the panel named a run: open on it.
     if (fromHost && run) { state.view = "run"; state.taskId = run.taskId; }
@@ -294,7 +331,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   // Re-renders only when something on screen changed, or once a minute so ages move.
   function paint() {
     var key = JSON.stringify(state.runs) + "|" + (state.run ? state.run.revision : "") + "|" + state.view + "|" + state.taskId +
-      "|" + state.stageId + "|" + state.displayMode;
+      "|" + state.stageId + "|" + state.displayMode + "|" + JSON.stringify(state.suggestions);
     if (key === state.lastKey && Date.now() - state.lastPaint < 60000) return;
     state.lastKey = key;
     render();
@@ -354,6 +391,84 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       state.lastRevision = null;
       state.lastKey = null;
       return refresh();
+    });
+  }
+
+  // --- suggested work -------------------------------------------------------
+  function resultText(result) { return (result && result.content && result.content[0] && result.content[0].text) || ""; }
+
+  // A scan returns as soon as it has started; the poll brings the list in when it lands.
+  function scan() {
+    state.busy = true;
+    state.sgFlash = null;
+    render();
+    call("harness_scan_suggestions", {}).then(function (result) {
+      var sc = (result && result.structuredContent) || {};
+      state.sgFlash = { ok: !!result && !result.isError && sc.ok !== false, text: sc.message || resultText(result) };
+    }).catch(function (e) {
+      state.sgFlash = { ok: false, text: e.message };
+    }).then(function () {
+      state.busy = false;
+      state.lastKey = null;
+      return refresh();
+    });
+  }
+
+  // One form at a time, prefilled from the item. The options are a property of the
+  // project rather than of the item, so they are fetched once and kept.
+  function openStartForm(key) {
+    var s = suggestionByKey(key);
+    if (!s) return;
+    state.form = {
+      key: key, sourceId: s.sourceId, ref: s.ref, name: s.title, prefix: "", base: "", route: "", assess: false,
+      brief: [s.ref, s.url, s.detail].filter(Boolean).join(" — "), error: null
+    };
+    state.sgFlash = null;
+    if (state.options) { formDefaults(); render(); return; }
+    render();
+    call("harness_task_options", {}).then(function (result) {
+      var o = result && result.structuredContent;
+      if (!o || result.isError || !o.routes) throw new Error(resultText(result) || "Could not load the options for a new task.");
+      state.options = o;
+      if (state.form && state.form.key === key) formDefaults();
+      render();
+    }).catch(function (e) {
+      if (state.form && state.form.key === key) state.form = null;
+      state.sgFlash = { ok: false, text: e.message };
+      render();
+    });
+  }
+  function formDefaults() {
+    var o = state.options, f = state.form;
+    f.prefix = o.branchPrefixes[0] || "";
+    f.base = o.baseBranches[0] || "";
+    f.route = o.routes.length ? o.routes[0].id : "";
+  }
+
+  function createTask() {
+    var f = state.form;
+    if (!f || state.busy) return;
+    if (!f.name.trim()) { f.error = "A task needs a name."; render(); return; }
+    var args = { sourceId: f.sourceId, ref: f.ref, name: f.name.trim(), branchPrefix: f.prefix, baseBranch: f.base, brief: f.brief };
+    if (f.route) { args.routeId = f.route; args.assessFirst = f.assess; }
+    var opened = null;
+    state.busy = true;
+    f.error = null;
+    render();
+    call("harness_start_task", args).then(function (result) {
+      var sc = (result && result.structuredContent) || {};
+      if (!result || result.isError || !sc.ok) { f.error = sc.message || resultText(result) || "The task was not created."; return; }
+      state.form = null;
+      state.sgFlash = { ok: true, text: sc.message || resultText(result) };
+      if (sc.routed && sc.taskId) opened = sc.taskId;
+    }).catch(function (e) {
+      f.error = e.message;
+    }).then(function () {
+      state.busy = false;
+      state.lastKey = null;
+      // A routed task is a run, so it opens like one; a chat task has nothing to show here.
+      if (opened) openRun(opened);
+      else { render(); refresh(); }
     });
   }
 
@@ -422,12 +537,29 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     return rows;
   }
   function ref(r) { return r && r.ticket ? '<span class="ref">' + esc(r.ticket) + "</span>" : ""; }
+  function clock(iso) {
+    var d = new Date(Date.parse(iso));
+    if (isNaN(d.getTime())) return "";
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  // A suggestion is the source's ref within that source, as the server keys it.
+  function suggestionKey(s) { return s.sourceId + "|" + s.ref; }
+  function suggestionByKey(key) {
+    return ((state.suggestions && state.suggestions.suggestions) || []).filter(function (s) { return suggestionKey(s) === key; })[0] || null;
+  }
+  // Only a host that says it opens links gets one, and only a web address: the url is
+  // whatever the source wrote, and a page link that does nothing reads as broken.
+  function linkable(url) { return state.canOpenLinks && /^https?:/i.test(String(url || "")); }
 
   // --- rendering --------------------------------------------------------------
   function render() {
     var root = $("root");
-    var typing = document.activeElement && document.activeElement.id === "note" ? document.activeElement : null;
-    var caret = typing ? typing.selectionStart : null;
+    // Whatever field had focus gets it back, caret and all: a poll landing mid-sentence
+    // must not cost the operator their place in the note or the start form.
+    var active = document.activeElement;
+    var typing = active && active.id && /^(note$|sg-)/.test(active.id) ? active.id : null;
+    var caret = null;
+    try { if (typing && typeof active.selectionStart === "number") caret = [active.selectionStart, active.selectionEnd]; } catch (e) { caret = null; }
     var split = state.view === "run" && wide();
     root.className = "app" + (split ? " split" : "");
     var showBoard = state.view === "board" || split;
@@ -437,8 +569,11 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       "</main>" + footer();
     wire();
     state.lastPaint = Date.now();
-    var note = $("note");
-    if (note && typing) { note.focus(); if (caret !== null) note.setSelectionRange(caret, caret); }
+    var field = typing && $(typing);
+    if (field) {
+      field.focus();
+      try { if (caret) field.setSelectionRange(caret[0], caret[1]); } catch (e) { /* not a text field */ }
+    }
     // Scrolls the strip only. scrollIntoView would also scroll every ancestor — the
     // page, and in a same-origin host the host's own page — sideways.
     var sel = document.querySelector(".node.sel");
@@ -462,7 +597,9 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       "</header>";
   }
 
-  function board() {
+  function board() { return runGroups() + suggestionsSection(); }
+
+  function runGroups() {
     if (!state.runs.length) return '<div class="empty">No routed tasks in ' + esc(state.repositoryRoot || "this repository") + ".</div>";
     var html = "";
     GROUPS.forEach(function (group) {
@@ -489,6 +626,89 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       '<span class="meta">' + (a.since ? '<span class="age" title="' + esc(a.since) + '">' + age(a.since) + "</span>" : "") +
       '<span class="strip" title="' + r.progress.done + " of " + r.progress.total + ' stages done">' +
       r.strip.map(function (s) { return '<i class="s-' + s + '"></i>'; }).join("") + "</span></span></button>";
+  }
+
+  // Worded on what happened, never on what is missing: a list that has never been
+  // scanned and one that came back empty are different facts with different next steps.
+  function suggestionsSection() {
+    var b = state.suggestions;
+    if (!b || !b.configured) return "";
+    var all = b.suggestions || [];
+    var shown = all.filter(function (s) { return state.showHidden || !s.hidden; });
+    var hidden = all.filter(function (s) { return s.hidden; }).length;
+    var failures = b.failures || [];
+    var open = !state.closed.suggestions;
+    var when = b.scannedAt ? age(b.scannedAt) : "";
+    var scanned = !b.scannedAt ? "never scanned" : when === "now" ? "scanned just now" : "scanned " + (when ? when + " ago" : "");
+    var html = '<section class="group" id="g-suggestions"><div class="sghead"><button class="ghead" data-toggle="suggestions">' +
+      '<span class="caret">' + (open ? "▾" : "▸") + "</span>Suggested work" +
+      '<span class="count">' + all.filter(function (s) { return !s.hidden; }).length + "</span></button>" +
+      '<span class="age"' + (b.scannedAt ? ' title="' + esc(b.scannedAt) + '"' : "") + ">" + esc(scanned) + "</span>" +
+      (failures.length ? '<span class="age bad">' + failures.length + (failures.length === 1 ? " source failed" : " sources failed") + "</span>" : "") +
+      (b.scanningSince
+        ? '<span class="age" title="' + esc(b.scanningSince) + '">Scanning since ' + esc(clock(b.scanningSince)) + "</span>"
+        : '<button class="btn sm" id="sg-scan"' + (state.busy ? " disabled" : "") + ">Scan</button>") +
+      "</div>";
+    if (!open) return html + "</section>";
+    if (state.sgFlash) html += '<div class="flash ' + (state.sgFlash.ok ? "ok" : "bad") + '">' + esc(state.sgFlash.text) + "</div>";
+    if (failures.length) html += '<div class="callout bad"><ul>' + failures.map(function (f) { return "<li>" + esc(f) + "</li>"; }).join("") + "</ul></div>";
+    if (!all.length) {
+      html += '<div class="calm">' + (b.scanningSince
+        ? "Scanning your sources. The list appears here when it finishes, usually within a few minutes."
+        : b.scannedAt ? "Nothing outstanding in your sources."
+        : "Your sources have never been scanned. Scan to see what they are holding.") + "</div>";
+    } else if (!shown.length) {
+      html += '<div class="calm">Nothing outstanding above the cut-off.</div>';
+    } else {
+      var sources = {};
+      all.forEach(function (s) { sources[s.sourceId] = true; });
+      var several = Object.keys(sources).length > 1;
+      html += '<div class="rows">' + shown.map(function (s) { return suggestionRow(s, several); }).join("") + "</div>";
+    }
+    if (hidden) {
+      html += '<button class="ghost toggle-hidden" id="sg-hidden">' + (state.showHidden ? "Hide " : "Show ") + hidden + " hidden</button>";
+    }
+    return html + "</section>";
+  }
+
+  function suggestionRow(s, several) {
+    var key = suggestionKey(s);
+    var forming = state.form && state.form.key === key;
+    var label = linkable(s.url)
+      ? '<a class="ref" href="#" data-url="' + esc(s.url) + '" title="' + esc(s.url) + '">' + esc(s.ref) + "</a>"
+      : '<span class="ref"' + (s.url ? ' title="' + esc(s.url) + '"' : "") + ">" + esc(s.ref) + "</span>";
+    var facts = [s.rank, s.state, several ? s.sourceLabel : ""].filter(Boolean).join(" · ");
+    return '<div class="row sg tone-idle' + (s.hidden ? " hid" : "") + '">' +
+      '<span class="what"><span class="title">' + label + '<span class="name" title="' + esc(s.title) + '">' + esc(s.title) + "</span></span>" +
+      (facts ? '<span class="need">' + esc(facts) + "</span>" : "") + "</span>" +
+      '<span class="meta">' + (forming ? "" : '<button class="btn sm" data-start="' + esc(key) + '"' + (state.busy ? " disabled" : "") + ">Start task</button>") +
+      "</span></div>" + (forming ? startForm() : "");
+  }
+
+  function startForm() {
+    var f = state.form, o = state.options;
+    if (!o) return '<div class="sgform"><div class="hint">Loading the options for a new task…</div></div>';
+    function choices(list, chosen) {
+      return list.map(function (v) { return '<option value="' + esc(v) + '"' + (v === chosen ? " selected" : "") + ">" + esc(v) + "</option>"; }).join("");
+    }
+    var route = o.routes.filter(function (r) { return r.id === f.route; })[0];
+    var off = state.busy ? " disabled" : "";
+    return '<div class="sgform">' +
+      '<label class="f">Name<input type="text" id="sg-name" value="' + esc(f.name) + '"' + off + "></label>" +
+      '<div class="pair"><label class="f">Branch type<select id="sg-prefix"' + off + ">" + choices(o.branchPrefixes, f.prefix) + "</select></label>" +
+      '<label class="f">Base branch<select id="sg-base"' + off + ">" + choices(o.baseBranches, f.base) + "</select></label></div>" +
+      '<label class="f">Route<select id="sg-route"' + off + ">" +
+      o.routes.map(function (r) {
+        return '<option value="' + esc(r.id) + '"' + (r.id === f.route ? " selected" : "") + ">" + esc(r.label) + " · " + r.stageCount + " stages</option>";
+      }).join("") +
+      '<option value=""' + (route ? "" : " selected") + ">Chat task — no route</option></select></label>" +
+      (route && route.description ? '<div class="hint">' + esc(route.description) + "</div>" : "") +
+      (route && o.usingBuiltInRoutes ? '<div class="hint">This project declares no routes, so these are the built-in ones.</div>' : "") +
+      (route ? '<label class="tick"><input type="checkbox" id="sg-assess"' + (f.assess ? " checked" : "") + off + ">Some of this work already exists (assess first)</label>" : "") +
+      '<label class="f">Brief<textarea id="sg-brief"' + off + ">" + esc(f.brief) + "</textarea></label>" +
+      '<div class="actions"><button class="btn primary" id="sg-create"' + off + ">" + (state.busy ? "Creating…" : "Create") + "</button>" +
+      '<button class="btn" id="sg-cancel"' + off + ">Cancel</button></div>" +
+      (f.error ? '<div class="flash bad">' + esc(f.error) + "</div>" : "") + "</div>";
   }
 
   function runPane() {
@@ -646,6 +866,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     if (next) next.onclick = function () { var n = nextNeeding(); if (n) openRun(n.taskId); };
     var all = $("all");
     if (all) all.ontoggle = function () { state.allOpen = all.open; };
+    wireSuggestions();
 
     var run = state.run;
     if (state.view !== "run" || !run || run.taskId !== state.taskId) return;
@@ -696,10 +917,47 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     };
   }
 
+  function wireSuggestions() {
+    var scanButton = $("sg-scan");
+    if (scanButton) scanButton.onclick = scan;
+    var toggle = $("sg-hidden");
+    if (toggle) toggle.onclick = function () { state.showHidden = !state.showHidden; render(); };
+    each("[data-start]", function (el) { el.onclick = function () { openStartForm(el.getAttribute("data-start")); }; });
+    each("[data-url]", function (el) {
+      el.onclick = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        request("ui/open-link", { url: el.getAttribute("data-url") }).then(function (r) {
+          if (r && r.isError) throw new Error("The host would not open " + el.getAttribute("data-url") + ".");
+        }).catch(function (err) { state.sgFlash = { ok: false, text: err.message }; render(); });
+      };
+    });
+    var f = state.form;
+    if (!f) return;
+    // Typing only updates view state; a re-render is needed only where the form's shape
+    // changes, which is choosing between a route and a chat task.
+    function bind(id, field, event, reshape) {
+      var el = $(id);
+      if (!el) return;
+      el[event] = function () { f[field] = el.type === "checkbox" ? el.checked : el.value; if (reshape) render(); };
+    }
+    bind("sg-name", "name", "oninput");
+    bind("sg-brief", "brief", "oninput");
+    bind("sg-prefix", "prefix", "onchange");
+    bind("sg-base", "base", "onchange");
+    bind("sg-route", "route", "onchange", true);
+    bind("sg-assess", "assess", "onchange");
+    var name = $("sg-name");
+    if (name) name.onkeydown = function (e) { if (e.key === "Enter") createTask(); };
+    var create = $("sg-create");
+    if (create) create.onclick = createTask;
+    var cancel = $("sg-cancel");
+    if (cancel) cancel.onclick = function () { state.form = null; render(); };
+  }
+
   // Escape goes back to the board and "n" to the next task needing you, unless typing.
   document.onkeydown = function (e) {
     var t = e.target && e.target.tagName;
-    if (t === "INPUT" || t === "TEXTAREA") return;
+    if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
     if (e.key === "Escape" && state.view === "run") closeRun();
     else if ((e.key === "n" || e.key === "j") && state.view === "run") { var n = nextNeeding(); if (n) openRun(n.taskId); }
   };
@@ -726,6 +984,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     applyContext(result && result.hostContext);
     var caps = (result && result.hostCapabilities) || {};
     if (caps.serverTools === undefined && Object.keys(caps).length > 0) state.canCall = false;
+    state.canOpenLinks = !!caps.openLinks;
     notify("ui/notifications/initialized", {});
     // Size is reported only once initialised, as the reference App does: a host may
     // drop a size-changed that arrives before the handshake, and the first

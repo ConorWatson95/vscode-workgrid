@@ -62,6 +62,11 @@ const HEADLESS_ROOTS = [
   // `vscode` at all; this says where the chain broke instead of a bundle failing.
   "src/mcp/main.ts",
   "src/services/harnessControlService.ts",
+  // Suggested work and starting a task, which Claude does without VS Code.
+  "src/services/suggestionControlService.ts",
+  "src/services/suggestionScanService.ts",
+  "src/services/taskCreation.ts",
+  "src/persistence/suggestionScanFile.ts",
 ];
 
 function resolveImport(fromFile: string, specifier: string): string | undefined {

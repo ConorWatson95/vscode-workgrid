@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
 import { runnerLogPath } from "../runner/headlessHost";
-import { RunLauncher } from "./runLauncher";
+import { RunLauncher, ScanLauncher } from "./runLauncher";
 
 const AT = "2026-10-12T09:00:00.000Z";
 const dirs: string[] = [];
@@ -90,5 +90,56 @@ describe("RunLauncher", () => {
     const started = await (await launcher(() => undefined)).start("t1");
     expect(started.ok).toBe(false);
     expect(started.message).toMatch(/may still be starting/);
+  });
+});
+
+describe("ScanLauncher", () => {
+  async function scanLauncher(onLaunch: (log: string, mark: (startedAt: string) => void) => void) {
+    const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "scan-launcher-"));
+    dirs.push(storageDir);
+    const log = runnerLogPath(storageDir, "suggestion-scan");
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    fs.writeFileSync(log, "old not scanned: from yesterday\n");
+    let stored: import("../persistence/suggestionScanFile").StoredScan = {
+      scanning: { startedAt: "2026-10-11T00:00:00.000Z", pid: 1 },
+    };
+    let clock = Date.parse(AT);
+    let args: string[] = [];
+    const launcher = new ScanLauncher({
+      repositoryRoot: "C:/repo",
+      storageDir,
+      readScan: async () => stored,
+      runnerScript: "runner.js",
+      launch: async (_script, given) => {
+        args = given;
+        onLaunch(log, (startedAt) => (stored = { scanning: { startedAt, pid: 2 } }));
+      },
+      sleep: async (ms) => void (clock += ms),
+      now: () => clock,
+      timeoutMs: 2_000,
+    });
+    return { launcher, args: () => args };
+  }
+
+  it("reports started once the runner marks a scan begun after the launch", async () => {
+    const { launcher, args } = await scanLauncher((_log, mark) => mark("2026-10-12T09:00:01.000Z"));
+    const outcome = await launcher.start();
+    expect(outcome.ok).toBe(true);
+    expect(args()).toEqual(["scan", "--repo", "C:/repo", "--detach"]);
+  });
+
+  it("does not take yesterday's marker or log line as this scan's", async () => {
+    const { launcher } = await scanLauncher(() => undefined);
+    const outcome = await launcher.start();
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/not started yet/);
+  });
+
+  it("reports the runner's refusal", async () => {
+    const { launcher } = await scanLauncher((log) =>
+      fs.appendFileSync(log, "warn  not scanned: no suggestion sources are configured\n"),
+    );
+    const outcome = await launcher.start();
+    expect(outcome).toEqual({ ok: false, message: "no suggestion sources are configured" });
   });
 });

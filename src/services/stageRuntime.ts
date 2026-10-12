@@ -11,6 +11,7 @@ import { askTimeoutEnv, askTimeoutMs } from "../domain/askTimeout";
 import { Contamination, distinctiveLines } from "../domain/branchContamination";
 import { stageTools } from "../domain/stageTools";
 import { subagentLimitEnv } from "../domain/subagentLimits";
+import { SCAN_DISALLOWED_TOOLS, SCAN_TIMEOUT_MS } from "../agents/suggestionScanSessionRunner";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { parsePorcelainChanges } from "../domain/worktreeDiscard";
 import { GitClient } from "../git/gitClient";
@@ -309,6 +310,40 @@ export function buildStageRuntime(options: StageRuntimeOptions) {
     // and the stage was then recorded as having timed out rather than as having waited.
     (taskId) => askUser.blockedMs(taskId),
   );
+
+  // A scan is a stage session with no task, rooted at the repository — the same runner
+  // class, so it inherits MCP readiness abandoning a scan whose ticket server is
+  // unavailable before any inference is paid for, the hard timeout, and the failure
+  // logging. What it does *not* inherit is a stage's environment, and each difference is
+  // deliberate:
+  //
+  //  * **No permission gate.** A scan holds nothing for approval because it is read-only
+  //    and nobody is waiting to grant anything mid-list-refresh.
+  //  * **No protocol skill.** The skill teaches an engine to speak VERDICT, DEFERRED and
+  //    HANDOFF, none of which a scan emits — it has its own reply contract. Loading it
+  //    was prefix tokens spent teaching a scan a protocol it cannot use.
+  //  * **No tools that change anything.** Enforced rather than requested: the first real
+  //    scan wrote three Bash commands to parse an MCP result, had each refused, and cost
+  //    $0.89 across eight turns instead of $0.49 across three. An agent that never had
+  //    the tool does the work with what it has, which is the same reasoning
+  //    `subagentLimits` applies to the Agent tool.
+  const scanRunner = new ClaudeStageSessionRunner(
+    sessions,
+    (task) => ({
+      worktreePath: task.worktreePath,
+      permissionMode: settings().permissionMode(),
+      mcpConfigPath: reducedMcpConfigPath(task.repositoryRoot),
+      strictMcpConfig: settings().stageMcpServers().length > 0,
+      // The source's own model wins, applied per run by the scan service; this is only
+      // the fallback for a source that names none.
+      model: settings().model(),
+      taskName: task.name,
+      autoCompactThreshold: 0,
+      disallowedTools: SCAN_DISALLOWED_TOOLS,
+    }),
+    logger,
+    SCAN_TIMEOUT_MS,
+  );
   /**
    * The project's routes and rules as they are on disk right now.
    *
@@ -552,6 +587,7 @@ export function buildStageRuntime(options: StageRuntimeOptions) {
     liveRequests,
     reducedMcpConfigPath,
     stageRunner,
+    scanRunner,
     currentHarness,
     worktreeDiscards,
     worktreeClaims,

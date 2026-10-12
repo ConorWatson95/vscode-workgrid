@@ -15,6 +15,13 @@ import { loadHarness, loadReviewRules } from "../services/reviewRulesService";
 import { driveRoute } from "../services/routeDriver";
 import { RunLeaseService } from "../services/runLeaseService";
 import { buildStageRuntime } from "../services/stageRuntime";
+import {
+  SuggestionScanService,
+  scanFailures,
+  scannedSuggestions,
+} from "../services/suggestionScanService";
+import { SCAN_TASK_ID, SuggestionScanSessionRunner } from "../agents/suggestionScanSessionRunner";
+import { SuggestionScanFileStore } from "../persistence/suggestionScanFile";
 import { loadHeadlessSettings, runnerLogPath } from "./headlessHost";
 
 /**
@@ -80,8 +87,12 @@ function detach(): void {
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "scan") return scan();
   if (process.argv[2] !== "advance") {
-    fail("usage: harnessRunner advance --repo <path> --task <id> [--detach]");
+    fail(
+      "usage: harnessRunner advance --repo <path> --task <id> [--detach]\n" +
+        "       harnessRunner scan --repo <path> [--detach]",
+    );
   }
   const taskId = argument("--task") ?? fail("--task is required.");
   if (process.argv.includes("--detach")) {
@@ -200,6 +211,95 @@ async function main(): Promise<void> {
     exitCode = 1;
   } finally {
     stopServing();
+    runtime.dispose();
+  }
+  logger.info(`--- exit ${exitCode}`);
+  process.exit(exitCode);
+}
+
+/**
+ * `scan`: runs every configured suggestion source once and writes the result beside the
+ * state file, where VS Code and Claude both read it.
+ *
+ * Its own process for the reason `advance` is: a scan takes minutes and the pane's call
+ * into the MCP server has seconds. Built on the same runtime, so a scan here is the
+ * session VS Code would have started.
+ */
+async function scan(): Promise<void> {
+  if (process.argv.includes("--detach")) {
+    detach();
+    return;
+  }
+  const requested = path.resolve(argument("--repo") ?? process.cwd());
+  const host = loadHeadlessSettings(requested);
+  const logger = new FileLogger(runnerLogPath(host.storageDir, SCAN_TASK_ID));
+  logger.info(`--- suggestion scan, pid ${process.pid}`);
+  for (const problem of host.read.problems) logger.warn(`settings not applied: ${problem}`);
+
+  const git = new GitClient(logger);
+  const statusService = new GitStatusService(git);
+  const worktreeService = new GitWorktreeService(git, statusService);
+  const root = await worktreeService.getRepositoryRoot(requested);
+  if (!root.ok) {
+    logger.error(`${requested} is not inside a git repository.`);
+    process.exit(1);
+  }
+  const repositoryRoot = root.value;
+  const settings = () => host.settings;
+  const io = new NodeStateFileIo();
+  const store = new TaskStateStore({
+    io,
+    git: worktreeService,
+    logger,
+    createLock: (stateFilePath) => new NodeStateFileLock(stateFilePath, logger),
+  });
+  const repository = await store.forRepository(repositoryRoot);
+  const stateDirectory = path.dirname(repository.path);
+
+  const harness = loadHarness(repositoryRoot, { configuredPath: settings().harnessConfigPath() });
+  for (const problem of harness.problems) logger.warn(`harness config: ${problem}`);
+  if (harness.suggestionSources.length === 0) {
+    logger.warn("not scanned: no suggestion sources are configured for this project.");
+    logger.info("--- exit 3");
+    process.exit(3);
+  }
+
+  const runtime = buildStageRuntime({
+    logger,
+    settings,
+    storageDir: host.storageDir,
+    repositoryRoot: () => repositoryRoot,
+    configRoot: () => repositoryRoot,
+    protocolPluginDir: () => undefined,
+    repository,
+    // Required by the runtime and never reached: a scan runs no stage.
+    reviewPlans: new ReviewPlanService(statusService, repository, logger, (rootPath) =>
+      loadReviewRules(rootPath, { configuredPath: settings().harnessConfigPath() }),
+    ),
+    gitClient: git,
+    statusService,
+    worktreeService,
+    liveRequests: { servesBrief: () => false },
+  });
+  const clock = { now: () => new Date().toISOString() };
+  const scans = new SuggestionScanService(
+    new SuggestionScanSessionRunner(runtime.scanRunner, clock),
+    clock,
+    new SuggestionScanFileStore(io, async () => stateDirectory),
+  );
+
+  let exitCode = 0;
+  try {
+    // Seeded from the file so the list on screen stays put while this one runs.
+    await scans.load(repositoryRoot);
+    const result = await scans.scan(repositoryRoot, harness.suggestionSources);
+    const failures = scanFailures(result);
+    for (const failure of failures) logger.warn(`source failed: ${failure}`);
+    logger.info(`scanned: ${scannedSuggestions(result).length} suggestion(s), ${failures.length} source(s) failing`);
+  } catch (error) {
+    logger.error("the scan failed", error);
+    exitCode = 1;
+  } finally {
     runtime.dispose();
   }
   logger.info(`--- exit ${exitCode}`);

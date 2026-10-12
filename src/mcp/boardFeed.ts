@@ -1,4 +1,5 @@
 import { RunSnapshot, RunSummary } from "../ui/harnessSnapshot";
+import { SuggestionBoard } from "../services/suggestionControlService";
 
 /**
  * One line of the board feed: `node harnessMcpServer.js --repo <path> --watch`.
@@ -13,10 +14,16 @@ import { RunSnapshot, RunSummary } from "../ui/harnessSnapshot";
 export type FeedMessage =
   | { type: "board"; repositoryRoot: string; runs: RunSummary[] }
   | { type: "run"; run: RunSnapshot }
-  | { type: "gone"; taskId: string };
+  | { type: "gone"; taskId: string }
+  | { type: "suggestions"; board: SuggestionBoard };
 
 export interface BoardSource {
   readBoard(): Promise<{ runs: RunSummary[]; snapshots: RunSnapshot[] }>;
+}
+
+/** Suggested work, when the project has a way to read it. */
+export interface SuggestionSourceOfBoard {
+  board(): Promise<SuggestionBoard>;
 }
 
 /**
@@ -29,6 +36,7 @@ export interface BoardSource {
  */
 export class BoardFeed {
   private board: string | undefined;
+  private suggestionBoard: string | undefined;
   // The whole snapshot, not its `revision`: that hashes the pipeline alone, and a
   // run's row also reads task fields — its name, its ticket, a reply on it.
   private readonly sent = new Map<string, string>();
@@ -36,6 +44,7 @@ export class BoardFeed {
   constructor(
     private readonly source: BoardSource,
     private readonly repositoryRoot: string,
+    private readonly suggestions?: SuggestionSourceOfBoard,
   ) {}
 
   async poll(): Promise<FeedMessage[]> {
@@ -61,6 +70,17 @@ export class BoardFeed {
     if (board !== this.board) {
       this.board = board;
       messages.push({ type: "board", repositoryRoot: this.repositoryRoot, runs });
+    }
+
+    // Read on every poll because a scan changes its own file, not the state file, and
+    // a started task changes which items are still offered.
+    if (this.suggestions) {
+      const board = await this.suggestions.board();
+      const body = JSON.stringify(board);
+      if (body !== this.suggestionBoard) {
+        this.suggestionBoard = body;
+        messages.push({ type: "suggestions", board });
+      }
     }
     return messages;
   }

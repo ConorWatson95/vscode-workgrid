@@ -11,7 +11,12 @@ import { TaskStateStore } from "../persistence/taskStateStore";
 import { HarnessControlService } from "../services/harnessControlService";
 import { loadHarness } from "../services/reviewRulesService";
 import { loadHeadlessSettings } from "../runner/headlessHost";
-import { RunLauncher } from "./runLauncher";
+import { RunLauncher, ScanLauncher } from "./runLauncher";
+import { GitMergeService } from "../git/gitMergeService";
+import { SuggestionScanFileStore } from "../persistence/suggestionScanFile";
+import { SuggestionControlService } from "../services/suggestionControlService";
+import { TaskWorkspaceService } from "../services/taskWorkspaceService";
+import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { BoardFeed } from "./boardFeed";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
 import { HarnessMcpServer } from "./harnessMcpServer";
@@ -54,7 +59,8 @@ function argument(name: string): string | undefined {
 async function main(): Promise<void> {
   const logger = new StderrLogger();
   const git = new GitClient(logger);
-  const worktrees = new GitWorktreeService(git, new GitStatusService(git));
+  const statusService = new GitStatusService(git);
+  const worktrees = new GitWorktreeService(git, statusService);
 
   const requested = path.resolve(argument("--repo") ?? process.cwd());
   const root = await worktrees.getRepositoryRoot(requested);
@@ -64,8 +70,9 @@ async function main(): Promise<void> {
   }
   const repositoryRoot = root.value;
 
+  const io = new NodeStateFileIo();
   const store = new TaskStateStore({
-    io: new NodeStateFileIo(),
+    io,
     git: worktrees,
     logger,
     createLock: (stateFilePath) => new NodeStateFileLock(stateFilePath, logger),
@@ -88,8 +95,38 @@ async function main(): Promise<void> {
     () => loadHarness(repositoryRoot, { configuredPath: host.settings.harnessConfigPath() }),
     new RunLauncher({ repository, repositoryRoot, storageDir: host.storageDir }),
   );
+  // Suggested work: read from the scan file beside the state file, scanned by a
+  // headless runner, and started through the same creation VS Code uses.
+  const stateDirectory = path.dirname(repository.path);
+  const scanFile = new SuggestionScanFileStore(io, async () => stateDirectory);
+  const readScan = () => scanFile.read(repositoryRoot);
+  const merges = new GitMergeService(git);
+  const suggestions = new SuggestionControlService({
+    repositoryRoot,
+    repository,
+    harness: () => loadHarness(repositoryRoot, { configuredPath: host.settings.harnessConfigPath() }),
+    readScan,
+    alive,
+    scans: new ScanLauncher({ repositoryRoot, storageDir: host.storageDir, readScan }),
+    branches: async () => {
+      const [listed, current] = await Promise.all([
+        merges.listBranches(repositoryRoot),
+        worktrees.getCurrentBranch(repositoryRoot),
+      ]);
+      return {
+        list: listed.ok ? listed.value : [],
+        ...(current.ok && current.value ? { current: current.value } : {}),
+      };
+    },
+    settings: () => host.settings,
+    service: new TaskWorkspaceService(repository, worktrees, statusService, logger),
+    provisioner: new WorktreeProvisioner(logger),
+    logger,
+    now: () => new Date().toISOString(),
+  });
+
   if (process.argv.includes("--watch")) {
-    watchBoard(new BoardFeed(service, repositoryRoot), path.dirname(repository.path), logger);
+    watchBoard(new BoardFeed(service, repositoryRoot, suggestions), stateDirectory, logger);
     return;
   }
   const server = new HarnessMcpServer(
@@ -98,6 +135,7 @@ async function main(): Promise<void> {
     { name: "task-workspaces-harness", version: "0.1.0", repositoryRoot },
     logger,
     () => host.settings.advanceAfterAnswering(),
+    suggestions,
   );
 
   const inFlight = new Set<Promise<void>>();

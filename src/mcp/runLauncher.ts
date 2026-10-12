@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { TaskRepository } from "../persistence/taskRepository";
 import { RunControl } from "../services/harnessControlService";
 import { runnerLogPath } from "../runner/headlessHost";
+import { SCAN_TASK_ID } from "../agents/suggestionScanSessionRunner";
+import { StoredScan } from "../persistence/suggestionScanFile";
+import { ScanControl } from "../services/suggestionControlService";
 
 /**
  * Starts a headless run of a task and waits until it has the task, or has said why not.
@@ -75,6 +78,63 @@ export class RunLauncher implements RunControl {
         "The runner has not taken the task yet, so it may still be starting." +
         (written ? `\n${tail(written)}` : ` Nothing has been written to ${logFile}.`),
     };
+  }
+}
+
+/**
+ * Starts a suggestion scan in a headless runner and waits until it has begun.
+ *
+ * The scan file's `scanning` marker is the runner's own statement that it is
+ * scanning, written before the first session, so that is what is waited for — the
+ * same reasoning as waiting for the lease above.
+ */
+export interface ScanLauncherDeps {
+  repositoryRoot: string;
+  storageDir: string;
+  readScan: () => Promise<StoredScan>;
+  runnerScript?: string;
+  launch?: (script: string, args: string[]) => Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  timeoutMs?: number;
+}
+
+export class ScanLauncher implements ScanControl {
+  constructor(private readonly deps: ScanLauncherDeps) {}
+
+  async start(): Promise<{ ok: boolean; message: string }> {
+    const now = this.deps.now ?? Date.now;
+    const sleep = this.deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const logFile = runnerLogPath(this.deps.storageDir, SCAN_TASK_ID);
+    const logFrom = sizeOf(logFile);
+    const launchedAt = new Date(now()).toISOString();
+
+    try {
+      await (this.deps.launch ?? launchNode)(this.deps.runnerScript ?? path.join(__dirname, "harnessRunner.js"), [
+        "scan",
+        "--repo",
+        this.deps.repositoryRoot,
+        "--detach",
+      ]);
+    } catch (error) {
+      return { ok: false, message: `Could not start the scan: ${String(error)}` };
+    }
+
+    const deadline = now() + (this.deps.timeoutMs ?? 15_000);
+    while (now() < deadline) {
+      const stored = await this.deps.readScan().catch((): StoredScan => ({}));
+      if (stored.scanning && stored.scanning.startedAt >= launchedAt) {
+        return { ok: true, message: "Scanning. The list updates when it finishes, usually within a few minutes." };
+      }
+      const written = readFrom(logFile, logFrom);
+      const refused = /not scanned: (.*)/.exec(written);
+      if (refused) return { ok: false, message: refused[1] };
+      if (/--- exit/.test(written)) {
+        return { ok: false, message: `The scan ended before it began:\n${tail(written)}` };
+      }
+      await sleep(250);
+    }
+    return { ok: false, message: `The scan has not started yet, so it may still be starting. See ${logFile}.` };
   }
 }
 

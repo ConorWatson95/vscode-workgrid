@@ -5,6 +5,7 @@ import {
   parseLookupReply,
 } from "../domain/suggestionLookup";
 import { parseSuggestions, TaskSuggestion } from "../domain/taskSuggestion";
+import type { StoredScan } from "../persistence/suggestionScanFile";
 
 /**
  * Runs a project's suggestion scans and holds the result.
@@ -16,11 +17,13 @@ import { parseSuggestions, TaskSuggestion } from "../domain/taskSuggestion";
  * reasoning back in the harness — which is the line the runtime holds everywhere else.
  *
  * **Scanning is explicit, never automatic.** A session costs money and time, and a scan
- * on every window reload would spend both on a list nobody asked for. It also means the
- * result can be held in memory rather than persisted: suggestions are derived from an
- * external source of truth, so losing them costs one command and nothing is stale for
- * longer than you can see. `scannedAt` is kept so the age is always on screen — a list
- * of work with no date on it is one you cannot tell from this morning's.
+ * on every window reload would spend both on a list nobody asked for. `scannedAt` is kept
+ * so the age is always on screen — a list of work with no date on it is one you cannot
+ * tell from this morning's.
+ *
+ * **Shared through a file when one is given** (`persistence/suggestionScanFile.ts`). It
+ * was memory alone until Claude became a second client: its pane starts a process per
+ * call, so a scan it ran had nowhere to land and one VS Code ran was invisible to it.
  *
  * The runner is injected as a one-method interface, so these tests need no agent.
  */
@@ -79,13 +82,40 @@ export interface ServiceClockLike {
   now(): string;
 }
 
+/** Where a scan is shared with other clients. Absent means memory only, as before. */
+export interface SuggestionScanStore {
+  read(repositoryRoot: string): Promise<StoredScan>;
+  write(repositoryRoot: string, stored: StoredScan): Promise<void>;
+}
+
 export class SuggestionScanService {
   private latest = new Map<string, ScanResult>();
 
   constructor(
     private readonly runner: SuggestionScanRunner,
     private readonly clock: ServiceClockLike,
+    private readonly store?: SuggestionScanStore,
+    /** Recorded beside a running scan so a reader can tell it from one that died. */
+    private readonly pid: number = process.pid,
   ) {}
+
+  /**
+   * Adopts the shared scan when it is newer than the one held, and says whether a scan
+   * is running. Never throws: an unreadable file is the same as no shared scan.
+   */
+  async load(repositoryRoot: string): Promise<StoredScan> {
+    let stored: StoredScan = {};
+    try {
+      stored = (await this.store?.read(repositoryRoot)) ?? {};
+    } catch {
+      return { scan: this.lastScan(repositoryRoot) };
+    }
+    const held = this.lastScan(repositoryRoot);
+    if (stored.scan && (!held || stored.scan.scannedAt > held.scannedAt)) {
+      this.latest.set(key(repositoryRoot), stored.scan);
+    }
+    return { ...stored, scan: this.lastScan(repositoryRoot) };
+  }
 
   /** The last scan for a repository, or undefined if none has been run. */
   lastScan(repositoryRoot: string): ScanResult | undefined {
@@ -115,13 +145,26 @@ export class SuggestionScanService {
     sources: readonly SuggestionSource[],
   ): Promise<ScanResult> {
     const outcomes: SourceScanOutcome[] = [];
+    // The previous list stays readable while this one runs: a scan takes minutes, and
+    // blanking the list for that long would read as the work having gone.
+    const previous = this.lastScan(repositoryRoot);
+    await this.share(repositoryRoot, {
+      ...(previous ? { scan: previous } : {}),
+      scanning: { startedAt: this.clock.now(), pid: this.pid },
+    });
 
-    for (const source of sources) {
-      outcomes.push(await this.scanOne(repositoryRoot, source));
+    try {
+      for (const source of sources) {
+        outcomes.push(await this.scanOne(repositoryRoot, source));
+      }
+    } catch (error) {
+      await this.share(repositoryRoot, previous ? { scan: previous } : {});
+      throw error;
     }
 
     const result: ScanResult = { outcomes, scannedAt: this.clock.now() };
     this.latest.set(key(repositoryRoot), result);
+    await this.share(repositoryRoot, { scan: result });
     return result;
   }
 
@@ -164,6 +207,18 @@ export class SuggestionScanService {
     }
 
     return { outcome: parseLookupReply(reply.text, source.id, ref) };
+  }
+
+  /**
+   * Best effort. A scan whose file could not be written still answers the client that
+   * asked for it, which is all a scan could do before there was a file.
+   */
+  private async share(repositoryRoot: string, stored: StoredScan): Promise<void> {
+    try {
+      await this.store?.write(repositoryRoot, stored);
+    } catch {
+      // Nothing to do: the next scan writes it again.
+    }
   }
 
   private async scanOne(

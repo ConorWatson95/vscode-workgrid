@@ -64,7 +64,19 @@ const view = {
   confirm: undefined,
   busy: undefined,
   flash: undefined,
+  // Suggested work as the feed last sent it, and whether items below a source's
+  // rank floor are shown.
+  suggestions: undefined,
+  showHidden: false,
+  // The one suggestion being started, with what has been typed and picked so far.
+  starting: undefined,
+  // Routes and branches for the start form, read once while the pane is open: they
+  // change with config, not with the run.
+  taskOptions: undefined,
+  // A task just started, opened once the board carries it.
+  reveal: undefined,
 };
+const SUGGESTED = "suggested";
 
 export function register(on) {
   on("session.start", async ($, e, next) => {
@@ -146,11 +158,19 @@ function stopFeed() {
   view.answers.clear();
   view.focus = undefined;
   view.confirm = undefined;
+  view.suggestions = undefined;
+  view.showHidden = false;
+  view.starting = undefined;
+  view.taskOptions = undefined;
+  view.reveal = undefined;
   if (feed) void feed.return();
 }
 
 function take(message) {
-  if (message.type === "board") view.board = message.runs;
+  if (message.type === "board") {
+    view.board = message.runs;
+    revealStarted();
+  } else if (message.type === "suggestions") view.suggestions = message.board;
   else if (message.type === "run") view.runs.set(message.run.taskId, message.run);
   else if (message.type === "gone") {
     view.runs.delete(message.taskId);
@@ -166,7 +186,7 @@ function take(message) {
  * offered only to such a host, which is what keeps them out of the model's reach.
  * Resolves the `tools/call` result, or throws with the best account of why not.
  */
-async function callTool($, tool, args) {
+async function callTool($, tool, args, timeoutMs = 60000) {
   const requests = [
     {
       jsonrpc: "2.0",
@@ -183,7 +203,7 @@ async function callTool($, tool, args) {
   ];
   const result = await $.process.run(["node", view.server, "--repo", view.repo], {
     stdin: requests.map((r) => JSON.stringify(r)).join("\n") + "\n",
-    timeoutMs: 60000,
+    timeoutMs,
   });
   const reply = result.stdout
     .split("\n")
@@ -194,13 +214,18 @@ async function callTool($, tool, args) {
   throw new Error(reply?.error?.message ?? (lastLine(result.stderr) || "No answer from the harness."));
 }
 
-async function decide($, label, tool, args) {
+/**
+ * Resolves the outcome the harness reported, for a caller that needs more than its
+ * message: the id of a task it started.
+ */
+async function decide($, label, tool, args, timeoutMs) {
   view.busy = label;
   view.flash = undefined;
   $.ui.invalidate("ui.render");
+  let outcome;
   try {
-    const result = await callTool($, tool, args);
-    const outcome = result.structuredContent;
+    const result = await callTool($, tool, args, timeoutMs);
+    outcome = result.structuredContent;
     view.flash = outcome
       ? { ok: outcome.ok, text: outcome.message }
       : { ok: !result.isError, text: result.content?.[0]?.text ?? "Done." };
@@ -212,6 +237,7 @@ async function decide($, label, tool, args) {
   if (view.flash.ok) view.confirm = undefined;
   view.busy = undefined;
   $.ui.invalidate("ui.render");
+  return outcome;
 }
 
 /**
@@ -299,11 +325,15 @@ function drawTree($, ui, columns) {
       </Box>
     );
   }
+  // Drawn under the runs, and with none: an empty board is exactly when somebody
+  // comes looking for what to start.
+  const suggested = drawSuggestions($, ui, columns);
   if (view.board.length === 0) {
     return (
       <Box flexDirection="column">
         {head}
         <Text dimColor>No routed tasks in {baseName(view.repo)}.</Text>
+        {suggested}
       </Box>
     );
   }
@@ -335,6 +365,7 @@ function drawTree($, ui, columns) {
       rows.push(...drawTask($, ui, run, hotkey, columns));
     }
   }
+  rows.push(...suggested);
   return <Box flexDirection="column">{rows}</Box>;
 }
 
@@ -886,6 +917,349 @@ function drawReport($, ui, run, stage) {
   return rows;
 }
 
+// --- suggested work ----------------------------------------------------------------
+//
+// What the project's sources say is outstanding, ranked, with work already under way
+// taken out. A project that declares no source gets no section at all, rather than an
+// empty one: "nothing outstanding" is a statement about sources, and there are none.
+
+function drawSuggestions($, ui, columns) {
+  const { Text, Button } = ui;
+  const board = view.suggestions;
+  if (!board?.configured) return [];
+  const open = groupOpen(SUGGESTED);
+  const hidden = board.suggestions.filter((item) => item.hidden).length;
+  const failed = board.failures.length;
+  const description = [
+    board.scanningSince
+      ? "Scanning since " + clockText(board.scanningSince)
+      : board.scannedAt
+        ? "scanned " + ageText(board.scannedAt) + " ago"
+        : "never scanned",
+    failed > 0 ? failed + (failed === 1 ? " source failed" : " sources failed") : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const rows = [
+    <Row ui={ui} depth={0}>
+      <Chevron ui={ui} open={open} />
+      <Icon ui={ui} glyph="◇" color="suggestion" />
+      <Button
+        key={"group:" + SUGGESTED}
+        plain
+        label="Suggested work"
+        onPress={() => toggle($, view.closedGroups, view.openedGroups, SUGGESTED)}
+      />
+      <Text dimColor>{board.suggestions.length - hidden}</Text>
+      <Text dimColor>{description}</Text>
+      {/* A second scan while one runs would only be told one is running. */}
+      {board.scanningSince ? null : (
+        <Button
+          key="scan"
+          plain
+          label="Scan"
+          onPress={() => (view.busy ? undefined : decide($, "Starting a scan…", "harness_scan_suggestions", {}))}
+        />
+      )}
+    </Row>,
+  ];
+  if (!open) return rows;
+
+  // A source that failed yields a short list, and a short list reads as a quiet board.
+  for (const failure of board.failures) {
+    rows.push(
+      <Row ui={ui} depth={1}>
+        <Icon ui={ui} glyph="✕" color="error" />
+        <ui.Box flexShrink={1}>
+          <Text color="error" wrap="wrap">{failure}</Text>
+        </ui.Box>
+      </Row>,
+    );
+  }
+  if (board.suggestions.length === 0) {
+    const empty = board.scanningSince
+      ? "The list fills in when the scan finishes."
+      : !board.scannedAt
+        ? "Never scanned. Scan to see what your sources hold."
+        : failed > 0
+          ? "Nothing outstanding in the sources that answered."
+          : "Nothing outstanding in your sources.";
+    rows.push(
+      <Row ui={ui} depth={1}>
+        <Text dimColor>{empty}</Text>
+      </Row>,
+    );
+    return rows;
+  }
+  for (const item of board.suggestions) {
+    if (item.hidden && !view.showHidden) continue;
+    rows.push(...drawSuggestion($, ui, item, columns));
+  }
+  if (hidden > 0) {
+    rows.push(
+      <Row ui={ui} depth={1}>
+        <Button
+          key="suggestions:hidden"
+          plain
+          dimColor
+          label={(view.showHidden ? "Hide " : "Show ") + hidden + " hidden"}
+          onPress={() => {
+            view.showHidden = !view.showHidden;
+            $.ui.invalidate("ui.render");
+          }}
+        />
+        {view.showHidden ? null : <Text dimColor>below a source's rank floor, or in a state it hides</Text>}
+      </Row>,
+    );
+  }
+  return rows;
+}
+
+/** The button comes first so a long title can never push it out of a narrow pane. */
+function drawSuggestion($, ui, item, columns) {
+  const { Text, Button } = ui;
+  const key = item.sourceId + ":" + item.ref;
+  const starting = view.starting?.key === key;
+  const description = [item.rank, item.state, view.suggestions.sources.length > 1 ? item.sourceLabel : undefined]
+    .filter(Boolean)
+    .join(" · ");
+  const rows = [
+    <Row ui={ui} depth={1}>
+      <Icon ui={ui} glyph="◇" color={item.hidden ? "subtle" : "suggestion"} />
+      <Button key={"start:" + key} plain label="Start task" onPress={() => toggleStart($, item)} />
+      <Text dimColor={item.hidden}>{item.ref}</Text>
+      <Text dimColor={item.hidden} wrap="truncate-end">
+        {clip(item.title, Math.floor(columns * 0.45))}
+      </Text>
+      <Text dimColor wrap="truncate-end">{description}</Text>
+    </Row>,
+  ];
+  if (starting) rows.push(...drawStartForm($, ui, view.starting));
+  return rows;
+}
+
+/**
+ * VS Code's create flow as rows, the same questions in the same order: name, branch
+ * type, base branch, route, whether some of it exists already, the brief. Typing is
+ * kept in `view.starting` as it happens, so a redraw from the feed mid-form puts
+ * back what the person had rather than the defaults.
+ */
+function drawStartForm($, ui, form) {
+  const { Text, Button, Input, Select } = ui;
+  const cancel = (
+    <Button
+      key="start:cancel"
+      label="Cancel"
+      onPress={() => {
+        view.starting = undefined;
+        $.ui.invalidate("ui.render");
+      }}
+    />
+  );
+  const loaded = view.taskOptions;
+  if (!loaded || loaded.loading) {
+    return [
+      <Row ui={ui} depth={2}>
+        <Text dimColor>Reading routes and branches…</Text>
+      </Row>,
+    ];
+  }
+  if (loaded.error) {
+    return [
+      <Row ui={ui} depth={2}>
+        <Text color="error">{loaded.error}</Text>
+      </Row>,
+      <Row ui={ui} depth={2}>
+        <Button key="start:reload" label="Try again" onPress={() => void loadTaskOptions($)} />
+        {cancel}
+      </Row>,
+    ];
+  }
+  const options = loaded.options;
+  const choice = startChoices(form, options);
+  const route = options.routes.find((candidate) => candidate.id === choice.routeId);
+  const keep = (field) => (value) => {
+    form[field] = value;
+  };
+  const rows = [
+    <Row ui={ui} depth={2}>
+      <Input
+        key="start:name"
+        autoFocus
+        label="Name: "
+        value={form.name}
+        placeholder="becomes the branch name, so shorten a long title"
+        submitLabel="keep"
+        onInput={keep("name")}
+        onSubmit={keep("name")}
+      />
+    </Row>,
+  ];
+  if (options.branchPrefixes.length > 0) {
+    rows.push(
+      <Row ui={ui} depth={2}>
+        <Select
+          key="start:prefix"
+          label="Branch type: "
+          options={options.branchPrefixes.map((value) => ({ value }))}
+          value={choice.branchPrefix}
+          onSelect={(value) => pick($, form, "branchPrefix", value)}
+        />
+      </Row>,
+    );
+  }
+  if (options.baseBranches.length > 0) {
+    rows.push(
+      <Row ui={ui} depth={2}>
+        <Select
+          key="start:base"
+          label="Base branch: "
+          options={options.baseBranches.map((value) => ({ value }))}
+          value={choice.baseBranch}
+          onSelect={(value) => pick($, form, "baseBranch", value)}
+        />
+      </Row>,
+    );
+  }
+  // Named for what each produces, as in VS Code: a chat task is a deliberate way to
+  // work, not a route left blank.
+  rows.push(
+    <Row ui={ui} depth={2}>
+      <Select
+        key="start:route"
+        label="Route: "
+        options={[
+          ...options.routes.map((candidate) => ({ value: candidate.id, label: candidate.label })),
+          { value: "", label: "Chat task — no route" },
+        ]}
+        value={choice.routeId}
+        onSelect={(value) => pick($, form, "routeId", value)}
+      />
+    </Row>,
+  );
+  if (route) {
+    rows.push(
+      <Row ui={ui} depth={3}>
+        <ui.Box flexShrink={1}>
+          <Text dimColor wrap="wrap">
+            {[route.stageCount + " stages", options.usingBuiltInRoutes ? "built-in" : undefined, route.description]
+              .filter(Boolean)
+              .join(" · ")}
+          </Text>
+        </ui.Box>
+      </Row>,
+      // Work that exists only in an environment has no branch to adopt, so this is the
+      // way in for it: without an assessment the stages rebuild what is already running.
+      <Row ui={ui} depth={2}>
+        <Icon ui={ui} glyph={form.assessFirst ? "✓" : "○"} color={form.assessFirst ? "success" : "subtle"} />
+        <Button
+          key="start:assess"
+          plain
+          label="Some of this work already exists (assess first)"
+          onPress={() => pick($, form, "assessFirst", !form.assessFirst)}
+        />
+      </Row>,
+    );
+  }
+  rows.push(
+    <Row ui={ui} depth={2}>
+      <Input
+        key="start:brief"
+        label="Brief: "
+        value={form.brief}
+        placeholder={route ? "handed to every stage" : "kept with the task"}
+        submitLabel="keep"
+        onInput={keep("brief")}
+        onSubmit={keep("brief")}
+      />
+    </Row>,
+    <Row ui={ui} depth={2}>
+      {view.busy ? (
+        <Text color="suggestion">{view.busy}</Text>
+      ) : (
+        [<Button key="start:create" variant="primary" label="Create" onPress={() => startTask($, form)} />, cancel]
+      )}
+    </Row>,
+  );
+  return rows;
+}
+
+/** What the form would send: the person's picks, else the defaults VS Code offers. */
+function startChoices(form, options) {
+  return {
+    branchPrefix: form.branchPrefix ?? options.branchPrefixes[0] ?? "",
+    baseBranch: form.baseBranch ?? options.baseBranches[0] ?? "",
+    routeId: form.routeId ?? options.routes[0]?.id ?? "",
+  };
+}
+
+/** One form at a time: opening another suggestion's discards this one's answers. */
+function toggleStart($, item) {
+  const key = item.sourceId + ":" + item.ref;
+  view.starting =
+    view.starting?.key === key
+      ? undefined
+      : {
+          key,
+          sourceId: item.sourceId,
+          ref: item.ref,
+          name: item.title,
+          brief: [item.ref, item.url, item.detail].filter(Boolean).join(" — "),
+          assessFirst: false,
+        };
+  view.flash = undefined;
+  if (view.starting && !view.taskOptions?.options && !view.taskOptions?.loading) void loadTaskOptions($);
+  $.ui.invalidate("ui.render");
+}
+
+function pick($, form, field, value) {
+  form[field] = value;
+  $.ui.invalidate("ui.render");
+}
+
+async function loadTaskOptions($) {
+  view.taskOptions = { loading: true };
+  $.ui.invalidate("ui.render");
+  try {
+    const result = await callTool($, "harness_task_options", {});
+    view.taskOptions =
+      result.isError || !result.structuredContent
+        ? { error: result.content?.[0]?.text ?? "The harness did not say which routes there are." }
+        : { options: result.structuredContent };
+  } catch (error) {
+    view.taskOptions = { error: error instanceof Error ? error.message : String(error) };
+  }
+  $.ui.invalidate("ui.render");
+}
+
+async function startTask($, form) {
+  const choice = startChoices(form, view.taskOptions.options);
+  const args = {
+    sourceId: form.sourceId,
+    ref: form.ref,
+    name: form.name.trim(),
+    branchPrefix: choice.branchPrefix,
+    baseBranch: choice.baseBranch,
+  };
+  if (choice.routeId) {
+    args.routeId = choice.routeId;
+    args.assessFirst = form.assessFirst;
+  }
+  if (form.brief.trim()) args.brief = form.brief.trim();
+  // Longer than a decision gets: this checks out a worktree and copies files into it,
+  // which on a large repository is minutes rather than seconds.
+  const outcome = await decide($, "Creating " + (args.name || "the task") + "…", "harness_start_task", args, 180000);
+  // A refusal keeps the form, so "that name is taken" is answered by editing it.
+  if (!outcome?.ok) return;
+  if (view.starting === form) view.starting = undefined;
+  // A chat task has no route, so it never reaches the board to be opened.
+  if (outcome.routed && outcome.taskId) {
+    view.reveal = outcome.taskId;
+    revealStarted();
+  }
+  $.ui.invalidate("ui.render");
+}
+
 /** One tree line: indented by depth, its parts on one row, nothing wrapping. */
 function Row({ ui, depth, children }) {
   const { Box } = ui;
@@ -917,7 +1291,7 @@ function drawFlash(ui) {
 function groupOpen(group) {
   if (view.openedGroups.has(group)) return true;
   if (view.closedGroups.has(group)) return false;
-  return group === "needs-you" || group === "working";
+  return group === "needs-you" || group === "working" || group === SUGGESTED;
 }
 
 function toggle($, set, opposite, key) {
@@ -940,14 +1314,29 @@ function toggleTask($, run) {
   if (view.openTasks.has(run.taskId)) {
     view.openTasks.delete(run.taskId);
     if (view.focus === run.taskId) view.focus = undefined;
-  } else {
-    view.openTasks.add(run.taskId);
-    view.focus = run.taskId;
-    if (run.attention.stageId) view.openStages.add(run.taskId + ":" + run.attention.stageId);
-  }
+  } else openRun(run);
   view.confirm = undefined;
   view.flash = undefined;
   $.ui.invalidate("ui.render");
+}
+
+function openRun(run) {
+  view.openTasks.add(run.taskId);
+  view.focus = run.taskId;
+  if (run.attention.stageId) view.openStages.add(run.taskId + ":" + run.attention.stageId);
+}
+
+/**
+ * Opens a task the pane just started, in whichever group it landed: the feed sees
+ * the new run on its own next poll, which may come before the call returns or after.
+ */
+function revealStarted() {
+  const run = view.reveal && (view.board ?? []).find((candidate) => candidate.taskId === view.reveal);
+  if (!run) return;
+  view.reveal = undefined;
+  view.closedGroups.delete(run.group);
+  if (!groupOpen(run.group)) view.openedGroups.add(run.group);
+  openRun(run);
 }
 
 /** `n`: close what is open and open the next run that needs you. */
@@ -975,6 +1364,12 @@ function ageText(since) {
   if (minutes < 60) return minutes + "m";
   if (minutes < 48 * 60) return Math.round(minutes / 60) + "h";
   return Math.round(minutes / 1440) + "d";
+}
+
+function clockText(at) {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return "";
+  return String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0");
 }
 
 function clip(text, width) {

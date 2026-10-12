@@ -1,5 +1,6 @@
 import { ok } from "../utilities/result";
 import { HarnessControlService } from "../services/harnessControlService";
+import { SuggestionBoard, SuggestionControlService } from "../services/suggestionControlService";
 import { RunSnapshot, RunSummary, StageView } from "../ui/harnessSnapshot";
 import { GROUP_ORDER } from "../ui/taskGrouping";
 
@@ -68,6 +69,8 @@ export class HarnessMcpServer {
     private readonly log?: ServerLog,
     /** Whether answering a question that joined the brief also starts the route. */
     private readonly advanceAfterAnswering?: () => boolean,
+    /** Suggested work. Absent means the tools for it are not offered. */
+    private readonly suggestions?: SuggestionControlService,
   ) {}
 
   /** Replies to a request; `undefined` for a notification, which gets no reply. */
@@ -208,7 +211,59 @@ export class HarnessMcpServer {
         },
       },
     ];
+    if (this.suggestions) {
+      read.push({
+        name: "harness_list_suggestions",
+        title: "List suggested work",
+        description:
+          "Work the project's configured sources (a ticket board, say) are holding that no " +
+          "task has started yet, ranked as the source orders it, from the last scan. Says " +
+          "how old the scan is and whether one is running.",
+        inputSchema: { type: "object", properties: {} },
+      });
+    }
     if (!this.appCapable) return read;
+    const suggestionTools: ToolDefinition[] = this.suggestions
+      ? [
+          {
+            name: "harness_scan_suggestions",
+            title: "Scan for work",
+            description:
+              "Dashboard-only: starts a scan of every configured source in a headless runner. " +
+              "A scan is a paid session; the list updates when it finishes.",
+            inputSchema: { type: "object", properties: {} },
+            _meta: appOnly,
+          },
+          {
+            name: "harness_task_options",
+            title: "New task options",
+            description: "Dashboard-only: the routes, branch types and base branches a new task can use.",
+            inputSchema: { type: "object", properties: {} },
+            _meta: appOnly,
+          },
+          {
+            name: "harness_start_task",
+            title: "Start a task from a suggestion",
+            description:
+              "Dashboard-only: creates the worktree and branch for one suggestion and attaches the chosen route.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sourceId: { type: "string" },
+                ref: { type: "string" },
+                name: { type: "string" },
+                branchPrefix: { type: "string" },
+                baseBranch: { type: "string" },
+                routeId: { type: "string", description: "Omit for a chat task with no route." },
+                assessFirst: { type: "boolean" },
+                brief: { type: "string" },
+              },
+              required: ["sourceId", "ref", "name", "branchPrefix", "baseBranch"],
+            },
+            _meta: appOnly,
+          },
+        ]
+      : [];
 
     return [
       ...read,
@@ -374,6 +429,7 @@ export class HarnessMcpServer {
         },
         _meta: appOnly,
       },
+      ...suggestionTools,
     ];
   }
 
@@ -393,9 +449,10 @@ export class HarnessMcpServer {
         // operator goes from it, so guessing one would put a task in front of them they
         // did not choose.
         const taskId = text("taskId");
-        const [runs, run] = await Promise.all([
+        const [runs, run, suggestions] = await Promise.all([
           this.service.listRuns(),
           taskId ? this.service.getRun(taskId) : Promise.resolve(undefined),
+          this.suggestions?.board(),
         ]);
         return {
           content: [
@@ -411,7 +468,12 @@ export class HarnessMcpServer {
                       : "No routed tasks in this repository.",
             },
           ],
-          structuredContent: { repositoryRoot: this.info.repositoryRoot, runs, run: run ?? null },
+          structuredContent: {
+            repositoryRoot: this.info.repositoryRoot,
+            runs,
+            run: run ?? null,
+            suggestions: suggestions ?? null,
+          },
         };
       }
       case "harness_list_runs": {
@@ -521,6 +583,48 @@ export class HarnessMcpServer {
         return decision(await this.service.advance(text("taskId") ?? ""));
       case "harness_stop_route":
         return decision(await this.service.stop(text("taskId") ?? ""));
+      case "harness_list_suggestions": {
+        const board = await this.suggestions!.board();
+        return { content: [{ type: "text", text: describeSuggestions(board) }] };
+      }
+      case "harness_scan_suggestions": {
+        const scanned = await this.suggestions!.startScan();
+        if (!scanned.ok) return decision(scanned);
+        return {
+          content: [{ type: "text", text: scanned.value.message }],
+          structuredContent: { ok: true, changed: true, message: scanned.value.message },
+        };
+      }
+      case "harness_task_options": {
+        const options = await this.suggestions!.options();
+        return {
+          content: [{ type: "text", text: `${options.routes.length} route(s).` }],
+          structuredContent: { ...options },
+        };
+      }
+      case "harness_start_task": {
+        const started = await this.suggestions!.startTask({
+          sourceId: text("sourceId") ?? "",
+          ref: text("ref") ?? "",
+          name: text("name") ?? "",
+          branchPrefix: text("branchPrefix") ?? "",
+          baseBranch: text("baseBranch") ?? "",
+          routeId: text("routeId") || undefined,
+          assessFirst: args.assessFirst === true,
+          brief: text("brief"),
+        });
+        if (!started.ok) return decision(started);
+        return {
+          content: [{ type: "text", text: started.value.message }],
+          structuredContent: {
+            ok: true,
+            changed: true,
+            message: started.value.message,
+            taskId: started.value.task.id,
+            routed: !!started.value.task.pipeline,
+          },
+        };
+      }
     }
     return failure(`No tool "${name}".`);
   }
@@ -582,6 +686,32 @@ export function describeBoard(runs: readonly RunSummary[]): string {
     .filter((members) => members.length > 0)
     .map((members) => `${members[0].groupLabel} (${members.length}):\n${members.map(describeSummary).join("\n")}`)
     .join("\n\n");
+}
+
+/** The suggestion list as the model reads it: ranked, hidden items counted not listed. */
+export function describeSuggestions(board: SuggestionBoard): string {
+  if (!board.configured) return "No suggestion sources are configured for this project.";
+  const lines: string[] = [];
+  if (board.scanningSince) lines.push(`A scan is running (since ${board.scanningSince}).`);
+  if (!board.scannedAt) {
+    lines.push("No scan has been run yet. The operator can scan from the dashboard.");
+    return lines.join("\n");
+  }
+  lines.push(`Last scanned ${board.scannedAt}.`);
+  for (const failure of board.failures) lines.push(`Source failed — ${failure}`);
+  const shown = board.suggestions.filter((item) => !item.hidden);
+  const hidden = board.suggestions.length - shown.length;
+  if (shown.length === 0) lines.push("Nothing outstanding above the rank filter.");
+  for (const item of shown) {
+    lines.push(
+      `- ${item.ref} — ${item.title}` +
+        (item.rank ? ` · ${item.rank}` : "") +
+        (item.state ? ` · ${item.state}` : "") +
+        (item.url ? ` · ${item.url}` : ""),
+    );
+  }
+  if (hidden > 0) lines.push(`${hidden} more below the source's rank filter.`);
+  return lines.join("\n");
 }
 
 /** The model's view of a run: what it says, without the revision or the buttons. */

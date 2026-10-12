@@ -37,21 +37,20 @@ import {
   refreshRulePaths,
   refreshStageLabels,
 } from "./domain/stageRefresh";
-import {
-  SCAN_DISALLOWED_TOOLS,
-  SCAN_TIMEOUT_MS,
-  SuggestionScanSessionRunner,
-} from "./agents/suggestionScanSessionRunner";
+import { SuggestionScanSessionRunner } from "./agents/suggestionScanSessionRunner";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { ExternalFeedbackService } from "./services/externalFeedbackService";
 import { externalWaitSince, groupForTask } from "./ui/taskGrouping";
-import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { buildStageRuntime } from "./services/stageRuntime";
 import { SERVER_BUNDLE_DIR, installServerBundle } from "./services/serverBundleInstaller";
 import { RunLeaseService } from "./services/runLeaseService";
 import { STATE_FILE_NAME, taskStateDir } from "./persistence/taskStateFile";
+import {
+  SUGGESTION_SCAN_FILE_NAME,
+  SuggestionScanFileStore,
+} from "./persistence/suggestionScanFile";
 import { StateFileWatch, watchStateFile } from "./persistence/stateFileWatcher";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
 import { PermissionRulesService } from "./services/permissionRulesService";
@@ -174,8 +173,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // repository because the state file belongs to the repository, not the window.
   const stateFileChanged = new vscode.EventEmitter<void>();
   context.subscriptions.push(stateFileChanged);
+  // An event rather than a direct call: the repository resolves before the scan service
+  // and the tree are built, so a closure naming them could run before they exist.
+  const scanFileChanged = new vscode.EventEmitter<void>();
+  context.subscriptions.push(scanFileChanged);
   let stateFileWatch: StateFileWatch | undefined;
   context.subscriptions.push({ dispose: () => stateFileWatch?.dispose() });
+  // A scan Claude ran lands in this file; watched so the tree shows it without a scan here.
+  let scanFileWatch: StateFileWatch | undefined;
+  context.subscriptions.push({ dispose: () => scanFileWatch?.dispose() });
 
   // --- Active repository resolution -------------------------------------
   const resolveRepository = async (): Promise<void> => {
@@ -202,6 +208,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protocolPluginDir = undefined;
     stateFileWatch?.dispose();
     stateFileWatch = undefined;
+    scanFileWatch?.dispose();
+    scanFileWatch = undefined;
     if (repositoryRoot) {
       const commonDir = await worktreeService.getGitCommonDir(repositoryRoot);
       if (commonDir.ok) {
@@ -212,6 +220,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           () => stateFileChanged.fire(),
           logger,
         );
+        scanFileWatch = watchStateFile(
+          taskStateDir(commonDir.value),
+          SUGGESTION_SCAN_FILE_NAME,
+          () => scanFileChanged.fire(),
+          logger,
+        );
+        scanFileChanged.fire();
       }
     }
   };
@@ -629,44 +644,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   });
 
-  // A scan is a stage session with no task, rooted at the repository — the same runner
-  // class, so it inherits MCP readiness abandoning a scan whose ticket server is
-  // unavailable before any inference is paid for, the hard timeout, and the failure
-  // logging. What it does *not* inherit is a stage's environment, and each difference is
-  // deliberate:
-  //
-  //  * **No permission gate.** A scan holds nothing for approval because it is read-only
-  //    and nobody is waiting to grant anything mid-list-refresh.
-  //  * **No protocol skill.** The skill teaches an engine to speak VERDICT, DEFERRED and
-  //    HANDOFF, none of which a scan emits — it has its own reply contract. Loading it
-  //    was prefix tokens spent teaching a scan a protocol it cannot use.
-  //  * **No tools that change anything.** Enforced rather than requested: the first real
-  //    scan wrote three Bash commands to parse an MCP result, had each refused, and cost
-  //    $0.89 across eight turns instead of $0.49 across three. An agent that never had
-  //    the tool does the work with what it has, which is the same reasoning
-  //    `subagentLimits` applies to the Agent tool.
-  const scanRunner = new ClaudeStageSessionRunner(
-    sessions,
-    (task) => ({
-      worktreePath: task.worktreePath,
-      permissionMode: configuration.permissionMode(repositoryUri),
-      mcpConfigPath: reducedMcpConfigPath(task.repositoryRoot),
-      strictMcpConfig: configuration.stageMcpServers(repositoryUri).length > 0,
-      // The source's own model wins, applied per run by the scan service; this is only
-      // the fallback for a source that names none.
-      model: configuration.model(repositoryUri),
-      taskName: task.name,
-      autoCompactThreshold: 0,
-      disallowedTools: SCAN_DISALLOWED_TOOLS,
-    }),
-    logger,
-    SCAN_TIMEOUT_MS,
-  );
-
+  const suggestionScanStore = new SuggestionScanFileStore(new NodeStateFileIo(), async (root) => {
+    const commonDir = await worktreeService.getGitCommonDir(root);
+    return commonDir.ok ? taskStateDir(commonDir.value) : undefined;
+  });
   suggestionScans = new SuggestionScanService(
-    new SuggestionScanSessionRunner(scanRunner, { now: () => new Date().toISOString() }),
+    new SuggestionScanSessionRunner(runtime.scanRunner, { now: () => new Date().toISOString() }),
     { now: () => new Date().toISOString() },
+    suggestionScanStore,
   );
+  context.subscriptions.push(
+    scanFileChanged.event(() => {
+      if (!repositoryRoot) return;
+      void suggestionScans?.load(repositoryRoot).then(() => tree.refresh());
+    }),
+  );
+  if (repositoryRoot) scanFileChanged.fire();
 
   isDrivingRoute = (taskId) => runner.isRunning(taskId);
 

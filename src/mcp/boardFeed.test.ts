@@ -65,3 +65,16 @@ describe("BoardFeed", () => {
     expect(messages[0]).toEqual({ type: "gone", taskId: "b" });
   });
 });
+
+describe("BoardFeed suggestions", () => {
+  it("sends the suggestion board when it changes, and only then", async () => {
+    const source = new FakeSource();
+    let board = { configured: true, sources: [], failures: [], suggestions: [] } as unknown as import("../services/suggestionControlService").SuggestionBoard;
+    const feed = new BoardFeed(source, "/repo", { board: async () => board });
+
+    expect((await feed.poll()).map((m) => m.type)).toEqual(["board", "suggestions"]);
+    expect(await feed.poll()).toEqual([]);
+    board = { ...board, scanningSince: "now" };
+    expect((await feed.poll()).map((m) => m.type)).toEqual(["suggestions"]);
+  });
+});

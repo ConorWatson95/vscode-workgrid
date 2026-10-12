@@ -356,3 +356,331 @@ describe("HARNESS_DASHBOARD_HTML", () => {
     );
   });
 });
+
+describe("HarnessMcpServer suggestions", () => {
+  const board = {
+    configured: true,
+    sources: [{ id: "jira", label: "JIRA" }],
+    scannedAt: AT,
+    failures: [],
+    suggestions: [
+      { sourceId: "jira", sourceLabel: "JIRA", ref: "NMGB-1", title: "Export drops a row", rank: "Blocker", hidden: false },
+      { sourceId: "jira", sourceLabel: "JIRA", ref: "NMGB-3", title: "Minor", rank: "Minor", hidden: true },
+    ],
+  };
+
+  async function withSuggestions(appCapable: boolean) {
+    const started: unknown[] = [];
+    const suggestions = {
+      board: async () => board,
+      startScan: async () => ({ ok: true, value: { message: "Scanning." } }),
+      options: async () => ({ routes: [], usingBuiltInRoutes: true, branchPrefixes: ["feat"], baseBranches: ["DEV"] }),
+      startTask: async (request: unknown) => {
+        started.push(request);
+        return { ok: true, value: { task: { id: "t9", pipeline: undefined }, changed: true, message: "Created." } };
+      },
+    } as unknown as import("../services/suggestionControlService").SuggestionControlService;
+    const server = new HarnessMcpServer(
+      new HarnessControlService(new InMemoryTaskRepository(), ROOT, { now: () => AT }),
+      HARNESS_DASHBOARD_HTML,
+      { name: "test", version: "0", repositoryRoot: ROOT },
+      undefined,
+      undefined,
+      suggestions,
+    );
+    let id = 0;
+    const rpc = async (method: string, params: Record<string, unknown> = {}): Promise<Json> =>
+      ((await server.handle({ jsonrpc: "2.0", id: ++id, method, params })) as { result: Json }).result;
+    await rpc("initialize", {
+      capabilities: appCapable ? { extensions: { [UI_EXTENSION]: { mimeTypes: [APP_MIME_TYPE] } } } : {},
+    });
+    const call = (name: string, args: Record<string, unknown> = {}) => rpc("tools/call", { name, arguments: args });
+    return { rpc, call, started };
+  }
+
+  it("lets the model read the list but never scan or start a task", async () => {
+    const { rpc, call } = await withSuggestions(false);
+    const names = (await rpc("tools/list")).tools.map((t: { name: string }) => t.name);
+    expect(names).toContain("harness_list_suggestions");
+    expect(names).not.toContain("harness_scan_suggestions");
+    expect(names).not.toContain("harness_start_task");
+
+    const text = (await call("harness_list_suggestions")).content[0].text;
+    expect(text).toContain("NMGB-1 — Export drops a row · Blocker");
+    expect(text).not.toContain("NMGB-3");
+    expect(text).toContain("1 more below");
+  });
+
+  it("offers scanning and starting to the dashboard only", async () => {
+    const { rpc, call, started } = await withSuggestions(true);
+    const tools: { name: string; _meta?: Json }[] = (await rpc("tools/list")).tools;
+    for (const name of ["harness_scan_suggestions", "harness_task_options", "harness_start_task"]) {
+      expect(tools.find((t) => t.name === name)?._meta?.ui?.visibility).toEqual(["app"]);
+    }
+
+    expect((await call("harness_scan_suggestions")).structuredContent).toMatchObject({ ok: true });
+    const result = await call("harness_start_task", {
+      sourceId: "jira",
+      ref: "NMGB-1",
+      name: "Export",
+      branchPrefix: "fix",
+      baseBranch: "DEV",
+      routeId: "",
+    });
+    expect(result.structuredContent).toMatchObject({ ok: true, taskId: "t9" });
+    expect(started[0]).toMatchObject({ ref: "NMGB-1", routeId: undefined });
+    expect((await call("harness_refresh")).structuredContent.suggestions).toEqual(board);
+  });
+});
+
+// A page small enough to drive without a DOM library: innerHTML is the rendered output,
+// an element exists exactly when the markup carries its id or attribute, and tools/call
+// is answered by the test. Elements are kept per id or attribute value, so the handler
+// the page wired is the one a test fires.
+function mountDashboard(respond: (name: string, args: Json) => Json, hostCapabilities: Json = { serverTools: {} }) {
+  type Msg = { jsonrpc: "2.0"; id?: number; method?: string; params?: Json };
+  const sent: Msg[] = [];
+  const answered = new Set<number>();
+  let onMessage: (event: { source: unknown; data: unknown }) => void = () => undefined;
+  const parent = { postMessage: (msg: Msg) => sent.push(msg) };
+  const root: Json = { innerHTML: "", className: "", style: { setProperty: () => undefined }, scrollWidth: 1, scrollHeight: 1 };
+  const elements = new Map<string, Json>();
+  const element = (key: string, init: Json) => {
+    if (!elements.has(key)) elements.set(key, { focus: () => undefined, ...init });
+    return elements.get(key);
+  };
+  const decode = (s: string) =>
+    s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const document = {
+    documentElement: root,
+    body: root,
+    getElementById: (id: string) =>
+      id === "root" ? root
+      : (root.innerHTML as string).includes(`id="${id}"`) ? element(`#${id}`, { id, value: "", checked: false })
+      : null,
+    querySelectorAll: (selector: string) => {
+      const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1];
+      if (!attr) return [];
+      return [...(root.innerHTML as string).matchAll(new RegExp(`${attr}="([^"]*)"`, "g"))].map((m) =>
+        element(`${attr}=${m[1]}`, { getAttribute: () => decode(m[1]) }),
+      );
+    },
+    querySelector: () => null,
+  };
+  const window = {
+    parent,
+    scrollTo: () => undefined,
+    addEventListener: (_: string, listener: typeof onMessage) => (onMessage = listener),
+  };
+  class ResizeObserver {
+    observe() {}
+  }
+  const script = HARNESS_DASHBOARD_HTML.split("<script>")[1].split("</script>")[0];
+  new Function("window", "document", "ResizeObserver", "setTimeout", "setInterval", script)(
+    window, document, ResizeObserver, () => 0, () => 0,
+  );
+
+  // Answers every request the page has made, until it stops making them.
+  async function settle() {
+    for (let round = 0; round < 20; round++) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+      const due = sent.filter((m) => m.id !== undefined && m.method && !answered.has(m.id));
+      if (!due.length) return;
+      for (const m of due) {
+        answered.add(m.id!);
+        const result =
+          m.method === "ui/initialize" ? { hostCapabilities }
+          : m.method === "tools/call" ? respond(m.params.name, m.params.arguments)
+          : {};
+        onMessage({ source: parent, data: { jsonrpc: "2.0", id: m.id, result } });
+      }
+    }
+  }
+  return {
+    settle,
+    show: (structuredContent: Json) =>
+      onMessage({ source: parent, data: { jsonrpc: "2.0", method: "ui/notifications/tool-result", params: { structuredContent } } }),
+    html: () => root.innerHTML as string,
+    byId: (id: string): Json => document.getElementById(id),
+    attrs: (attr: string): Json[] => document.querySelectorAll(`[${attr}]`),
+    calls: () => sent.filter((m) => m.method === "tools/call").map((m) => m.params),
+    sent: () => sent,
+  };
+}
+
+describe("the dashboard's suggested work", () => {
+  const item = (ref: string, extra: Json = {}) => ({
+    sourceId: "jira",
+    sourceLabel: "JIRA",
+    ref,
+    title: `Title of ${ref}`,
+    hidden: false,
+    ...extra,
+  });
+  const board = (extra: Json = {}) => ({
+    configured: true,
+    sources: [{ id: "jira", label: "JIRA" }],
+    scannedAt: AT,
+    failures: [],
+    suggestions: [
+      item("NMGB-1", {
+        title: "Export <drops> a row",
+        rank: "Blocker",
+        url: "https://jira.example/browse/NMGB-1",
+        detail: "From the CRM",
+      }),
+      item("NMGB-3", { rank: "Minor", hidden: true }),
+    ],
+    ...extra,
+  });
+  const options = {
+    routes: [
+      { id: "report-change", label: "Report change", description: "Change a report end to end.", stageCount: 12 },
+      { id: "sql-quick", label: "SQL quick", description: "", stageCount: 4 },
+    ],
+    usingBuiltInRoutes: false,
+    branchPrefixes: ["feature", "fix"],
+    baseBranches: ["DEV", "main"],
+  };
+  const refreshed = (suggestions: Json) => ({ structuredContent: { repositoryRoot: ROOT, runs: [], run: null, suggestions } });
+
+  async function mounted(suggestions: Json, respond: (name: string, args: Json) => Json = () => refreshed(suggestions), caps?: Json) {
+    const page = mountDashboard(respond, caps);
+    await page.settle();
+    page.show({ repositoryRoot: ROOT, runs: [], run: null, suggestions });
+    await page.settle();
+    return page;
+  }
+
+  it("is absent, not empty, where no source is configured", async () => {
+    expect((await mounted(null)).html()).not.toContain("Suggested work");
+    expect((await mounted({ ...board(), configured: false, suggestions: [] })).html()).not.toContain("Suggested work");
+  });
+
+  it("lists what is outstanding, escaped, with the hidden ones behind a toggle", async () => {
+    const page = await mounted(board());
+    const html = page.html();
+    expect(html).toContain("Suggested work");
+    expect(html).toContain("Export &lt;drops&gt; a row");
+    expect(html).toContain("Blocker");
+    expect(html).toContain("scanned ");
+    expect(html).not.toContain("Title of NMGB-3");
+    expect(html).toContain("Show 1 hidden");
+    expect(html).toContain('id="sg-scan"');
+
+    page.byId("sg-hidden").onclick();
+    expect(page.html()).toContain("Title of NMGB-3");
+    expect(page.html()).toContain("Hide 1 hidden");
+  });
+
+  it("words an empty list on what happened", async () => {
+    expect((await mounted(board({ scannedAt: undefined, suggestions: [] }))).html()).toContain("never been scanned");
+    expect((await mounted(board({ suggestions: [] }))).html()).toContain("Nothing outstanding in your sources.");
+  });
+
+  it("names each failing source", async () => {
+    const html = (await mounted(board({ failures: ["JIRA: the MCP server is not connected"] }))).html();
+    expect(html).toContain("1 source failed");
+    expect(html).toContain("JIRA: the MCP server is not connected");
+  });
+
+  it("links a ref only where the host says it opens links, and asks the host to open it", async () => {
+    expect((await mounted(board())).attrs("data-url")).toHaveLength(0);
+
+    const page = await mounted(board(), () => refreshed(board()), { serverTools: {}, openLinks: {} });
+    const links = page.attrs("data-url");
+    expect(links).toHaveLength(1);
+    links[0].onclick({ preventDefault: () => undefined });
+    expect(page.sent().filter((m) => m.method === "ui/open-link").map((m) => m.params)).toEqual([
+      { url: "https://jira.example/browse/NMGB-1" },
+    ]);
+  });
+
+  it("starts a scan and shows it running until the list lands", async () => {
+    let scanning = false;
+    const page = await mounted(board(), (name) => {
+      if (name !== "harness_scan_suggestions") return refreshed(board(scanning ? { scanningSince: AT } : {}));
+      scanning = true;
+      return { structuredContent: { ok: true, changed: true, message: "Scanning 1 source." } };
+    });
+    page.byId("sg-scan").onclick();
+    await page.settle();
+
+    expect(page.calls().map((c: Json) => c.name)).toEqual(["harness_scan_suggestions", "harness_refresh"]);
+    expect(page.html()).toContain("Scanning since");
+    expect(page.html()).not.toContain('id="sg-scan"');
+    expect(page.html()).toContain("Scanning 1 source.");
+  });
+
+  it("asks what VS Code's create flow asks, and opens the run it routed", async () => {
+    const page = await mounted(board(), (name) => {
+      if (name === "harness_task_options") return { structuredContent: options };
+      if (name === "harness_start_task") {
+        return { structuredContent: { ok: true, changed: true, message: "Created.", taskId: "t9", routed: true } };
+      }
+      return refreshed(board());
+    });
+    const [start] = page.attrs("data-start");
+    expect(start.getAttribute()).toBe("jira|NMGB-1");
+    start.onclick();
+    await page.settle();
+
+    const form = page.html();
+    expect(form).toContain('id="sg-name" value="Export &lt;drops&gt; a row"');
+    expect(form).toContain("NMGB-1 — https://jira.example/browse/NMGB-1 — From the CRM");
+    expect(form).toContain('<option value="DEV" selected>');
+    expect(form).toContain("Chat task — no route");
+    expect(form).toContain("assess first");
+
+    // A chat task has no route to assess against, so the box goes with the route.
+    page.byId("sg-route").value = "";
+    page.byId("sg-route").onchange();
+    expect(page.html()).not.toContain("assess first");
+    page.byId("sg-route").value = "sql-quick";
+    page.byId("sg-route").onchange();
+    page.byId("sg-assess").checked = true;
+    page.byId("sg-assess").type = "checkbox";
+    page.byId("sg-assess").onchange();
+    page.byId("sg-prefix").value = "fix";
+    page.byId("sg-prefix").onchange();
+    page.byId("sg-create").onclick();
+    await page.settle();
+
+    const calls = page.calls();
+    expect(calls.map((c: Json) => c.name)).toEqual(["harness_task_options", "harness_start_task", "harness_refresh"]);
+    expect(calls[1].arguments).toEqual({
+      sourceId: "jira",
+      ref: "NMGB-1",
+      name: "Export <drops> a row",
+      branchPrefix: "fix",
+      baseBranch: "DEV",
+      brief: "NMGB-1 — https://jira.example/browse/NMGB-1 — From the CRM",
+      routeId: "sql-quick",
+      assessFirst: true,
+    });
+    expect(calls[2].arguments).toEqual({ taskId: "t9" });
+    expect(page.html()).not.toContain('id="sg-create"');
+  });
+
+  it("omits the route for a chat task and keeps the form when the server refuses", async () => {
+    const page = await mounted(board(), (name) => {
+      if (name === "harness_task_options") return { structuredContent: options };
+      if (name === "harness_start_task") {
+        return { isError: true, structuredContent: { ok: false, kind: "refused", message: "NMGB-1 is not in the last scan. Scan again." } };
+      }
+      return refreshed(board());
+    });
+    page.attrs("data-start")[0].onclick();
+    await page.settle();
+    page.byId("sg-route").value = "";
+    page.byId("sg-route").onchange();
+    page.byId("sg-create").onclick();
+    await page.settle();
+
+    const started = page.calls().find((c: Json) => c.name === "harness_start_task");
+    expect(started.arguments).not.toHaveProperty("routeId");
+    expect(started.arguments).not.toHaveProperty("assessFirst");
+    expect(page.html()).toContain('id="sg-create"');
+    expect(page.html()).toContain("NMGB-1 is not in the last scan. Scan again.");
+  });
+});
