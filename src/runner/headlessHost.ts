@@ -61,6 +61,9 @@ export function loadHeadlessSettings(
   };
 }
 
+/** The log a housekeeping tick writes, beside the per-task run logs. */
+export const HOUSEKEEPING_LOG_ID = "housekeeping";
+
 /** Where a headless run of a task writes its log. */
 export function runnerLogPath(storageDir: string, taskId: string): string {
   return path.join(storageDir, "runner-logs", `${taskId}.log`);

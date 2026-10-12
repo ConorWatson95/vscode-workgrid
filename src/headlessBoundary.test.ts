@@ -67,6 +67,8 @@ const HEADLESS_ROOTS = [
   "src/services/suggestionScanService.ts",
   "src/services/taskCreation.ts",
   "src/persistence/suggestionScanFile.ts",
+  "src/services/housekeeping.ts",
+  "src/runner/update.ts",
 ];
 
 function resolveImport(fromFile: string, specifier: string): string | undefined {

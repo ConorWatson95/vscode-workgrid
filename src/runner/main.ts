@@ -22,7 +22,11 @@ import {
 } from "../services/suggestionScanService";
 import { SCAN_TASK_ID, SuggestionScanSessionRunner } from "../agents/suggestionScanSessionRunner";
 import { SuggestionScanFileStore } from "../persistence/suggestionScanFile";
-import { loadHeadlessSettings, runnerLogPath } from "./headlessHost";
+import { ExternalFeedbackService } from "../services/externalFeedbackService";
+import { feedbackWaitingSince, Housekeeping } from "../services/housekeeping";
+import { NodeVerificationRunner } from "../services/nodeVerificationRunner";
+import { HOUSEKEEPING_LOG_ID, loadHeadlessSettings, runnerLogPath } from "./headlessHost";
+import { update } from "./update";
 
 /**
  * Headless entry: `node dist/harnessRunner.js advance --repo <path> --task <id> [--detach]`.
@@ -88,10 +92,14 @@ function detach(): void {
 
 async function main(): Promise<void> {
   if (process.argv[2] === "scan") return scan();
+  if (process.argv[2] === "tick") return tick();
+  if (process.argv[2] === "update") return update();
   if (process.argv[2] !== "advance") {
     fail(
       "usage: harnessRunner advance --repo <path> --task <id> [--detach]\n" +
-        "       harnessRunner scan --repo <path> [--detach]",
+        "       harnessRunner scan --repo <path> [--detach]\n" +
+        "       harnessRunner tick --repo <path> [--detach]\n" +
+        "       harnessRunner update [--force]",
     );
   }
   const taskId = argument("--task") ?? fail("--task is required.");
@@ -217,23 +225,12 @@ async function main(): Promise<void> {
   process.exit(exitCode);
 }
 
-/**
- * `scan`: runs every configured suggestion source once and writes the result beside the
- * state file, where VS Code and Claude both read it.
- *
- * Its own process for the reason `advance` is: a scan takes minutes and the pane's call
- * into the MCP server has seconds. Built on the same runtime, so a scan here is the
- * session VS Code would have started.
- */
-async function scan(): Promise<void> {
-  if (process.argv.includes("--detach")) {
-    detach();
-    return;
-  }
+/** What every command but `advance` needs before it can act on a repository. */
+async function openRepository(logId: string, what: string) {
   const requested = path.resolve(argument("--repo") ?? process.cwd());
   const host = loadHeadlessSettings(requested);
-  const logger = new FileLogger(runnerLogPath(host.storageDir, SCAN_TASK_ID));
-  logger.info(`--- suggestion scan, pid ${process.pid}`);
+  const logger = new FileLogger(runnerLogPath(host.storageDir, logId));
+  logger.info(`--- ${what}, pid ${process.pid}`);
   for (const problem of host.read.problems) logger.warn(`settings not applied: ${problem}`);
 
   const git = new GitClient(logger);
@@ -255,6 +252,96 @@ async function scan(): Promise<void> {
   });
   const repository = await store.forRepository(repositoryRoot);
   const stateDirectory = path.dirname(repository.path);
+  return { host, logger, git, statusService, worktreeService, repositoryRoot, settings, io, repository, stateDirectory };
+}
+
+/**
+ * `tick`: the background repairs, once (`services/housekeeping.ts`).
+ *
+ * The extension runs the same jobs on its own timers; this is how they run where VS Code
+ * is not open. The Claude pane starts it while it is showing, so a repository driven
+ * only from Claude still has abandoned subtasks reclaimed, ticket replies noticed and
+ * `harness.json` edits applied to gates already waiting. Prints what it did as one JSON
+ * line, and never fails over a job: each one swallows its own error.
+ */
+async function tick(): Promise<void> {
+  if (process.argv.includes("--detach")) {
+    detach();
+    return;
+  }
+  const { host, logger, git, statusService, worktreeService, repositoryRoot, settings, repository } =
+    await openRepository(HOUSEKEEPING_LOG_ID, "housekeeping tick");
+
+  const runtime = buildStageRuntime({
+    logger,
+    settings,
+    storageDir: host.storageDir,
+    repositoryRoot: () => repositoryRoot,
+    configRoot: () => repositoryRoot,
+    protocolPluginDir: () => undefined,
+    repository,
+    // Required by the runtime and never reached: a tick runs no stage.
+    reviewPlans: new ReviewPlanService(statusService, repository, logger, (rootPath) =>
+      loadReviewRules(rootPath, { configuredPath: settings().harnessConfigPath() }),
+    ),
+    gitClient: git,
+    statusService,
+    worktreeService,
+    liveRequests: { servesBrief: () => false },
+  });
+  const now = () => new Date().toISOString();
+  const housekeeping = new Housekeeping({
+    repository,
+    runner: runtime.runner,
+    // Never acquired: a tick drives nothing, so every live lease is somebody else's.
+    leases: new RunLeaseService(repository, "headless"),
+    feedback: new ExternalFeedbackService({
+      repository,
+      runner: new NodeVerificationRunner(),
+      sources: (root) =>
+        loadHarness(root, { configuredPath: settings().harnessConfigPath() }).suggestionSources,
+      waitingSince: feedbackWaitingSince,
+      clock: { now },
+      logger,
+    }),
+    agentProcesses: runtime.agentProcesses,
+    definitions: () => runtime.currentHarness(),
+    feedbackPollMinutes: () => settings().feedbackPollMinutes(),
+    logger,
+    now,
+  });
+
+  let exitCode = 0;
+  try {
+    const report = await housekeeping.tick(repositoryRoot);
+    logger.info(`tick: ${JSON.stringify(report)}`);
+    process.stdout.write(`${JSON.stringify(report)}
+`);
+  } catch (error) {
+    logger.error("the tick failed", error);
+    exitCode = 1;
+  } finally {
+    runtime.dispose();
+  }
+  logger.info(`--- exit ${exitCode}`);
+  process.exit(exitCode);
+}
+
+/**
+ * `scan`: runs every configured suggestion source once and writes the result beside the
+ * state file, where VS Code and Claude both read it.
+ *
+ * Its own process for the reason `advance` is: a scan takes minutes and the pane's call
+ * into the MCP server has seconds. Built on the same runtime, so a scan here is the
+ * session VS Code would have started.
+ */
+async function scan(): Promise<void> {
+  if (process.argv.includes("--detach")) {
+    detach();
+    return;
+  }
+  const { host, logger, git, statusService, worktreeService, repositoryRoot, settings, io, repository, stateDirectory } =
+    await openRepository(SCAN_TASK_ID, "suggestion scan");
 
   const harness = loadHarness(repositoryRoot, { configuredPath: settings().harnessConfigPath() });
   for (const problem of harness.problems) logger.warn(`harness config: ${problem}`);

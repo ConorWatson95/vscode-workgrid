@@ -4846,6 +4846,23 @@ and no daemon. Rules, each load-bearing:
   a scan in either client shows in both. Starting a task goes through
   `services/taskCreation.ts`, which VS Code's create command now also uses. Reading the
   list is a model tool; scanning (a paid session) and starting a task are app-only.
+- **The background repairs run whichever client is open** (`services/housekeeping.ts`,
+  12 Oct 2026). Four jobs ran only on VS Code's timers, so a repository driven from Claude
+  alone never had them:
+  - reclaiming subtasks a dead host left `active`
+  - polling tickets for replies
+  - applying `harness.json` edits to gates already waiting
+  - reaping orphaned agent processes
+
+  VS Code calls the module on its timers. `harnessRunner tick` calls it once, and the
+  pane's `--watch` process starts that on open and every 10 minutes. A task another live
+  process holds the lease on is left alone. That rule now covers the process sweep too
+  (`runningTaskIds`), because a second host's snapshot can predate a subtask that run has
+  just started.
+- **The stable server copy is versioned** (`bundle.json`, `harnessRunner update`). The copy
+  used to be refreshed only when VS Code activated. `update` installs the latest GitHub
+  release instead, and neither writer goes backwards, so an older editor cannot put its
+  server back over a newer download.
 - **Three pre-existing lock defects**, found by multi-process stress tests:
   - The empty-record window between create and write was broken as a crash (2–4 of 200
     writes lost).

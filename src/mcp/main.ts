@@ -11,7 +11,8 @@ import { TaskStateStore } from "../persistence/taskStateStore";
 import { HarnessControlService } from "../services/harnessControlService";
 import { loadHarness } from "../services/reviewRulesService";
 import { loadHeadlessSettings } from "../runner/headlessHost";
-import { RunLauncher, ScanLauncher } from "./runLauncher";
+import { RunLauncher, ScanLauncher, launchNode } from "./runLauncher";
+import { HousekeepingTicker } from "./housekeepingTicker";
 import { GitMergeService } from "../git/gitMergeService";
 import { SuggestionScanFileStore } from "../persistence/suggestionScanFile";
 import { SuggestionControlService } from "../services/suggestionControlService";
@@ -127,6 +128,12 @@ async function main(): Promise<void> {
 
   if (process.argv.includes("--watch")) {
     watchBoard(new BoardFeed(service, repositoryRoot, suggestions), stateDirectory, logger);
+    // The background repairs VS Code runs on its own timers, run here while the pane
+    // is open so a repository driven only from Claude still gets them.
+    new HousekeepingTicker(
+      () => launchNode(path.join(__dirname, "harnessRunner.js"), ["tick", "--repo", repositoryRoot, "--detach"]),
+      logger,
+    ).start();
     return;
   }
   const server = new HarnessMcpServer(

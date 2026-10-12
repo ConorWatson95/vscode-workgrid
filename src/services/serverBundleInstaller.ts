@@ -28,6 +28,46 @@ export const SERVER_BUNDLE_FILES = ["harnessMcpServer.js", "harnessRunner.js"] a
 /** Directory name under the extension's global storage. */
 export const SERVER_BUNDLE_DIR = "mcp-server";
 
+/**
+ * Records which release the stable copy came from.
+ *
+ * Two things now write the folder — VS Code on activation and `harnessRunner update`
+ * from a GitHub release — and they need not agree. Without a version, an editor still on
+ * last week's extension would put last week's server back over the one just downloaded,
+ * every time it started. With one, the newer copy wins whichever writer runs last.
+ */
+export const BUNDLE_MARKER = "bundle.json";
+
+/**
+ * Whether version `a` is newer than `b`, comparing dotted numbers. Anything that is not
+ * a version is never newer, so an unreadable marker never blocks an install.
+ */
+export function isNewerVersion(a: string | undefined, b: string | undefined): boolean {
+  const parse = (value: string | undefined) =>
+    value && /^\d+(\.\d+)*$/.test(value) ? value.split(".").map(Number) : undefined;
+  const left = parse(a);
+  const right = parse(b);
+  if (!left || !right) return false;
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const difference = (left[i] ?? 0) - (right[i] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
+}
+
+/** The version a stable copy records, or undefined when it records none. */
+export function installedBundleVersion(
+  targetDir: string,
+  files: BundleFileSystem = nodeBundleFileSystem,
+): string | undefined {
+  try {
+    const marker = JSON.parse(files.read(path.join(targetDir, BUNDLE_MARKER))?.toString() ?? "null");
+    return typeof marker?.version === "string" ? marker.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Filesystem operations, injectable so the copy rules are testable. */
 export interface BundleFileSystem {
   read(file: string): Buffer | undefined;
@@ -57,6 +97,15 @@ export interface InstalledBundle {
   server: string;
   /** Files rewritten this time, for the log. Empty when everything was current. */
   updated: string[];
+  /** Set when the copy already there is from a newer release, so nothing was written. */
+  keptNewer?: string;
+}
+
+export interface BundleInstallOptions {
+  /** The release `sourceDir` belongs to. Absent writes as before and records nothing. */
+  version?: string;
+  /** Install even over a newer copy — an explicit downgrade. */
+  force?: boolean;
 }
 
 /**
@@ -72,10 +121,18 @@ export function installServerBundle(
   targetDir: string,
   logger: Logger,
   files: BundleFileSystem = nodeBundleFileSystem,
+  options: BundleInstallOptions = {},
 ): InstalledBundle | undefined {
   const server = path.join(targetDir, SERVER_BUNDLE_FILES[0]);
   const updated: string[] = [];
   try {
+    const installed = installedBundleVersion(targetDir, files);
+    if (!options.force && isNewerVersion(installed, options.version)) {
+      logger.info(
+        `Harness server bundle: kept ${installed} in ${targetDir}, which is newer than ${options.version}.`,
+      );
+      return { server, updated, keptNewer: installed };
+    }
     files.mkdirp(targetDir);
     for (const name of SERVER_BUNDLE_FILES) {
       const contents = files.read(path.join(sourceDir, name));
@@ -89,6 +146,13 @@ export function installServerBundle(
       if (existing && existing.equals(contents)) continue;
       files.replace(target, contents);
       updated.push(name);
+    }
+    if (options.version && installed !== options.version) {
+      files.replace(
+        path.join(targetDir, BUNDLE_MARKER),
+        Buffer.from(`${JSON.stringify({ version: options.version })}
+`),
+      );
     }
   } catch (error) {
     // A copy is a convenience for another host; failing activation over it would trade

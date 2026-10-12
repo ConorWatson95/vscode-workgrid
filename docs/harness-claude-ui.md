@@ -94,6 +94,23 @@ permission rule stays in VS Code, because it writes the project's settings. A pr
 dies mid-hold leaves its `heldCalls` behind; clients show them only while a session is
 running, and the next hold on that task rewrites the list.
 
+## Background repairs without VS Code
+
+Four jobs used to run only on VS Code's timers: reclaiming subtasks a dead host left
+`active`, polling tickets for replies (`feedbackPollMinutes`), applying `harness.json`
+edits to gates already waiting, and reaping agent processes an unclean shutdown left
+running. They are now `services/housekeeping.ts`, and two hosts call it:
+
+- **VS Code**, on the timers it always had, adding the notifications.
+- **`harnessRunner tick --repo <root>`**, which runs all four once and prints a JSON
+  line. The pane's `--watch` process starts it detached on open and every 10 minutes
+  (`mcp/housekeepingTicker.ts`), so it runs while either client is open. It logs to
+  `runner-logs/housekeeping.log`.
+
+Both at once is safe. Every job is idempotent, and a task another live process holds the
+run lease on is left to that process. That includes the process sweep, which keeps a
+leased task's records even if its own snapshot predates the subtask.
+
 ## Concurrency
 
 - **`TaskRepository.update(id, change)`** is a read-modify-write inside the per-instance
@@ -179,11 +196,16 @@ On activation the extension also copies it, with the runner it starts, to a path
 not change between releases (`services/serverBundleInstaller.ts`):
 `%APPDATA%/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server/harnessMcpServer.js`.
 **Without VS Code**, each GitHub release carries `harnessMcpServer.js` and
-`harnessRunner.js` beside the vsix, and one command puts them in the same folder:
+`harnessRunner.js` beside the vsix, and the runner installs the latest one into the same
+folder:
 
 ```bash
-gh release download --repo ConorWatson95/vscode-workgrid --pattern "harness*.js" --clobber --dir "$APPDATA/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server"
+node "$APPDATA/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server/harnessRunner.js" update
 ```
+
+The folder records the release it holds in `bundle.json`. Neither VS Code's activation copy
+nor `update` writes over a newer release, so an editor on last week's extension cannot put
+its server back. `update --force` installs the latest even when it is older.
 
 The folder is kept rather than moved to one the harness owns, so a host's config never
 changes, and the runner's logs and gate files already live beside it.

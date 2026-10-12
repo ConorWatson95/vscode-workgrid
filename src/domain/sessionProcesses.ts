@@ -159,12 +159,17 @@ function millis(at: string | undefined): number | undefined {
  * record naming anything else has outlived its work — including a subtask that was
  * reverted by a stop, a question or a transient failure, which is the case a
  * stage-comparison test would miss because the stage never changed.
+ *
+ * `runningTaskIds` is every task another live process holds the run lease on. Its
+ * records are kept whatever the snapshot says, because a sweep run from a second host
+ * can read the registry just after that run started a subtask its snapshot predates.
  */
 export function decideSessionProcesses(
   records: readonly SessionProcessRecord[],
   probes: readonly ProbedProcess[],
   activeSubtaskIds: ReadonlySet<string>,
   repositoryRoot?: string,
+  runningTaskIds: ReadonlySet<string> = new Set(),
 ): SessionProcessDecision[] {
   const here = repositoryRoot ? normalizeRepositoryRoot(repositoryRoot) : undefined;
   const probeOf = new Map(probes.map((probe) => [probe.pid, probe]));
@@ -213,6 +218,9 @@ export function decideSessionProcesses(
 
     if (activeSubtaskIds.has(record.subtaskId)) {
       return { record, action: "keep" as const, reason: "its subtask is still running" };
+    }
+    if (runningTaskIds.has(record.taskId)) {
+      return { record, action: "keep" as const, reason: "another live process is running its task" };
     }
 
     // Ours, alive, and orphaned — but only killable if the platform corroborated the

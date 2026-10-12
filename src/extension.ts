@@ -31,17 +31,11 @@ import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
 import { SuggestionScanService } from "./services/suggestionScanService";
-import {
-  refreshGateDeclarations,
-  refreshCheckDeclarations,
-  refreshRulePaths,
-  refreshStageLabels,
-} from "./domain/stageRefresh";
 import { SuggestionScanSessionRunner } from "./agents/suggestionScanSessionRunner";
 import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { ExternalFeedbackService } from "./services/externalFeedbackService";
-import { externalWaitSince, groupForTask } from "./ui/taskGrouping";
+import { feedbackWaitingSince, Housekeeping } from "./services/housekeeping";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { buildStageRuntime } from "./services/stageRuntime";
 import { SERVER_BUNDLE_DIR, installServerBundle } from "./services/serverBundleInstaller";
@@ -155,6 +149,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.Uri.joinPath(context.extensionUri, "dist").fsPath,
     vscode.Uri.joinPath(context.globalStorageUri, SERVER_BUNDLE_DIR).fsPath,
     logger,
+    undefined,
+    // Versioned, so an editor on an older release never puts its server back over one
+    // `harnessRunner update` downloaded since.
+    { version: String(context.extension.packageJSON.version) },
   );
   if (serverBundle) {
     logger.info(
@@ -679,48 +677,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // headless runner and this window never drive the same task at once.
   const leases = new RunLeaseService(repository, "vscode");
 
-  const sweepStaleSubtasks = async (): Promise<void> => {
-    if (!repositoryRoot) return;
-    try {
-      const tasks = await repository.getByRepository(repositoryRoot);
-      let recovered = 0;
-      for (const task of tasks) {
-        if (!task.pipeline) continue;
-        // A subtask another live process is running is not abandoned: a headless
-        // runner owns its sessions exactly as this host owns its own, and reclaiming
-        // them would re-open work that is still being done.
-        if (await leases.heldElsewhere(task)) continue;
-        const outcome = await runner.reclaimStale(task, new Date().toISOString());
-        recovered += outcome.reclaimed.length;
-      }
-      if (recovered > 0) {
-        tree.refresh();
-        // Notified, not merely logged: the user is owed the reason a stage they
-        // watched start is pending again, and the answer — re-run it — is theirs.
-        void vscode.window.showWarningMessage(
-          `${recovered} stage subtask(s) had been left running by a session that is gone. ` +
-            "They are pending again — Advance Route re-runs them.",
-          "Show Log",
-        )
-        .then((choice) => {
-          if (choice === "Show Log") logger.show?.();
-        });
-      }
-    } catch (error) {
-      // A sweep is a repair, so its own failure must not take activation with it.
-      logger.warn(`Could not sweep for abandoned stage subtasks: ${String(error)}`);
-    }
-  };
-  void repositoryReady.then(() => sweepStaleSubtasks());
-  const staleSweep = setInterval(() => void sweepStaleSubtasks(), 10 * 60 * 1000);
-  context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
-
-  /**
-   * Checks the tickets of tasks waiting on others for replies.
-   *
-   * A chained timeout rather than an interval, so a change to the setting applies from
-   * the next poll without a reload, and `0` stops it until somebody sets a number again.
-   */
+  // The background repairs, shared with `harnessRunner tick` so they run whichever
+  // client is open (`services/housekeeping.ts`). What stays here is the timers and
+  // what only VS Code can do: tell the person in front of it.
   const externalFeedback = new ExternalFeedbackService({
     repository,
     runner: new NodeVerificationRunner(),
@@ -728,140 +687,81 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       loadHarness(root, {
         configuredPath: configuration.harnessConfigPath(repositoryUri),
       }).suggestionSources,
-    // The tree's own rule, asked without the feedback so a task already pulled back
-    // by a reply still counts as one whose wait is in play.
-    waitingSince: (task) =>
-      groupForTask({ status: task.status, pipeline: task.pipeline, heldCalls: 0 }) ===
-      "waiting-others"
-        ? externalWaitSince(task.pipeline)
-        : undefined,
+    waitingSince: feedbackWaitingSince,
     clock: { now: () => new Date().toISOString() },
     logger,
   });
+  const housekeeping = new Housekeeping({
+    repository,
+    runner,
+    leases,
+    feedback: externalFeedback,
+    agentProcesses,
+    definitions: () => currentHarness(),
+    feedbackPollMinutes: () => configuration.feedbackPollMinutes(repositoryUri),
+    logger,
+    now: () => new Date().toISOString(),
+  });
+
+  // The watchdog for a host that died mid-subtask. A sweep rather than a timer,
+  // precisely because the timer is what died — and run at activation, because the
+  // host that died is usually the one this one replaced.
+  const sweepStaleSubtasks = async (): Promise<void> => {
+    if (!repositoryRoot) return;
+    const recovered = await housekeeping.reclaimStale(repositoryRoot);
+    if (recovered === 0) return;
+    tree.refresh();
+    // Notified, not merely logged: the user is owed the reason a stage they
+    // watched start is pending again, and the answer — re-run it — is theirs.
+    void vscode.window
+      .showWarningMessage(
+        `${recovered} stage subtask(s) had been left running by a session that is gone. ` +
+          "They are pending again — Advance Route re-runs them.",
+        "Show Log",
+      )
+      .then((choice) => {
+        if (choice === "Show Log") logger.show?.();
+      });
+  };
+  void repositoryReady.then(() => sweepStaleSubtasks());
+  const staleSweep = setInterval(() => void sweepStaleSubtasks(), 10 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(staleSweep) });
+
+  // A chained timeout rather than an interval, so a change to the setting applies from
+  // the next poll without a reload, and `0` stops it until somebody sets a number again.
   let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   const pollFeedback = async (): Promise<void> => {
-    const minutes = configuration.feedbackPollMinutes(repositoryUri);
-    try {
-      if (repositoryRoot && minutes > 0) {
-        const { arrived } = await externalFeedback.poll(repositoryRoot);
-        if (arrived.length > 0) {
-          tree.refresh();
-          const names = arrived.map((task) => task.origin?.ref ?? task.name).join(", ");
-          void vscode.window.showInformationMessage(
-            `New ticket comment(s) on ${names} — moved back to Needs you.`,
-          );
-        }
+    if (repositoryRoot) {
+      const arrived = await housekeeping.pollFeedback(repositoryRoot);
+      if (arrived.length > 0) {
+        tree.refresh();
+        const names = arrived.map((task) => task.origin?.ref ?? task.name).join(", ");
+        void vscode.window.showInformationMessage(
+          `New ticket comment(s) on ${names} — moved back to Needs you.`,
+        );
       }
-    } catch (error) {
-      logger.warn(`Could not poll tickets for replies: ${String(error)}`);
     }
+    const minutes = configuration.feedbackPollMinutes(repositoryUri);
     feedbackTimer = setTimeout(() => void pollFeedback(), Math.max(minutes, 1) * 60 * 1000);
   };
   void repositoryReady.then(() => pollFeedback());
   context.subscriptions.push({ dispose: () => feedbackTimer && clearTimeout(feedbackTimer) });
 
-  /**
-   * Brings gate declarations on every task into line with the project's routes.
-   *
-   * Its own pass rather than part of the advance path, because the tasks that need it
-   * most are the ones nobody is advancing. A verification gate is `awaiting-approval`
-   * for its whole useful life: a task sitting at a DEV sign-off waiting on testers gets
-   * no advance, so a repair that only runs there never reaches it. Found with nine live
-   * tasks in one state file — five had never picked up `checklistScope` after it was
-   * added to config, and were silently running the pre-scope pooled behaviour that
-   * scoping exists to fix.
-   *
-   * Only `checklistScope` and `checklistAudience`, and only on unresolved stages: see
-   * `refreshGateDeclarations` for why those two are safe to reload where an intent is
-   * not. Saves only when something actually differs, so a repository already in line
-   * writes nothing.
-   */
+  // Logged by the pass itself rather than notified: unlike a reclaimed subtask this asks
+  // nothing of the user and discards nothing.
   const syncGateDeclarations = async (): Promise<string[]> => {
     if (!repositoryRoot) return [];
-    const source = currentHarness();
-    if (!source) return [];
-    try {
-      const tasks = await repository.getByRepository(repositoryRoot);
-      const corrected: string[] = [];
-      for (const task of tasks) {
-        if (!task.pipeline) continue;
-        // Four passes, one save. `refreshRulePaths` reads the *rules* where the
-        // others read the route — see its own note — and a stage can need all three.
-        // Each pass takes the previous one's pipeline, and the save must use the
-        // LAST of them, or a pass computes its corrections and throws them away.
-        const gates = refreshGateDeclarations(task.pipeline, source);
-        // A stage re-opened by a correction keeps its finished subtasks, so it is
-        // excluded from the pending pass by construction -- and was therefore judged by
-        // whatever config said the day it first ran. See `refreshCheckDeclarations`.
-        const checks = refreshCheckDeclarations(gates.pipeline, source);
-        const paths = refreshRulePaths(checks.pipeline, source);
-        // A label decides nothing, so it refreshes on every stage including settled
-        // ones -- a corrected stage name is needed most on the history somebody is
-        // reading to work out what a stage did.
-        const labels = refreshStageLabels(paths.pipeline, source);
-        const changed = [
-          ...new Set([...gates.changed, ...checks.changed, ...paths.changed, ...labels.changed]),
-        ];
-        if (changed.length === 0) continue;
-        await repository.save({
-          ...task,
-          pipeline: labels.pipeline,
-          updatedAt: new Date().toISOString(),
-        });
-        corrected.push(`${task.name}: ${changed.join(", ")}`);
-      }
-      if (corrected.length > 0) {
-        tree.refresh();
-        // Logged rather than notified. Unlike a reclaimed subtask this asks nothing of
-        // the user and discards nothing — the gates now match config, which is what
-        // they expected when they edited it.
-        logger.info(
-          `Harness reloaded gate declarations from harness.json for ${corrected.length} ` +
-            `task(s): ${corrected.join(" | ")}`,
-        );
-      }
-      return corrected;
-    } catch (error) {
-      // A repair's own failure must not take activation with it, exactly as the stale
-      // subtask sweep does not.
-      logger.warn(`Could not sync gate declarations: ${String(error)}`);
-      return [];
-    }
-  };
-  /**
-   * Reaps agent processes an unclean shutdown left running.
-   *
-   * At activation only. A periodic sweep would be the obvious extension and is the
-   * wrong trade: the records are written by this window, so the only moment a live
-   * process can have lost its owner is a host restart -- and probing the OS on a
-   * timer costs a PowerShell spawn to learn nothing. `sweepStaleSubtasks` already
-   * covers the other direction on its own interval.
-   *
-   * The set is every subtask any pipeline currently considers running. A record
-   * naming anything else has outlived its work, including a subtask reverted by a
-   * stop, a question or a transient failure -- which is why this is keyed on the
-   * subtask rather than on the stage, since in those cases the stage never changed.
-   */
-  const sweepAgentProcesses = async (): Promise<void> => {
-    if (!repositoryRoot) return;
-    try {
-      const tasks = await repository.getByRepository(repositoryRoot);
-      const active = new Set<string>();
-      for (const task of tasks) {
-        for (const stage of task.pipeline?.stages ?? []) {
-          for (const subtask of stage.subtasks) {
-            if (subtask.status === "active") active.add(subtask.id);
-          }
-        }
-      }
-      await agentProcesses.sweep(active);
-    } catch (error) {
-      logger.warn(`Harness could not sweep agent processes: ${error}`);
-    }
+    const corrected = await housekeeping.syncRouteConfig(repositoryRoot);
+    if (corrected.length > 0) tree.refresh();
+    return corrected;
   };
 
   void repositoryReady.then(() => syncGateDeclarations());
-  void repositoryReady.then(() => sweepAgentProcesses());
+  // At activation only here: the records this window writes can only lose their owner
+  // to a host restart. `harnessRunner tick` covers a repository nobody opens VS Code on.
+  void repositoryReady.then(async () => {
+    if (repositoryRoot) await housekeeping.sweepAgentProcesses(repositoryRoot);
+  });
   // Watched as a *file*, because that is what it is. `onDidChangeConfiguration` fires for
   // VS Code settings and never for `harness.json`, so hooking it would have looked
   // correct and only ever run at activation — which is the same class of mistake as the

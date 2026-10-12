@@ -168,6 +168,16 @@ describe("decideSessionProcesses across windows", () => {
     expect(decision.reason).toContain("another repository");
   });
 
+  it("keeps a record whose task another live process is running, whatever the snapshot says", () => {
+    // A second host's snapshot can predate the subtask that run has just started.
+    const [kept] = decideRaw([record()], [probe()], active(), HERE, new Set(["t1"]));
+    expect(kept.action).toBe("keep");
+    expect(kept.reason).toContain("another live process");
+
+    const [other] = decideRaw([record()], [probe()], active(), HERE, new Set(["t2"]));
+    expect(other.action).toBe("kill");
+  });
+
   it("still kills its own repository's orphan despite case and separators", () => {
     const [decision] = decideSessionProcesses([record()], [probe()], active(), "C:\\Dev\\Repo\\");
     expect(decision.action).toBe("kill");

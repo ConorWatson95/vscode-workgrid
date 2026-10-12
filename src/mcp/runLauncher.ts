@@ -138,7 +138,7 @@ export class ScanLauncher implements ScanControl {
   }
 }
 
-function launchNode(script: string, args: string[]): Promise<void> {
+export function launchNode(script: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [script, ...args], { windowsHide: true, timeout: 10_000 }, (error) =>
       error ? reject(error) : resolve(),

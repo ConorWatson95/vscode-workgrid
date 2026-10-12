@@ -129,14 +129,18 @@ export class SessionProcessRegistry {
    * Reaps processes left by an unclean shutdown.
    *
    * `activeSubtaskIds` is every subtask the pipelines currently consider running.
-   * Anything else a record names has outlived its work.
+   * Anything else a record names has outlived its work, unless its task is in
+   * `runningTaskIds` — held by another live process, so its records are that process's.
    *
    * Non-fatal throughout: a sweep that cannot read the registry, probe the OS or kill
    * a process leaves things exactly as they were. This runs at activation, and
    * failing activation over a tidy-up would trade a leaked process for a broken
    * extension.
    */
-  async sweep(activeSubtaskIds: ReadonlySet<string>): Promise<void> {
+  async sweep(
+    activeSubtaskIds: ReadonlySet<string>,
+    runningTaskIds: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
     try {
       const records = await this.read();
       if (records.length === 0) return;
@@ -148,6 +152,7 @@ export class SessionProcessRegistry {
         probes,
         activeSubtaskIds,
         this.options.repositoryRoot?.(),
+        runningTaskIds,
       );
 
       for (const decision of decisions.filter((d) => d.action === "kill")) {

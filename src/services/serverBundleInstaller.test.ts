@@ -1,6 +1,11 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BundleFileSystem, installServerBundle } from "./serverBundleInstaller";
+import {
+  BundleFileSystem,
+  installedBundleVersion,
+  installServerBundle,
+  isNewerVersion,
+} from "./serverBundleInstaller";
 
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -53,5 +58,46 @@ describe("installServerBundle", () => {
       replace: () => undefined,
     };
     expect(installServerBundle("/dist", "/stable", logger, failing)).toBeUndefined();
+  });
+});
+
+describe("installServerBundle with versions", () => {
+  const dist = { "/dist/harnessMcpServer.js": "server v1", "/dist/harnessRunner.js": "runner v1" };
+
+  it("records the release it installed", () => {
+    const fs = memoryFiles(dist);
+    installServerBundle("/dist", "/stable", logger, fs.files, { version: "0.148.0" });
+    expect(installedBundleVersion("/stable", fs.files)).toBe("0.148.0");
+  });
+
+  it("never puts an older release back over a newer one, unless forced", () => {
+    const fs = memoryFiles({
+      ...dist,
+      "/stable/harnessMcpServer.js": "server v2",
+      "/stable/bundle.json": '{"version":"0.149.0"}',
+    });
+    const kept = installServerBundle("/dist", "/stable", logger, fs.files, { version: "0.148.0" });
+    expect(kept).toMatchObject({ keptNewer: "0.149.0", updated: [] });
+    expect(fs.text("/stable/harnessMcpServer.js")).toBe("server v2");
+
+    installServerBundle("/dist", "/stable", logger, fs.files, { version: "0.148.0", force: true });
+    expect(fs.text("/stable/harnessMcpServer.js")).toBe("server v1");
+    expect(installedBundleVersion("/stable", fs.files)).toBe("0.148.0");
+  });
+
+  it("installs over a copy that records no version", () => {
+    const fs = memoryFiles({ ...dist, "/stable/harnessMcpServer.js": "server v0" });
+    installServerBundle("/dist", "/stable", logger, fs.files, { version: "0.148.0" });
+    expect(fs.text("/stable/harnessMcpServer.js")).toBe("server v1");
+  });
+});
+
+describe("isNewerVersion", () => {
+  it("compares dotted numbers, and never calls a non-version newer", () => {
+    expect(isNewerVersion("0.149.0", "0.148.9")).toBe(true);
+    expect(isNewerVersion("0.148.0", "0.148.0")).toBe(false);
+    expect(isNewerVersion("1.0", "0.999.999")).toBe(true);
+    expect(isNewerVersion("dev", "0.1.0")).toBe(false);
+    expect(isNewerVersion(undefined, "0.1.0")).toBe(false);
   });
 });
