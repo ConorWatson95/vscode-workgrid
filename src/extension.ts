@@ -9,13 +9,9 @@ import { NodeStateFileLock } from "./persistence/nodeStateFileLock";
 import { NodeStateFileIo } from "./persistence/nodeStateFileIo";
 import { RoutedTaskRepository, TaskStateStore } from "./persistence/taskStateStore";
 import { TaskWorkspaceService } from "./services/taskWorkspaceService";
-import { TaskCommitService } from "./services/taskCommitService";
-import { PullRequestWaitService } from "./services/pullRequestWaitService";
 import { ExtensionConfiguration } from "./configuration/extensionConfiguration";
 import { TerminalManager } from "./processes/terminalManager";
 import { AgentProviderRegistry } from "./agents/agentProviderRegistry";
-import { AgentSessionManager } from "./agents/agentSessionManager";
-import { SessionProcessRegistry } from "./services/sessionProcessRegistry";
 import { SessionArchive } from "./agents/sessionArchive";
 import { ArchivedHistoryRepository } from "./persistence/archivedHistoryRepository";
 import { NativeSessionWatcher } from "./agents/nativeSessionWatcher";
@@ -31,11 +27,10 @@ import { DiffContentProvider, DIFF_SCHEME } from "./ui/diffContentProvider";
 import { ReportContentProvider, REPORT_SCHEME } from "./ui/reportContentProvider";
 import { GitBlobContentProvider, BLOB_SCHEME } from "./ui/gitBlobContentProvider";
 import { deriveAgentActivity } from "./ui/statusPresentation";
+import { serveHostRequests } from "./commands/hostRequestCommands";
 import { registerCommands } from "./commands/registerCommands";
 import { ReviewPlanService } from "./services/reviewPlanService";
 import { loadHarness, loadReviewRules } from "./services/reviewRulesService";
-import { WorktreeDiscardService } from "./services/worktreeDiscardService";
-import { parsePorcelainChanges } from "./domain/worktreeDiscard";
 import { SuggestionScanService } from "./services/suggestionScanService";
 import {
   refreshGateDeclarations,
@@ -52,28 +47,18 @@ import { describeRuleAdditions } from "./domain/ruleConfirmation";
 import { NodeVerificationRunner } from "./services/nodeVerificationRunner";
 import { ExternalFeedbackService } from "./services/externalFeedbackService";
 import { externalWaitSince, groupForTask } from "./ui/taskGrouping";
-import { PipelineRunner } from "./services/pipelineRunner";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
-import { subagentLimitEnv } from "./domain/subagentLimits";
-import { stageTools } from "./domain/stageTools";
-import { askTimeoutEnv, askTimeoutMs } from "./domain/askTimeout";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
+import { buildStageRuntime } from "./services/stageRuntime";
+import { RunLeaseService } from "./services/runLeaseService";
 import { STATE_FILE_NAME, taskStateDir } from "./persistence/taskStateFile";
 import { StateFileWatch, watchStateFile } from "./persistence/stateFileWatcher";
-import { resolveMcpConfigPath } from "./agents/claudeCliArgs";
-import { filterMcpConfig } from "./agents/mcpConfigFilter";
-import * as fs from "node:fs";
-import * as nodePath from "node:path";
 import { WorktreeProvisioner } from "./services/worktreeProvisioner";
-import { WorktreeClaimService } from "./services/worktreeClaimService";
 import { PermissionRulesService } from "./services/permissionRulesService";
 import { suggestAllowRule, suggestAllowRules } from "./agents/permissionDenials";
-import { PendingGate, PermissionGateService } from "./services/permissionGateService";
+import { PendingGate } from "./services/permissionGateService";
 import { nextAnnouncements } from "./domain/permissionGatePolicy";
-import { nodeGateFileSystem } from "./services/gateFileSystem";
-import { AskUserService, PendingAsk } from "./services/askUserService";
-import { ASK_TOOL_ALLOW_RULE } from "./agents/askUserProtocol";
-import { Contamination, distinctiveLines } from "./domain/branchContamination";
+import { PendingAsk } from "./services/askUserService";
 import { recordInterjection, recordQuestion } from "./domain/pipelineEngine";
 import {
   CommandContext,
@@ -233,24 +218,111 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       () => configuration.claudeCommand(repositoryUri),
     ),
   );
-  // Durable record of what was spawned, so an extension host that crashes -- where
-  // `dispose()` never runs -- does not leave a stage session alive with nothing able
-  // to reach it. Machine-local beside the permission gate root, never in the state
-  // file: a pid is ephemeral and that file is shared by every worktree and window.
-  const agentProcesses = new SessionProcessRegistry({
-    directory: vscode.Uri.joinPath(context.globalStorageUri, "agent-processes").fsPath,
+
+  // Rules are resolved per repository, and the configured path is
+  // resource-scoped, so each project can keep its own rule set.
+  const reviewPlans = new ReviewPlanService(
+    statusService,
+    repository,
     logger,
-    // Read lazily: the root is resolved after this is built. It scopes the sweep,
-    // whose `active` set can only ever come from this repository -- see
-    // `SessionProcessRecord.repositoryRoot`.
-    repositoryRoot: () => repositoryRoot,
-  });
-  const sessions = new AgentSessionManager(
-    logger,
-    () => configuration.claudeCommand(repositoryUri),
-    agentProcesses,
+    (root) =>
+      loadReviewRules(root, {
+        configuredPath: configuration.harnessConfigPath(repositoryUri),
+      }),
+    // Rule-added stages are the only ones the user never chose: they pick a route,
+    // and the engine then appends agent sessions to it off a derived path set. Fine
+    // for one obvious review, and how four unrelated ones came to run on a one-line
+    // change. Modal, because the alternative is the route starting them while the
+    // notification is still on screen.
+    async (request) => {
+      const detail =
+        `${describeRuleAdditions(request.added, request.matches)}\n\n` +
+        `Matched against ${request.changedPathCount} changed path(s). If that number ` +
+        `looks wrong for this task, so are these reviews.`;
+      const choice = await vscode.window.showWarningMessage(
+        `"${request.task.name}": review rules want to add ${request.added.length} ` +
+          `stages, each a separate agent session.`,
+        { modal: true, detail },
+        "Add Them",
+        "Not Now",
+      );
+      // Dismissing is not consent. A modal returns undefined on Escape, and the
+      // expensive reading of that is "go ahead".
+      return choice === "Add Them";
+    },
   );
-  context.subscriptions.push({ dispose: () => sessions.dispose() });
+
+  const permissionRules = new PermissionRulesService(logger);
+  // Shared: also used when granting a rule, to refresh an existing worktree's copy.
+  const provisioner = new WorktreeProvisioner(logger);
+
+  // Everything that runs a stage, built by the same code a headless runner uses
+  // (`services/stageRuntime.ts`), so the two cannot drift. What stays here is what
+  // only VS Code can do: show a refusal to the person in front of it.
+  const runtime = buildStageRuntime({
+    logger,
+    settings: () => configuration.settings(repositoryUri),
+    storageDir: context.globalStorageUri.fsPath,
+    repositoryRoot: () => repositoryRoot,
+    configRoot: () => repositoryUri?.fsPath,
+    protocolPluginDir: () => protocolPluginDir,
+    repository,
+    reviewPlans,
+    gitClient,
+    statusService,
+    worktreeService,
+    onUnheldDenial: (task, denial) => {
+      const rules = suggestAllowRules([denial], {
+        worktreePath: task.worktreePath,
+        repositoryRoot: task.repositoryRoot,
+      });
+      const rule = rules[0];
+      void vscode.window
+        .showWarningMessage(
+          `"${task.name}": ${denial.tool} was denied — ${denial.command ?? denial.reason}`,
+          ...(rule ? ["Add Rule"] : []),
+          "Show Log",
+        )
+        .then(async (choice) => {
+          if (choice === "Show Log") {
+            logger.show?.();
+            return;
+          }
+          if (choice !== "Add Rule" || !rule) return;
+          // Every suggested form, not just the first: the absolute rule matches now and
+          // the relative one survives the worktree.
+          const written = permissionRules.addAllowRules(task.repositoryRoot, rules);
+          if (written.problem) {
+            void vscode.window.showErrorMessage(written.problem);
+            return;
+          }
+          // Bring the settings across so the retry, which runs in the worktree,
+          // sees the new rule.
+          provisioner.provision(
+            configuration.copyIntoWorktree(repositoryUri),
+            task.repositoryRoot,
+            task.worktreePath,
+          );
+          void vscode.window.showInformationMessage(
+            written.added.length > 0
+              ? `Rule added. The route will retry this step.`
+              : `That rule was already present.`,
+          );
+        });
+    },
+  });
+  context.subscriptions.push({ dispose: () => runtime.dispose() });
+  const {
+    agentProcesses,
+    sessions,
+    permissionGate,
+    askUser,
+    reducedMcpConfigPath,
+    currentHarness,
+    worktreeDiscards,
+    worktreeClaims,
+    runner,
+  } = runtime;
 
   // Plan usage is account-wide; probe from the repo root (any directory works).
   const planUsage = new PlanUsageService(
@@ -307,49 +379,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(BLOB_SCHEME, blobProvider),
   );
 
-  // Holds a refused tool call open until the user decides, so the agent carries
-  // on mid-turn instead of the stage being re-run once a rule is added. Created
-  // before the tree because the tree renders what it is holding.
-  const permissionGate = new PermissionGateService(
-    vscode.Uri.joinPath(context.globalStorageUri, "permission-gates").fsPath,
-    nodeGateFileSystem,
-    logger,
-    () => configuration.gateInterpreter(repositoryUri),
-    // No gated tools when the feature is off, which writes a settings file with no
-    // hook — still needed, because it carries the ask_user allow rule below.
-    () =>
-      configuration.interactivePermissions(repositoryUri)
-        ? configuration.gatedTools(repositoryUri)
-        : [],
-    () => Math.round(configuration.permissionWaitMinutes(repositoryUri) * 60),
-    () => configuration.holdEveryToolCall(repositoryUri),
-    // The extension's own question tool. Without a rule the CLI refuses it and the
-    // agent reports that it cannot ask, which is the dead end this replaces.
-    () =>
-      configuration.interactiveQuestions(repositoryUri) ? [ASK_TOOL_ALLOW_RULE] : [],
-    undefined,
-    // The other half of `worktree.discardPaths`. The discard keeps a stage's check from
-    // failing on a transformed `Web.config`; it runs after the session, so it has never
-    // been able to keep that file out of the commit the session just made. This refuses a
-    // `git add -A` / `git commit -a` that would sweep one in, while letting the file be
-    // named explicitly — see `domain/stagedEnvironmentPaths.ts`.
-    //
-    // `currentHarness` is declared further down and only ever called from a sweep, which
-    // cannot run before a stage has been prepared — long after activation returns.
-    () => currentHarness()?.discardPaths ?? [],
-    async (cwd) => {
-      // `status.relativePaths=false` because the CLI's cwd may be a subdirectory of the
-      // worktree, and git would otherwise report paths relative to *it* — which would
-      // silently stop matching a repository-relative declaration. The discard service
-      // needs no such flag: it is handed the worktree root.
-      const status = await gitClient.run(
-        ["-c", "status.relativePaths=false", "status", "--porcelain"],
-        { cwd },
-      );
-      return status.ok ? parsePorcelainChanges(status.value.stdout) : undefined;
-    },
-  );
-  context.subscriptions.push({ dispose: () => permissionGate.dispose() });
 
   // Counted when the message actually reaches a stage, not when it is typed: an
   // interjection the session finished before receiving cost the route nothing, and
@@ -366,23 +395,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     tree.refresh();
   };
 
-  // Lets a stage ask the user a question without ending its session, so the answer
-  // arrives mid-turn and the subtask does not start again from the beginning.
-  const askUser = new AskUserService(
-    vscode.Uri.joinPath(context.globalStorageUri, "ask-user").fsPath,
-    nodeGateFileSystem,
-    logger,
-    () => configuration.gateInterpreter(repositoryUri),
-    undefined,
-    // The same setting that sets `MCP_TOOL_TIMEOUT`, declared again as this server's
-    // own idle timeout: the CLI bounds elapsed time and silence separately, and a
-    // question blocking by design is bounded by the silence one. Raising only the
-    // first is why questions kept dying in about seven minutes.
-    // Through `askTimeoutMs`, not multiplied here: zero means "wait indefinitely" and
-    // multiplying it out would expire every question the instant it was asked.
-    () => askTimeoutMs(configuration.askTimeoutMinutes(repositoryUri)),
-  );
-  context.subscriptions.push({ dispose: () => askUser.dispose() });
 
   // --- Tree view --------------------------------------------------------
   // Declared before the tree and assigned after the stage runner exists: the tree only
@@ -532,39 +544,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Rules are resolved per repository, and the configured path is
-  // resource-scoped, so each project can keep its own rule set.
-  const reviewPlans = new ReviewPlanService(
-    statusService,
-    repository,
-    logger,
-    (root) =>
-      loadReviewRules(root, {
-        configuredPath: configuration.harnessConfigPath(repositoryUri),
-      }),
-    // Rule-added stages are the only ones the user never chose: they pick a route,
-    // and the engine then appends agent sessions to it off a derived path set. Fine
-    // for one obvious review, and how four unrelated ones came to run on a one-line
-    // change. Modal, because the alternative is the route starting them while the
-    // notification is still on screen.
-    async (request) => {
-      const detail =
-        `${describeRuleAdditions(request.added, request.matches)}\n\n` +
-        `Matched against ${request.changedPathCount} changed path(s). If that number ` +
-        `looks wrong for this task, so are these reviews.`;
-      const choice = await vscode.window.showWarningMessage(
-        `"${request.task.name}": review rules want to add ${request.added.length} ` +
-          `stages, each a separate agent session.`,
-        { modal: true, detail },
-        "Add Them",
-        "Not Now",
-      );
-      // Dismissing is not consent. A modal returns undefined on Escape, and the
-      // expensive reading of that is "go ahead".
-      return choice === "Add Them";
-    },
-  );
-
   // A held call is live state the tree cannot derive, so it has to be told.
   //
   // It also has to be *said*. A hold is the only moment the agent is genuinely
@@ -668,210 +647,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   });
 
-  /**
-   * The MCP config any session this extension starts should load.
-   *
-   * Every session is a fresh CLI, and the CLI starts every server in the config
-   * before emitting its first event — nine servers measured at 182 seconds of
-   * connect timeouts. When `stageMcpServers` names the ones the work needs, a
-   * reduced copy is written to extension storage and passed instead.
-   *
-   * Applied to task chat sessions as well as route stages. It was stages only, on
-   * the reasoning that a chat is exploratory and might want any tool — but the
-   * wait is the same, and a person sitting in front of it notices three minutes
-   * far more than a subtask does. Clearing the setting is the way back to all of
-   * them.
-   *
-   * Written outside the repository on purpose: it must not appear in a worktree,
-   * where it would land in the changed paths the review rules key off. Filtering
-   * only removes servers, so this cannot widen what a branch can reach.
-   */
-  const reducedMcpConfigPath = (taskRepositoryRoot: string): string | undefined => {
-    const resolved = resolveMcpConfigPath(
-      taskRepositoryRoot,
-      configuration.mcpConfigPath(repositoryUri),
-      (p) => fs.existsSync(p),
-    );
-    if (!resolved) return undefined;
-
-    const allow = configuration.stageMcpServers(repositoryUri);
-    if (allow.length === 0) return resolved;
-
-    try {
-      const filtered = filterMcpConfig(fs.readFileSync(resolved, "utf8"), allow);
-      // Undefined means there was nothing sensible to do — a typo in the
-      // allow-list, or a config we could not read. Never a reason to strip a
-      // stage's tools, so the original is used unchanged.
-      if (!filtered) {
-        logger.warn(
-          `taskWorkspaces.stageMcpServers matched no server in ${resolved}; ` +
-            "using the project's config unchanged.",
-        );
-        return resolved;
-      }
-
-      const directory = vscode.Uri.joinPath(context.globalStorageUri, "stage-mcp");
-      fs.mkdirSync(directory.fsPath, { recursive: true });
-      const target = vscode.Uri.joinPath(directory, "mcp.json").fsPath;
-      fs.writeFileSync(target, filtered.json, "utf8");
-      logger.info(
-        `Stage MCP config: keeping ${filtered.kept.join(", ")}` +
-          (filtered.dropped.length > 0
-            ? `; skipping ${filtered.dropped.length} (${filtered.dropped.join(", ")})`
-            : ""),
-      );
-      return target;
-    } catch (error) {
-      logger.error("Could not reduce the MCP config for stage sessions", error);
-      return resolved;
-    }
-  };
-
-  // Each subtask runs in a fresh session, so route stages never share context.
-  const stageRunner = new ClaudeStageSessionRunner(
-    sessions,
-    (task) => ({
-      worktreePath: task.worktreePath,
-      permissionMode: configuration.permissionMode(repositoryUri),
-      addDirs: [task.repositoryRoot],
-      // A stage session runs in a worktree the CLI has never seen, so the
-      // project's MCP servers are unapproved there and silently absent — which
-      // is how a planning stage loses the ability to read its own ticket.
-      mcpConfigPath: reducedMcpConfigPath(task.repositoryRoot),
-      // Enforced, not merely offered: without strict mode the worktree's own
-      // approved `.mcp.json` starts every server anyway, and a reduced config
-      // achieves nothing. Only when the set was narrowed on purpose, since strict
-      // mode also drops the user's own user-scope servers.
-      strictMcpConfig: configuration.stageMcpServers(repositoryUri).length > 0,
-      autoCompactThreshold: configuration.autoCompactThreshold(repositoryUri),
-      contextStrategy: configuration.contextStrategy(repositoryUri),
-      model: configuration.model(repositoryUri),
-      taskName: task.name,
-      // Stage sessions only. A chat session the user is driving keeps the CLI's
-      // own defaults: this cap protects concurrent tasks from each other, and a
-      // hand-driven session has no concurrent tasks to protect.
-      // Stage sessions only. A chat session the user drives keeps whatever skills
-      // they have configured; the protocol skill describes how to behave as a stage,
-      // which a hand-driven session is not.
-      pluginDirs: protocolPluginDir ? [protocolPluginDir] : undefined,
-      env: {
-        ...subagentLimitEnv({
-          concurrency: configuration.stageSubagentConcurrency(repositoryUri),
-          depth: configuration.stageSubagentDepth(repositoryUri),
-        }),
-        // A stage blocked on `ask_user` is waiting for a person, not hung. On the CLI's
-        // own tool timeout the call fails after a few minutes and the agent answers its
-        // own question — so the wait has to be set to human latency, not machine.
-        ...askTimeoutEnv(configuration.askTimeoutMinutes(repositoryUri)),
-      },
-    }),
-    logger,
-    configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000,
-    // Both channels a stage can use to reach the user, installed together because
-    // both are per-subtask CLI arguments. Each is separately switchable and each
-    // fails soft, so a stage runs with either, both, or neither.
-    {
-      prepare: (taskId) => {
-        const askOn = configuration.interactiveQuestions(repositoryUri);
-        const ask = askOn ? askUser.prepare(taskId) : undefined;
-        // The settings file is needed by either feature: it installs the hook and
-        // carries the ask_user allow rule. Written whenever either is on, and with
-        // no gated tools it contains no hook at all.
-        const gate =
-          configuration.interactivePermissions(repositoryUri) || ask
-            ? permissionGate.prepare(taskId)
-            : undefined;
-        if (!gate && !ask) return undefined;
-        return {
-          settingsPath: gate?.settingsPath,
-          extraMcpConfigPaths: ask ? [ask.mcpConfigPath] : [],
-        };
-      },
-      release: (taskId) => {
-        permissionGate.release(taskId);
-        // Abandons anything still asked, so a finished stage does not leave the
-        // question panel offering to answer a session that has gone. The count is
-        // returned rather than discarded: a question still waiting here was never
-        // answered by anyone, and the runner fails the subtask on it.
-        return askUser.release(taskId);
-      },
-    },
-    // Read per run so widening it takes effect on the next stage, not the next
-    // window. Stage sessions only — the ad-hoc chat runners below pass nothing and
-    // keep the CLI's full set, because a person is not a stage.
-    () => stageTools(configuration.additionalStageTools(repositoryUri)),
-    // The stage timeout bounds a hung CLI, and a stage blocked on `ask_user` is not
-    // hung. Without this the shorter of the two settings always won, so a question
-    // could never outlive `stageTimeoutMinutes` however long `askTimeoutMinutes` was —
-    // and the stage was then recorded as having timed out rather than as having waited.
-    (taskId) => askUser.blockedMs(taskId),
-  );
-  /**
-   * The project's routes and rules as they are on disk right now.
-   *
-   * Read per use rather than cached, because the whole point is that editing
-   * `harness.json` takes effect on the next stage rather than the next task.
-   */
-  const currentHarness = () => {
-    const root = repositoryUri?.fsPath;
-    if (!root) return undefined;
-    return loadHarness(root, {
-      configuredPath: configuration.harnessConfigPath(repositoryUri),
-    });
-  };
-
-  /**
-   * Restores the paths the project declared to be local environment before a stage's
-   * check reads the tree. Empty config means it never does anything.
-   */
-  const worktreeDiscards = new WorktreeDiscardService(
-    gitClient,
-    () => currentHarness()?.discardPaths ?? [],
-    logger,
-  );
-
-  const permissionRules = new PermissionRulesService(logger);
-  // Shared: also used when granting a rule, to refresh an existing worktree's copy.
-  const provisioner = new WorktreeProvisioner(logger);
-
-  /**
-   * Keeps the record of which worktrees each task holds.
-   *
-   * Stages create worktrees the extension never made — a `promote/<ticket>-uat` tree, a
-   * publish tree — so nothing cleaned them up and nothing could tell that two tasks
-   * were promoting through the same one. The port is narrow on purpose: every decision
-   * is in `domain/worktreeLease.ts`, and this is the git it needs.
-   */
-  const worktreeClaims = new WorktreeClaimService(
-    {
-      async list(repositoryRoot) {
-        const listed = await worktreeService.listWorktrees(repositoryRoot);
-        return listed.ok
-          ? listed.value.map((tree) => ({ path: tree.path, branch: tree.branch }))
-          : undefined;
-      },
-      async isDirty(worktreePath) {
-        const status = await statusService.getStatus(worktreePath);
-        // Undefined, not false: unreadable must not read as clean, or cleanup would
-        // remove a worktree nobody could inspect.
-        return status.ok ? status.value.isDirty : undefined;
-      },
-      async countUnmerged(worktreePath, baseBranch) {
-        const ahead = await statusService.getCommitsAhead(worktreePath, baseBranch);
-        return ahead.ok ? ahead.value : undefined;
-      },
-      async remove(repositoryRoot, worktreePath) {
-        const removed = await worktreeService.removeWorktree(repositoryRoot, worktreePath);
-        if (removed.ok) return undefined;
-        return removed.error.kind === "git"
-          ? removed.error.error.message
-          : removed.error.message;
-      },
-    },
-    repository,
-    logger,
-  );
-
   // A scan is a stage session with no task, rooted at the repository — the same runner
   // class, so it inherits MCP readiness abandoning a scan whose ticket server is
   // unavailable before any inference is paid for, the hard timeout, and the failure
@@ -911,206 +686,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { now: () => new Date().toISOString() },
   );
 
-  const taskCommits = new TaskCommitService(repository, statusService, logger);
-  const pullRequestWaits = new PullRequestWaitService(gitClient, statusService, logger);
-
-  const runner = new PipelineRunner(
-    stageRunner,
-    repository,
-    reviewPlans,
-    logger,
-    () => configuration.projectDocsPath(repositoryUri),
-    // Announced the instant it happens, so the user is not left waiting out a
-    // stage that has already lost the tool it wanted.
-    (task, denial) => {
-      // The refusal that teaches the gate. From here on this capability is held
-      // for the user rather than refused again, so the agent's retry — which it
-      // was going to make anyway — becomes the interactive prompt.
-      permissionGate.noteDenial(task.id, denial.tool, denial.command);
-
-      // With the gate armed, this refusal is the expected first attempt: the
-      // retry is held and the user asked properly, with actions that release the
-      // agent where it stands. Interrupting here as well was actively harmful —
-      // it offered "Add Rule", which cannot free a call the hook is already
-      // holding, and it arrived *before* the prompt that could. The useful
-      // notification went unseen behind the useless one, and the stage looked
-      // hung. The refusal is still logged, and still listed on the stage's rows
-      // if the agent never retries the capability.
-      // Suppressed only when the retry will genuinely be held. Three conditions,
-      // and every one of them has to hold or this notification is the sole report:
-      // the feature is on, the hook is actually installed (`prepare` fails soft),
-      // and the gate covers this tool at all — `gatedTools` is a list, so a
-      // refusal of anything outside it will never raise a prompt. A denial
-      // attributed to the wrong tool used to fall straight through that gap and
-      // be reported nowhere.
-      const gateWillHoldRetry =
-        configuration.interactivePermissions(repositoryUri) &&
-        permissionGate.isArmed(task.id) &&
-        configuration
-          .gatedTools(repositoryUri)
-          .some((tool) => tool.toLowerCase() === denial.tool.toLowerCase());
-      if (gateWillHoldRetry) return;
-
-      const rules = suggestAllowRules([denial], {
-        worktreePath: task.worktreePath,
-        repositoryRoot: task.repositoryRoot,
-      });
-      const rule = rules[0];
-      void vscode.window
-        .showWarningMessage(
-          `"${task.name}": ${denial.tool} was denied — ${denial.command ?? denial.reason}`,
-          ...(rule ? ["Add Rule"] : []),
-          "Show Log",
-        )
-        .then(async (choice) => {
-          if (choice === "Show Log") {
-            logger.show?.();
-            return;
-          }
-          if (choice !== "Add Rule" || !rule) return;
-          // Every suggested form, not just the first: the absolute rule matches now and
-          // the relative one survives the worktree.
-          const written = permissionRules.addAllowRules(task.repositoryRoot, rules);
-          if (written.problem) {
-            void vscode.window.showErrorMessage(written.problem);
-            return;
-          }
-          // Bring the settings across so the retry, which runs in the worktree,
-          // sees the new rule.
-          provisioner.provision(
-            configuration.copyIntoWorktree(repositoryUri),
-            task.repositoryRoot,
-            task.worktreePath,
-          );
-          void vscode.window.showInformationMessage(
-            written.added.length > 0
-              ? `Rule added. The route will retry this step.`
-              : `That rule was already present.`,
-          );
-        });
-    },
-    () => configuration.pauseOnPermissionDenial(repositoryUri),
-    // Read per advance rather than cached: editing a stage's model in
-    // harness.json should take effect on the next stage, not the next task.
-    () => currentHarness(),
-    // Read from the worktree itself, so a stage that checked out another branch is
-    // caught before the next stage reports on the wrong tree.
-    async (worktreePath) => {
-      const current = await worktreeService.getCurrentBranch(worktreePath);
-      return current.ok ? current.value : undefined;
-    },
-    // Turns a stage's declared check into its outcome, so "done" stops meaning
-    // "the session ended without error".
-    new NodeVerificationRunner(),
-    // Reads a stage's plan out of the worktree, so its numbered steps can be held
-    // against it one by one. Absent file and unreadable file are the same answer
-    // here: either way there is no plan to account for, and the runner refuses to
-    // run the stage rather than letting it improvise.
-    async (worktreePath, relativePath) => {
-      try {
-        return await fs.promises.readFile(nodePath.join(worktreePath, relativePath), "utf8");
-      } catch {
-        return undefined;
-      }
-    },
-    worktreeClaims,
-    // How long this task's stages have been held waiting on an answer. Sampled either
-    // side of each subtask, so the operator's thinking time stops being recorded as
-    // the model working — see `domain/humanWait.ts`.
-    (taskId) => askUser.humanWaitMs(taskId),
-    // Past this, an `active` subtask no live run owns is assumed abandoned. The
-    // stage timeout plus a margin, because a live owner would have failed it at
-    // the timeout — so anything older has no owner left to come back for it.
-    () => configuration.stageTimeoutMinutes(repositoryUri) * 60 * 1000 + 5 * 60 * 1000,
-    // Restores the tracked paths `worktree.discardPaths` declares to be local
-    // environment, so a stage's check stops failing on a transformed Web.config and
-    // tracked build output while the work is committed and pushed. Read per stage from
-    // the repository root, so a branch cannot add to the list of files deleted on its
-    // own way past a gate.
-    (worktreePath, signal) => worktreeDiscards.discard(worktreePath, signal),
-    // How many times a subtask whose session died on the transport is simply run
-    // again. Read per failure, so an operator who has had enough of an outage can
-    // set it to 0 without a restart and get the old behaviour: held on the first
-    // occurrence rather than retried.
-    () => configuration.transientRetryAttempts(repositoryUri),
-    // The backoff between those attempts keeps its default. Named as a hole rather than
-    // omitted, because the next argument is positional and this constructor now has
-    // enough parameters that a silent shift is the likely mistake — one happened while
-    // adding the argument below.
-    undefined,
-    // Amendment subtasks only, and only when configured — see `resolveAmendmentModel`
-    // for the measurement. Last, because every argument here is positional.
-    () => configuration.amendmentModel(repositoryUri),
-    // Records the commits each task makes, observed either side of every subtask. The
-    // set every promotion check wants and none could reconstruct — see
-    // `domain/taskCommits.ts` for the four derivations that fail. Non-fatal inside the
-    // service, so a git failure here never reaches the route.
-    (task, observation) => taskCommits.observe(task, observation),
-    // Answered from git rather than a hosting API: *merged* means the source's commits
-    // are on the target, so no token and no webhook — see `PullRequestWaitService`.
-    (task, waits) => pullRequestWaits.merged(task, waits),
-    // Only so a failed check can say whether the branch has already fixed the check --
-    // see `domain/staleChecker.ts`. A git failure yields no paths and therefore no
-    // note, which is the same direction every other optional dependency here chooses.
-    async (task, signal) => {
-      const changed = await statusService.getChangedPaths(
-        task.worktreePath,
-        task.baseBranch,
-        signal,
-      );
-      return changed.ok ? changed.value : undefined;
-    },
-    // Where the branch diverged, for a check that names `${mergeBase}` so it can ask
-    // what *this branch* changed rather than how it differs from a moving base. A git
-    // failure yields no value, which refuses the check rather than running it against
-    // the base's tip -- the comparison whose wrong answers this placeholder exists to
-    // stop being reported as findings about the work.
-    async (task, signal) => {
-      const base = await statusService.getMergeBase(
-        task.worktreePath,
-        task.baseBranch,
-        signal,
-      );
-      return base.ok && base.value.length > 0 ? base.value : undefined;
-    },
-    // One fetch per advance, so every comparison against a base ref below is answered
-    // against what the remote says now rather than whenever this clone last looked.
-    async (task, signal) => statusService.fetchRemotes(task.worktreePath, signal),
-    // Which suspect paths carry content already committed on another branch. Asked only
-    // about files no stage of the task is recorded as writing, so this runs rarely and
-    // over a handful of paths -- see `domain/branchContamination.ts` for why the
-    // unattributed set is a filter and never a finding on its own.
-    async (task, paths, signal) => {
-      const found: Contamination[] = [];
-      for (const path of paths) {
-        const added = await statusService.getAddedLines(
-          task.worktreePath,
-          task.baseBranch,
-          path,
-          signal,
-        );
-        for (const line of distinctiveLines(added)) {
-          const commits = await statusService.findForeignCommits(
-            task.worktreePath,
-            path,
-            line,
-            3,
-            signal,
-          );
-          // One confirmed line is the answer. Searching the rest would only lengthen
-          // the same finding, and each search is a history scan.
-          if (commits.length > 0) {
-            found.push({ path, commits });
-            break;
-          }
-        }
-      }
-      return found;
-    },
-    // How long a check that says its environment is NOT-READY -- a DEV site still
-    // deploying the merge -- is asked again before the stage is held rather than failed.
-    () => configuration.environmentWaitMinutes(repositoryUri) * 60_000,
-  );
   isDrivingRoute = (taskId) => runner.isRunning(taskId);
 
   // The watchdog for a host that died mid-subtask. Every mechanism that ends a
@@ -1125,6 +700,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // the state file, so it recovers work abandoned by a host that no longer exists —
   // including on the first pass at activation, which is the common case: the host
   // that died is usually the one this one replaced.
+  // This host's claim on a route while it advances one (`domain/runLease.ts`), so a
+  // headless runner and this window never drive the same task at once.
+  const leases = new RunLeaseService(repository, "vscode");
+
   const sweepStaleSubtasks = async (): Promise<void> => {
     if (!repositoryRoot) return;
     try {
@@ -1132,6 +711,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       let recovered = 0;
       for (const task of tasks) {
         if (!task.pipeline) continue;
+        // A subtask another live process is running is not abandoned: a headless
+        // runner owns its sessions exactly as this host owns its own, and reclaiming
+        // them would re-open work that is still being done.
+        if (await leases.heldElsewhere(task)) continue;
         const outcome = await runner.reclaimStale(task, new Date().toISOString());
         recovered += outcome.reclaimed.length;
       }
@@ -1359,6 +942,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // --- Commands ---------------------------------------------------------
   const commandContext: CommandContext = {
+    leases,
+    onStateFileChanged: (listener) => stateFileChanged.event(listener),
     permissionRules,
     permissionGate,
     askUser,
@@ -1396,6 +981,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     repositoryUri: () => repositoryUri,
   };
   context.subscriptions.push(...registerCommands(commandContext));
+
+  // Requests from a client outside VS Code — answers to deliver, a route to advance —
+  // arrive as state file changes. Served once at start too, for any filed while no
+  // window was open.
+  context.subscriptions.push(stateFileChanged.event(() => void serveHostRequests(commandContext)));
+  void repositoryReady?.then(() => serveHostRequests(commandContext));
 
   // If this window was opened as a task worktree awaiting a native Claude chat,
   // launch it now via the official extension, then clear the request.

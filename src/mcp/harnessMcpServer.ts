@@ -1,5 +1,7 @@
+import { ok } from "../utilities/result";
 import { HarnessControlService } from "../services/harnessControlService";
 import { RunSnapshot, RunSummary, StageView } from "../ui/harnessSnapshot";
+import { GROUP_ORDER } from "../ui/taskGrouping";
 
 /**
  * MCP server exposing the harness to Claude as a client: read tools for the model,
@@ -64,6 +66,8 @@ export class HarnessMcpServer {
     private readonly dashboardHtml: string,
     private readonly info: { name: string; version: string; repositoryRoot: string },
     private readonly log?: ServerLog,
+    /** Whether answering a question that joined the brief also starts the route. */
+    private readonly advanceAfterAnswering?: () => boolean,
   ) {}
 
   /** Replies to a request; `undefined` for a notification, which gets no reply. */
@@ -168,9 +172,9 @@ export class HarnessMcpServer {
         name: "harness_dashboard",
         title: "Show Engineering Harness",
         description:
-          "Shows the operator an interactive dashboard of one harness run: every stage, its " +
-          "status, the evidence behind it, and anything waiting on a person. Omit taskId for " +
-          "the run most likely to need attention.",
+          "Shows the operator an interactive board of every harness run, grouped by what each " +
+          "needs — what is waiting on them first — from which they open a run to act on it. " +
+          "Pass taskId to open on one run.",
         inputSchema: {
           type: "object",
           properties: { taskId: { type: "string", description: "A task id from harness_list_runs." } },
@@ -261,6 +265,97 @@ export class HarnessMcpServer {
         },
         _meta: appOnly,
       },
+      {
+        name: "harness_correct_stage",
+        title: "Fix stage",
+        description: "Dashboard-only: files the operator's finding as a correction to a stage that ran.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            stageId: { type: "string" },
+            revision: { type: "string" },
+            finding: { type: "string" },
+          },
+          required: ["taskId", "stageId", "revision", "finding"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_rerun_stage",
+        title: "Re-run stage",
+        description: "Dashboard-only: discards a stage and everything after it, with the operator's reason.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            stageId: { type: "string" },
+            revision: { type: "string" },
+            reason: { type: "string" },
+          },
+          required: ["taskId", "stageId", "revision"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_send_back",
+        title: "Send back",
+        description: "Dashboard-only: sends a stage's findings to an earlier stage the route allows.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            fromStageId: { type: "string" },
+            targetStageId: { type: "string" },
+            revision: { type: "string" },
+            how: { type: "string", enum: ["fix", "rerun"] },
+            findings: { type: "string" },
+            note: { type: "string" },
+          },
+          required: ["taskId", "fromStageId", "targetStageId", "revision", "how"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_answer_questions",
+        title: "Answer questions",
+        description:
+          "Dashboard-only: records the operator's answers to a stage's questions. A stage " +
+          "still waiting receives them mid-turn; otherwise they join the brief.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            askedAt: { type: "string" },
+            answers: { type: "object", additionalProperties: { type: "string" } },
+          },
+          required: ["taskId", "askedAt", "answers"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_advance_route",
+        title: "Advance route",
+        description: "Dashboard-only: starts the route advancing in a headless runner.",
+        inputSchema: {
+          type: "object",
+          properties: { taskId: { type: "string" } },
+          required: ["taskId"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_stop_route",
+        title: "Stop route",
+        description:
+          "Dashboard-only: asks whichever process is advancing the route to stop at its current step.",
+        inputSchema: {
+          type: "object",
+          properties: { taskId: { type: "string" } },
+          required: ["taskId"],
+        },
+        _meta: appOnly,
+      },
     ];
   }
 
@@ -276,9 +371,13 @@ export class HarnessMcpServer {
     switch (name) {
       case "harness_dashboard":
       case "harness_refresh": {
+        // A run only when one is named: the board is what opens, and a run is a place the
+        // operator goes from it, so guessing one would put a task in front of them they
+        // did not choose.
+        const taskId = text("taskId");
         const [runs, run] = await Promise.all([
           this.service.listRuns(),
-          this.service.getRun(text("taskId")),
+          taskId ? this.service.getRun(taskId) : Promise.resolve(undefined),
         ]);
         return {
           content: [
@@ -289,7 +388,9 @@ export class HarnessMcpServer {
                   ? "Refreshed."
                   : run
                     ? `Showing "${run.name}" to the operator.\n\n${describeRun(run)}`
-                    : "No routed tasks in this repository.",
+                    : runs.length
+                      ? `Showing the operator the board of ${runs.length} run(s).\n\n${describeBoard(runs)}`
+                      : "No routed tasks in this repository.",
             },
           ],
           structuredContent: { repositoryRoot: this.info.repositoryRoot, runs, run: run ?? null },
@@ -341,6 +442,58 @@ export class HarnessMcpServer {
         return decision(
           await this.service.setChecklistItem(text("taskId") ?? "", text("itemId") ?? "", args.checked === true),
         );
+      case "harness_correct_stage":
+        return decision(
+          await this.service.correctStage(
+            text("taskId") ?? "",
+            text("stageId") ?? "",
+            text("revision") ?? "",
+            text("finding") ?? "",
+          ),
+        );
+      case "harness_rerun_stage":
+        return decision(
+          await this.service.rerunStage(
+            text("taskId") ?? "",
+            text("stageId") ?? "",
+            text("revision") ?? "",
+            text("reason"),
+          ),
+        );
+      case "harness_send_back":
+        return decision(
+          await this.service.sendBack(text("taskId") ?? "", {
+            fromStageId: text("fromStageId") ?? "",
+            targetStageId: text("targetStageId") ?? "",
+            revision: text("revision") ?? "",
+            how: text("how") === "rerun" ? "rerun" : "fix",
+            findings: text("findings"),
+            note: text("note"),
+          }),
+        );
+      case "harness_answer_questions": {
+        const given = args.answers && typeof args.answers === "object" ? args.answers : {};
+        const answers = Object.fromEntries(
+          Object.entries(given as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
+        const taskId = text("taskId") ?? "";
+        const answered = await this.service.answerQuestions(taskId, text("askedAt") ?? "", answers);
+        // An answer that joined the brief leaves the stage pending, and the operator
+        // answered so that it would run. The same setting VS Code's answer command
+        // reads decides whether it does so without a second click.
+        if (!answered.ok || !answered.value.readyToAdvance || !this.advanceAfterAnswering?.()) {
+          return decision(answered);
+        }
+        const advanced = await this.service.advance(taskId);
+        const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
+        return decision(ok({ ...answered.value, message: `${answered.value.message} ${then}` }));
+      }
+      case "harness_advance_route":
+        return decision(await this.service.advance(text("taskId") ?? ""));
+      case "harness_stop_route":
+        return decision(await this.service.stop(text("taskId") ?? ""));
     }
     return failure(`No tool "${name}".`);
   }
@@ -386,11 +539,22 @@ const GLYPH: Record<StageView["state"], string> = {
 };
 
 function describeSummary(run: RunSummary): string {
+  const { need, status, since } = run.attention;
   return (
-    `- ${run.name} [${run.taskId}] — ${run.groupLabel}` +
-    (run.currentStage ? `, at "${run.currentStage}"` : "") +
-    (run.route ? ` (${run.route})` : "")
+    `- ${run.ticket ? `${run.ticket} ` : ""}${run.name} [${run.taskId}] — ${run.groupLabel}: ` +
+    (need ?? status) +
+    (since ? ` (since ${since})` : "") +
+    ` · ${run.progress.done}/${run.progress.total} stages` +
+    (run.route ? ` · ${run.route}` : "")
   );
+}
+
+/** The board as the model reads it: grouped as the operator sees it, worst first. */
+export function describeBoard(runs: readonly RunSummary[]): string {
+  return GROUP_ORDER.map((group) => runs.filter((run) => run.group === group))
+    .filter((members) => members.length > 0)
+    .map((members) => `${members[0].groupLabel} (${members.length}):\n${members.map(describeSummary).join("\n")}`)
+    .join("\n\n");
 }
 
 /** The model's view of a run: what it says, without the revision or the buttons. */

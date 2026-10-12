@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   decideApproval,
   decideChecklistItem,
+  decideCorrection,
+  decideRerun,
   decideRetry,
+  decideSendBack,
   isRetryable,
 } from "./harnessControl";
 import { pipelineRevision } from "./pipelineRevision";
@@ -205,5 +208,149 @@ describe("decideChecklistItem", () => {
   it("refuses an item that has gone", () => {
     const outcome = decideChecklistItem(withItem(false), { itemId: "zz", checked: true, at: AT });
     expect(outcome.ok).toBe(false);
+  });
+});
+
+describe("repairs", () => {
+  // Built, reviewed with a critical, and one stage still to come.
+  function reviewed(review: Partial<TaskStage> = {}): TaskWorkspace {
+    return task([
+      stage({
+        id: "impl",
+        name: "Implement",
+        kind: "implementation",
+        status: "passed",
+        requiresApproval: false,
+        subtasks: [subtask({ id: "impl-1", reply: "Wrote the export." })],
+      }),
+      stage({
+        sendBackTo: ["impl"],
+        subtasks: [subtask({ id: "gate-1", reply: "## Critical\n- the total double-counts returns" })],
+        ...review,
+      }),
+      stage({ id: "ship", name: "Ship", kind: "deployment", status: "pending", subtasks: [] }),
+    ]);
+  }
+
+  it("files a correction through the engine, keeping the stage's work", () => {
+    const t = reviewed();
+    const outcome = decideCorrection(t, {
+      stageId: "impl",
+      revision: rev(t),
+      finding: "the total column double-counts returns",
+      at: AT,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const impl = outcome.value.task.pipeline!.stages[0];
+    expect(impl.subtasks.map((s) => s.reply)).toContain("Wrote the export.");
+    expect(impl.subtasks.some((s) => s.correction?.finding.includes("double-counts"))).toBe(true);
+    expect(outcome.value.message).toMatch(/1 later stage\(s\) re-opened/);
+  });
+
+  it("refuses a finding that names nothing, since it is the session's whole brief", () => {
+    const t = reviewed();
+    const outcome = decideCorrection(t, { stageId: "impl", revision: rev(t), finding: "Incorrect.", at: AT });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.kind).toBe("weakBrief");
+  });
+
+  it("refuses to correct a stage that produced nothing", () => {
+    const t = reviewed();
+    const outcome = decideCorrection(t, {
+      stageId: "ship",
+      revision: rev(t),
+      finding: "it deployed the wrong project",
+      at: AT,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.kind).toBe("notCorrectable");
+  });
+
+  it("re-runs a stage with the reason filed as guidance for it alone", () => {
+    const t = reviewed();
+    const outcome = decideRerun(t, { stageId: "impl", revision: rev(t), reason: "use tab 3", at: AT });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const pipeline = outcome.value.task.pipeline!;
+    expect(pipeline.stages.map((s) => s.status)).toEqual(["pending", "pending", "pending"]);
+    expect(pipeline.guidance?.find((g) => g.text === "use tab 3")?.scope).toBe("stage");
+  });
+
+  it("sends a review's findings back as a fix, keeping the target's work", () => {
+    const t = reviewed();
+    const outcome = decideSendBack(t, {
+      fromStageId: "gate",
+      targetStageId: "impl",
+      revision: rev(t),
+      how: "fix",
+      at: AT,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const impl = outcome.value.task.pipeline!.stages[0];
+    const fix = impl.subtasks.find((s) => s.correction);
+    expect(fix?.correction?.finding).toMatch(/Sent back from "Sign off"/);
+    expect(fix?.correction?.finding).toMatch(/double-counts/);
+  });
+
+  it("sends findings back to re-run, carrying them as the target's guidance", () => {
+    const t = reviewed();
+    const outcome = decideSendBack(t, {
+      fromStageId: "gate",
+      targetStageId: "impl",
+      revision: rev(t),
+      how: "rerun",
+      at: AT,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const pipeline = outcome.value.task.pipeline!;
+    expect(pipeline.stages[0].status).toBe("pending");
+    expect(pipeline.guidance?.some((g) => g.stageId === "impl" && /double-counts/.test(g.text))).toBe(true);
+  });
+
+  it("refuses a target the route does not offer", () => {
+    const t = reviewed({ sendBackTo: [] });
+    const outcome = decideSendBack(t, {
+      fromStageId: "gate",
+      targetStageId: "impl",
+      revision: rev(t),
+      how: "fix",
+      at: AT,
+    });
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("asks a gate that recorded nothing for what went wrong", () => {
+    const t = reviewed({ kind: "humanVerification", subtasks: [] });
+    const without = decideSendBack(t, {
+      fromStageId: "gate",
+      targetStageId: "impl",
+      revision: rev(t),
+      how: "fix",
+      at: AT,
+    });
+    expect(without.ok).toBe(false);
+
+    const withFindings = decideSendBack(t, {
+      fromStageId: "gate",
+      targetStageId: "impl",
+      revision: rev(t),
+      how: "fix",
+      findings: "Specified cast is not valid opening the report",
+      at: AT,
+    });
+    expect(withFindings.ok).toBe(true);
+  });
+
+  it("refuses all three against a run that moved", () => {
+    const t = reviewed();
+    const stale = "not-the-revision";
+    expect(decideCorrection(t, { stageId: "impl", revision: stale, finding: "the total is wrong here", at: AT }).ok).toBe(false);
+    expect(decideRerun(t, { stageId: "impl", revision: stale, at: AT }).ok).toBe(false);
+    expect(
+      decideSendBack(t, { fromStageId: "gate", targetStageId: "impl", revision: stale, how: "fix", at: AT }).ok,
+    ).toBe(false);
   });
 });

@@ -4823,6 +4823,13 @@ and no daemon. Rules, each load-bearing:
   continue from the task `save` returns: a merged-in change missing from the caller's
   own copy reads as a removal. The merge is skipped when the disk still holds this
   runner's last write.
+- **Routes advance without VS Code** (`runner/main.ts` → `dist/harnessRunner.js`, 12 Oct
+  2026). The extension and the headless runner build one runtime
+  (`services/stageRuntime.ts`) and drive it through `services/routeDriver.ts`, so they
+  cannot drift. Settings are read from VS Code's own settings files. A run lease in the
+  state file keeps two processes off one task. `--detach` launches in two steps because
+  a tree kill reaches a detached child while its parent lives. Details:
+  `docs/harness-claude-ui.md`.
 - **Three pre-existing lock defects**, found by multi-process stress tests:
   - The empty-record window between create and write was broken as a crash (2–4 of 200
     writes lost).

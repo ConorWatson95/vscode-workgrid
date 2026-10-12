@@ -1,0 +1,6 @@
+{
+  "name": "harness-pane",
+  "version": "0.1.0",
+  "description": "A pane beside the transcript showing every harness run, grouped by what it needs from you",
+  "author": { "name": "Conor Watson" }
+}

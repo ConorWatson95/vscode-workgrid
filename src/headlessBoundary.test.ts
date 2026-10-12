@@ -17,6 +17,13 @@ import { describe, expect, it } from "vitest";
 
 /** Entry points a headless run has to be able to construct. */
 const HEADLESS_ROOTS = [
+  // The headless runner itself, and the wiring it shares with the extension. A
+  // `vscode` import anywhere under these means a route cannot advance without a window.
+  "src/runner/main.ts",
+  "src/services/stageRuntime.ts",
+  "src/services/routeDriver.ts",
+  "src/services/runLeaseService.ts",
+  "src/mcp/main.ts",
   "src/services/pipelineRunner.ts",
   // A headless run has to be able to decide a stage's outcome from a process, so the
   // verification runner is on the path a CLI must construct.

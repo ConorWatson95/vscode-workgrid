@@ -237,7 +237,7 @@ function alive(pid: number): boolean {
  * not kill" — the honest degradation, and the reason it is expressed as an absent
  * measurement rather than a default.
  */
-async function probeProcesses(pids: readonly number[]): Promise<ProbedProcess[]> {
+export async function probeProcesses(pids: readonly number[]): Promise<ProbedProcess[]> {
     const liveness = pids.map((pid) => ({ pid, alive: alive(pid) }));
   if (process.platform !== "win32") return liveness;
 

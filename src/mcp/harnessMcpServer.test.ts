@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
-import { HarnessControlService } from "../services/harnessControlService";
+import { HarnessControlService, RunControl } from "../services/harnessControlService";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
 import {
   APP_MIME_TYPE,
@@ -47,15 +47,22 @@ function task(stages: TaskStage[]): TaskWorkspace {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any;
 
-async function setup(stages: TaskStage[] = [gate()], appCapable = true) {
+async function setup(
+  stages: TaskStage[] = [gate()],
+  appCapable = true,
+  options: { runs?: RunControl; advanceAfterAnswering?: boolean; pipeline?: Partial<TaskPipeline> } = {},
+) {
   const repository = new InMemoryTaskRepository();
-  await repository.save(task(stages));
-  const service = new HarnessControlService(repository, ROOT, { now: () => AT });
-  const server = new HarnessMcpServer(service, HARNESS_DASHBOARD_HTML, {
-    name: "test",
-    version: "0",
-    repositoryRoot: ROOT,
-  });
+  const seeded = task(stages);
+  await repository.save({ ...seeded, pipeline: { ...seeded.pipeline!, ...options.pipeline } });
+  const service = new HarnessControlService(repository, ROOT, { now: () => AT }, undefined, options.runs);
+  const server = new HarnessMcpServer(
+    service,
+    HARNESS_DASHBOARD_HTML,
+    { name: "test", version: "0", repositoryRoot: ROOT },
+    undefined,
+    () => options.advanceAfterAnswering ?? false,
+  );
   let id = 0;
   const rpc = async (method: string, params: Record<string, unknown> = {}): Promise<Json> =>
     ((await server.handle({ jsonrpc: "2.0", id: ++id, method, params })) as { result: Json }).result;
@@ -108,9 +115,23 @@ describe("HarnessMcpServer", () => {
     expect(read.text).toContain("ui/initialize");
   });
 
-  it("keeps the revision out of what the model reads", async () => {
+  it("opens on the board, saying what each run needs, and opens no run unasked", async () => {
     const { call } = await setup();
     const result = await call("harness_dashboard");
+
+    expect(result.structuredContent.run).toBeNull();
+    expect(result.structuredContent.runs[0].attention).toMatchObject({
+      need: "Approve “Code review”",
+      tone: "act",
+      stageId: "review",
+    });
+    expect(result.content[0].text).toContain("Needs you (1):");
+    expect(result.content[0].text).toContain("Approve “Code review”");
+  });
+
+  it("keeps the revision out of what the model reads", async () => {
+    const { call } = await setup();
+    const result = await call("harness_dashboard", { taskId: "t1" });
     const revision = result.structuredContent.run.revision;
 
     expect(typeof revision).toBe("string");
@@ -120,7 +141,7 @@ describe("HarnessMcpServer", () => {
 
   it("records an approval through the store, and a second press as already done", async () => {
     const { call, repository } = await setup();
-    const shown = (await call("harness_refresh")).structuredContent.run;
+    const shown = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run;
 
     const first = await call("harness_approve_stage", {
       taskId: "t1",
@@ -148,7 +169,7 @@ describe("HarnessMcpServer", () => {
       gate(),
       gate({ id: "later", name: "Later", status: "pending" }),
     ]);
-    const shown = (await call("harness_refresh")).structuredContent.run;
+    const shown = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run;
 
     // VS Code changes something in between.
     const current = (await repository.get("t1"))!;
@@ -178,7 +199,7 @@ describe("HarnessMcpServer", () => {
         ],
       }),
     ]);
-    const shown = (await call("harness_refresh")).structuredContent.run;
+    const shown = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run;
     expect(shown.stages[0].checklist[0]).toMatchObject({ id: "c1", holding: true });
 
     await call("harness_set_checklist_item", { taskId: "t1", itemId: "c1", checked: true });
@@ -189,6 +210,82 @@ describe("HarnessMcpServer", () => {
     const { rpc, server } = await setup();
     expect(await rpc("server/discover")).toEqual({});
     expect(await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
+  });
+});
+
+describe("running a route from the dashboard", () => {
+  const started: string[] = [];
+  const runs: RunControl = {
+    async start(taskId) {
+      started.push(taskId);
+      return { ok: true, message: "Advancing in a headless runner (pid 42)." };
+    },
+  };
+  const implementing = (status: TaskStage["status"] = "pending"): TaskStage => ({
+    ...gate(),
+    id: "impl",
+    name: "Implement",
+    kind: "implementation",
+    status,
+    requiresApproval: false,
+    subtasks: [{ id: "impl-1", title: "x", prompt: "x", status: status === "active" ? "active" : "pending" }],
+  });
+  const question = {
+    stageId: "impl",
+    stageName: "Implement",
+    subtaskId: "impl-1",
+    askedAt: "2026-10-08T09:00:00.000Z",
+    items: [{ id: "impl-1-q1", text: "Which tab?" }],
+  };
+
+  it("starts a run and reports what the runner said", async () => {
+    started.length = 0;
+    const { call } = await setup([implementing()], true, { runs });
+    const result = await call("harness_advance_route", { taskId: "t1" });
+    expect(result.structuredContent).toMatchObject({ ok: true, message: "Advancing in a headless runner (pid 42)." });
+    expect(started).toEqual(["t1"]);
+  });
+
+  it("refuses to start a second run while a session is in flight, and says a client without a runner cannot", async () => {
+    started.length = 0;
+    const running = await setup([implementing("active")], true, { runs });
+    expect((await running.call("harness_advance_route", { taskId: "t1" })).isError).toBe(true);
+    expect(started).toEqual([]);
+    const unable = await setup([implementing()]);
+    expect((await unable.call("harness_advance_route", { taskId: "t1" })).content[0].text).toMatch(/cannot start runs/);
+  });
+
+  it("asks the run holding the route to stop, and refuses when nothing is advancing", async () => {
+    const idle = await setup([implementing()]);
+    expect((await idle.call("harness_stop_route", { taskId: "t1" })).content[0].text).toMatch(/is not advancing/);
+
+    const runLease = { by: "headless" as const, pid: 42, host: "box", processStartedAt: AT, acquiredAt: AT };
+    const { call, repository } = await setup([implementing()], true, { pipeline: { runLease } });
+    expect((await call("harness_stop_route", { taskId: "t1" })).structuredContent.ok).toBe(true);
+    expect((await repository.get("t1"))?.pipeline?.stopRequestedAt).toBe(AT);
+  });
+
+  it("starts the route once a question's answers join the brief, when the setting says to", async () => {
+    started.length = 0;
+    const { call } = await setup([implementing()], true, {
+      runs,
+      advanceAfterAnswering: true,
+      pipeline: { pendingQuestion: question },
+    });
+    const result = await call("harness_answer_questions", {
+      taskId: "t1",
+      askedAt: question.askedAt,
+      answers: { "impl-1-q1": "tab 3" },
+    });
+    expect(result.structuredContent.message).toMatch(/added to the brief\. Advancing in a headless runner/);
+    expect(started).toEqual(["t1"]);
+  });
+
+  it("leaves the route where it is when the setting is off", async () => {
+    started.length = 0;
+    const { call } = await setup([implementing()], true, { runs, pipeline: { pendingQuestion: question } });
+    await call("harness_answer_questions", { taskId: "t1", askedAt: question.askedAt, answers: { "impl-1-q1": "tab 3" } });
+    expect(started).toEqual([]);
   });
 });
 

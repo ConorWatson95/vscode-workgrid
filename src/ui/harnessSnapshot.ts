@@ -1,14 +1,26 @@
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
-import { isRetryable, sessionInFlight } from "../domain/harnessControl";
-import { outstandingDeferrals } from "../domain/pipelineEngine";
+import { fatigueAdvice } from "../domain/correctionBrief";
+import { isRetryable, sessionInFlight, stageFindings } from "../domain/harnessControl";
+import {
+  isCorrectable,
+  outstandingDeferrals,
+  outstandingPullRequests,
+} from "../domain/pipelineEngine";
 import { pipelineRevision } from "../domain/pipelineRevision";
 import { redactSecrets } from "../domain/secretRedaction";
 import { stageEvidence, summariseEvidence } from "../domain/stageEvidence";
+import { sendBackTargets } from "../domain/stageRefresh";
 import { pipelineUsage, stageUsage } from "../domain/stageUsage";
 import { ChecklistItem, TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { TaskWorkspace } from "../domain/taskWorkspace";
-import { stagePresentation } from "./stagePresentation";
-import { TaskGroupId, groupForTask, groupLabel } from "./taskGrouping";
+import { activeStageLabel, stagePresentation } from "./stagePresentation";
+import {
+  TaskGroupId,
+  externalGate,
+  externalWaitSince,
+  groupForTask,
+  groupLabel,
+} from "./taskGrouping";
 
 /**
  * What a client other than the tree is shown about a run: plain JSON, derived on
@@ -44,6 +56,34 @@ export interface RunSummary {
   currentStage?: string;
   ticket?: string;
   updatedAt: string;
+  /** What the board says about this run in one line, and since when; see `attentionOf`. */
+  attention: Attention;
+  progress: { done: number; total: number };
+  /** One state per stage, in route order, for the board's progress strip. */
+  strip: StageState[];
+}
+
+/**
+ * The one line a board row says about a run: what has to happen next and who does it.
+ *
+ * `need` is set only when the run is the operator's to move, phrased as the act —
+ * "Approve …", "Answer 2 questions …" — because a board is scanned to decide what to
+ * do, and a status ("awaiting approval") makes the reader translate it into one.
+ * `since` is when that state began, so a row stuck for three days does not look like
+ * one stuck for ten minutes.
+ *
+ * Mirrors `groupForTask`'s order exactly, branch for branch, so the line on a row
+ * always describes the reason the row is in its group.
+ */
+export interface Attention {
+  need?: string;
+  /** Present-tense description when nothing is asked of the operator. */
+  status: string;
+  since?: string;
+  /** Which colour the row carries: what kind of thing is being asked, or none. */
+  tone: "ask" | "fail" | "act" | "run" | "wait" | "idle" | "done";
+  /** The stage the row opens on: the one the attention is about. */
+  stageId?: string;
 }
 
 export interface ChecklistView {
@@ -81,6 +121,18 @@ export interface StageView {
   checklist: ChecklistView[];
   canApprove: boolean;
   canRetry: boolean;
+  /** Has output a correction can start from — **Fix This Stage**. */
+  canCorrect: boolean;
+  /** Has run, so it can be discarded and run again. */
+  canRerun: boolean;
+  /** Earlier stages the route lets this one send findings back to, nearest first. */
+  sendBack?: {
+    targets: { id: string; name: string; reopens: number; correctable: boolean }[];
+    /** The stage recorded no reply, so the person supplies what went wrong. */
+    needsFindings: boolean;
+  };
+  /** Said before another repair, once a stage has been repaired often enough to matter. */
+  repairAdvice?: string;
   /** Why a visible action is not offered here, when that is not obvious. */
   actionNote?: string;
   /** The last thing the stage said, capped; the whole report is a separate read. */
@@ -93,7 +145,23 @@ export interface RunSnapshot extends RunSummary {
   /** Passed back with any decision, so a write refuses if the run moved since. */
   revision: string;
   stages: StageView[];
-  question?: { stageName: string; askedAt: string; live: boolean; items: string[] };
+  question?: {
+    stageName: string;
+    askedAt: string;
+    live: boolean;
+    items: string[];
+    /** `items`' ids, in the same order, so answers can name what they answer. */
+    itemIds: string[];
+    /** Answered from outside VS Code and waiting for it to deliver. */
+    submitted: boolean;
+  };
+  /**
+   * The process advancing this route, as its lease records it. Not probed: the board
+   * is re-read on every change, and asking the OS whether each holder is alive would
+   * spawn a process per render. A crashed holder therefore still shows here until
+   * the next advance takes its lease over.
+   */
+  advancing?: { by: "vscode" | "headless"; pid: number; since: string; logPath?: string; stopRequested: boolean };
   deferrals: { id: string; text: string; raisedBy: string }[];
   evidenceLine?: string;
   /** Name of a stage with a session running right now, if any. */
@@ -115,6 +183,7 @@ export function summariseRun(task: TaskWorkspace): RunSummary {
     heldCalls: 0,
     feedback: task.externalFeedback,
   });
+  const stages = task.pipeline?.stages ?? [];
   return {
     taskId: task.id,
     name: task.name,
@@ -124,7 +193,121 @@ export function summariseRun(task: TaskWorkspace): RunSummary {
     currentStage: currentStage(task.pipeline)?.name,
     ticket: task.origin?.ref,
     updatedAt: task.updatedAt,
+    attention: attentionOf(task, group),
+    progress: {
+      done: stages.filter((s) => s.status === "passed" || s.status === "skipped").length,
+      total: stages.length,
+    },
+    strip: stages.map((stage) =>
+      stateOf(stage, stage.subtasks.some((s) => s.status === "failed") ? "stage-failed" : ""),
+    ),
   };
+}
+
+export function attentionOf(task: TaskWorkspace, group: TaskGroupId): Attention {
+  const pipeline = task.pipeline;
+  const stages = pipeline?.stages ?? [];
+  const quoted = (stage: { name: string }) => `“${stage.name}”`;
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+  if (group === "done") return { status: "All stages resolved", tone: "done" };
+  if (!pipeline || stages.length === 0) return { status: "No route", tone: "idle" };
+
+  if (group === "needs-you") {
+    const question = pipeline.pendingQuestion;
+    const unanswered = (question?.items ?? []).filter((i) => !(i.answer ?? "").trim()).length;
+    if (question && unanswered > 0) {
+      return {
+        need: `Answer ${plural(unanswered, "question")} from ${quoted({ name: question.stageName })}`,
+        status: `${question.stageName} is asking`,
+        since: question.askedAt || undefined,
+        tone: "ask",
+        stageId: question.stageId,
+      };
+    }
+    const denials = pipeline.pendingDenials;
+    const ungranted = (denials?.items ?? []).filter((i) => !i.granted).length;
+    if (denials && ungranted > 0) {
+      return {
+        need: `Grant or refuse ${plural(ungranted, "blocked call")} in ${quoted({ name: denials.stageName })}`,
+        status: `${denials.stageName} is blocked`,
+        since: denials.refusedAt,
+        tone: "ask",
+        stageId: denials.stageId,
+      };
+    }
+    const failed = stages.find((s) => s.status === "failed");
+    if (failed) {
+      const at = failed.subtasks.find((s) => s.status === "failed")?.finishedAt ?? failed.finishedAt;
+      return { need: `${quoted(failed)} failed — retry or fix`, status: "Failed", since: at, tone: "fail", stageId: failed.id };
+    }
+    const pr = outstandingPullRequests(pipeline)[0];
+    if (pr) {
+      const from = stages.find((s) => s.id === pr.stageId);
+      return {
+        need: `Merge the pull request${from ? ` from ${quoted(from)}` : ""}`,
+        status: "Pull request open",
+        since: pr.at,
+        tone: "act",
+        stageId: pr.stageId,
+      };
+    }
+    const external = externalGate(pipeline);
+    if (external) {
+      return {
+        need: `Read the reply on the ticket — ${quoted(external)}`,
+        status: "Reply on the ticket",
+        since: task.externalFeedback?.latest?.at ?? externalWaitSince(pipeline),
+        tone: "act",
+        stageId: external.id,
+      };
+    }
+    const awaiting = stages.find((s) => s.status === "awaiting-approval");
+    if (awaiting) {
+      const items = itemsForGate(pipeline, awaiting.id).length;
+      const need = awaiting.blocked?.trim()
+        ? `Review why ${quoted(awaiting)} was held`
+        : awaiting.kind === "humanVerification" && items > 0
+          ? `Verify ${quoted(awaiting)} · ${plural(items, "item")}`
+          : `Approve ${quoted(awaiting)}`;
+      return { need, status: "Awaiting you", since: awaiting.finishedAt, tone: "act", stageId: awaiting.id };
+    }
+    const next = stages.find((s) => s.status === "pending");
+    if (pipeline.lastAdvance) {
+      return {
+        need: next ? `Advance again — stopped before ${quoted(next)}` : "Advance again",
+        status: pipeline.lastAdvance.reason === "exhausted" ? "Hit the step limit" : "Stopped",
+        since: pipeline.lastAdvance.at,
+        tone: "act",
+        stageId: next?.id,
+      };
+    }
+    return { need: next ? `Act on ${quoted(next)}` : "Needs you", status: "Needs you", tone: "act", stageId: next?.id };
+  }
+
+  if (group === "working") {
+    const active = stages.find((s) => s.status === "active");
+    const subtask = active?.subtasks.find((s) => s.status === "active");
+    return {
+      status: activeStageLabel(pipeline) ?? (active ? `${active.name}…` : "Working"),
+      since: subtask?.startedAt ?? active?.startedAt,
+      tone: "run",
+      stageId: active?.id,
+    };
+  }
+
+  if (group === "waiting-others") {
+    const gate = externalGate(pipeline);
+    return {
+      status: gate ? `${gate.name} — with others` : "With others",
+      since: externalWaitSince(pipeline),
+      tone: "wait",
+      stageId: gate?.id,
+    };
+  }
+
+  const next = stages.find((s) => s.status === "pending");
+  return { status: next ? `Next: ${next.name}` : "Idle", tone: "idle", stageId: next?.id };
 }
 
 /**
@@ -159,6 +342,15 @@ export function snapshotRun(task: TaskWorkspace): RunSnapshot {
       items: pipeline.pendingQuestion.items
         .filter((item) => !item.answer)
         .map((item) => item.text),
+      itemIds: pipeline.pendingQuestion.items.filter((item) => !item.answer).map((item) => item.id),
+      submitted: !!pipeline.pendingQuestion.submittedAt,
+    },
+    advancing: pipeline?.runLease && {
+      by: pipeline.runLease.by,
+      pid: pipeline.runLease.pid,
+      since: pipeline.runLease.acquiredAt,
+      ...(pipeline.runLease.logPath ? { logPath: pipeline.runLease.logPath } : {}),
+      stopRequested: !!pipeline.stopRequestedAt,
     },
     deferrals: pipeline
       ? outstandingDeferrals(pipeline).map((item) => ({
@@ -189,6 +381,9 @@ function stageView(
   const canApprove = stage.status === "awaiting-approval" && !running;
   const canRetry = isRetryable(stage) && !running;
   const outstanding = checklist.filter((item) => item.holding);
+  const started = stage.status !== "pending" || stage.subtasks.some((s) => s.status !== "pending");
+  const targets = started && !running ? sendBackTargets(pipeline, stage.id) : [];
+  const index = pipeline.stages.indexOf(stage);
 
   return {
     id: stage.id,
@@ -209,6 +404,22 @@ function stageView(
     checklist,
     canApprove,
     canRetry,
+    canCorrect: !running && isCorrectable(stage),
+    canRerun: !running && started,
+    sendBack:
+      targets.length > 0
+        ? {
+            targets: targets.map((target) => ({
+              id: target.id,
+              name: target.name,
+              // Everything from the target to this stage goes, so the count is the price.
+              reopens: index - pipeline.stages.indexOf(target) + 1,
+              correctable: isCorrectable(target),
+            })),
+            needsFindings: !stageFindings(stage),
+          }
+        : undefined,
+    repairAdvice: fatigueAdvice(stage),
     actionNote:
       running && (stage.status === "awaiting-approval" || isRetryable(stage))
         ? `A session is running on "${running.name}"; decisions wait until it stops.`

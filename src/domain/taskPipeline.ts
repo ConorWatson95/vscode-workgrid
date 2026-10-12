@@ -8,6 +8,7 @@
  */
 
 import { JudgementItem } from "./judgementItems";
+import type { RunLease } from "./runLease";
 import {
   ChecklistAudience,
   StageAuthority,
@@ -779,6 +780,17 @@ export interface TaskPipeline {
    */
   pendingQuestion?: PendingQuestion;
   /**
+   * The process driving this route right now, if any (`domain/runLease.ts`). In the
+   * state file because the extension and a headless runner are separate processes,
+   * and each has to see that the other is already advancing a task.
+   */
+  runLease?: RunLease;
+  /**
+   * A client that does not own the run asked it to stop. The owner reads this off the
+   * state file and cancels its own run, since it may be another process.
+   */
+  stopRequestedAt?: string;
+  /**
    * Tool calls the permission layer refused, held until dealt with.
    *
    * Persisted for the same reason questions are: a notification is transient and
@@ -1076,6 +1088,15 @@ export interface PendingQuestion {
    * waiting" as normal rather than an error.
    */
   liveCallId?: string;
+  /**
+   * When a client other than the extension finished answering, asking the extension
+   * to deliver the answers (`domain/hostRequests.ts`).
+   *
+   * A request rather than the delivery itself: a live answer only counts once the
+   * process holding the `ask_user` call writes it, and only the extension can be
+   * that process. Listed explicitly here because `normalizeQuestion` lists its fields.
+   */
+  submittedAt?: string;
 }
 
 /** One question and, once given, its answer. */
@@ -1284,5 +1305,6 @@ function normalizeQuestion(stored: unknown): PendingQuestion | undefined {
     items,
     context: typeof q.context === "string" && q.context.trim() ? q.context.trim() : undefined,
     liveCallId: typeof q.liveCallId === "string" ? q.liveCallId : undefined,
+    submittedAt: typeof q.submittedAt === "string" ? q.submittedAt : undefined,
   };
 }

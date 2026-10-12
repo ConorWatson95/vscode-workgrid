@@ -16,7 +16,6 @@ import { ok } from "../utilities/result";
 import {
   correctStage,
   retryStage,
-  ruleInsertionIndex,
   undoCorrection,
   undoableCorrection,
   outstandingPullRequests,
@@ -43,17 +42,15 @@ import {
 import {
   refreshPendingStages,
   refreshStageChecks,
-  addMissingStages,
   revertToStage,
   sendBackTargets,
   sendBackToStage,
   formatSendBackNote,
-  repositionRuleStages,
-  repositionRouteStages,
-  syncHandoffs,
 } from "../domain/stageRefresh";
 import { approvalAdvice } from "../domain/approvalAdvice";
+import { driveRoute } from "../services/routeDriver";
 import { briefFault, fatigueAdvice } from "../domain/correctionBrief";
+import { stageFindings } from "../domain/harnessControl";
 import { deferralHeadline, isAbridged } from "../domain/deferralText";
 import { rowTask } from "../ui/rowTask";
 import { HANDOFF_EXPERIMENT } from "../domain/pipelineExperiment";
@@ -1856,14 +1853,6 @@ async function sendBackToStageCommand(
   }
 }
 
-/** Everything a stage's subtasks reported, which is where findings live. */
-function stageFindings(stage: TaskStage): string {
-  return stage.subtasks
-    .map((subtask) => subtask.reply?.trim())
-    .filter((reply): reply is string => !!reply)
-    .join("\n\n");
-}
-
 async function approveStageCommand(
   ctx: CommandContext,
   arg: unknown,
@@ -2424,154 +2413,46 @@ async function advanceRouteCommand(
     return;
   }
 
-  if (ctx.runner.isRunning(task.id)) {
-    void vscode.window.showInformationMessage(
-      `"${task.name}" is already advancing. Stop the agent to interrupt it.`,
-    );
-    return;
-  }
-
-  // Reload the instructions of stages that have not started yet. A pipeline is a
-  // snapshot, which is right for its *structure* — a route edited mid-flight must
-  // not rewrite a task already moving through it — but it also froze each stage's
-  // intent, so a wrong instruction could only be fixed by recreating the task.
-  // Stages that have already run keep what they ran with, so history stays true.
-  let advancing = task;
-
-  // Stages the route gained since this task was created, before the intent refresh so
-  // a newly added stage gets the current wording too. The remedy for a route that was
-  // missing a step used to be doing it by hand or throwing the task away.
-  if (ctx.stageDefinitions && task.pipeline) {
-    const grown = addMissingStages(task.pipeline, ctx.stageDefinitions());
-    if (grown.added.length > 0) {
-      advancing = {
-        ...task,
-        pipeline: grown.pipeline,
-        updatedAt: new Date().toISOString(),
-      };
-      await ctx.repository.save(advancing);
-      ctx.logger.info(
-        `Harness [${task.name}] added ${grown.added.join(", ")} from harness.json.`,
-      );
-    }
-    if (grown.tooLate.length > 0) {
-      // Shown, not only logged. The comment this replaces said "the only way to know is
-      // to be told" and then told the output channel — so a route that gained a step in
-      // front of a gate already running refused it in silence, and the advance looked
-      // exactly like one where config had never changed. The remedy is named because it
-      // is a single command, and working it out from the route order is the diagnosis
-      // by hand this runtime exists to retire.
-      const remedy = grown.blockedBy
-        ? `Re-run This Stage… on "${grown.blockedBy}" first, or do those steps by hand.`
-        : "Re-run an earlier stage first, or do those steps by hand.";
-      const message =
-        `"${task.name}" cannot run ${grown.tooLate.join(", ")} — the route has moved ` +
-        `past where they belong. ${remedy}`;
-      ctx.logger.warn(`Harness [${task.name}] ${message}`);
-      void vscode.window.showWarningMessage(message);
-    }
-  }
-
-  // Stages the route *reordered* since this task was created. Done before the rule
-  // stages are repositioned, because their placement is computed relative to the route
-  // stages around them. A task whose order already matches config sees no change, and a
-  // stage that has begun is pinned — so this can only ever repair what is still ahead.
-  if (ctx.stageDefinitions && advancing.pipeline) {
-    const reordered = repositionRouteStages(advancing.pipeline, ctx.stageDefinitions());
-    if (reordered.moved.length > 0) {
-      advancing = {
-        ...advancing,
-        pipeline: reordered.pipeline,
-        updatedAt: new Date().toISOString(),
-      };
-      await ctx.repository.save(advancing);
-      ctx.tree.refresh();
-      ctx.logger.info(
-        `Harness [${advancing.name}] moved ${reordered.moved.join(", ")} into the order ` +
-          "harness.json now declares. Stages that have already run were left where they ran.",
-      );
-    }
-  }
-
-  if (ctx.stageDefinitions && advancing.pipeline) {
-    const refreshed = refreshPendingStages(advancing.pipeline, ctx.stageDefinitions());
-    if (refreshed.changed.length > 0) {
-      advancing = {
-        ...advancing,
-        pipeline: refreshed.pipeline,
-        updatedAt: new Date().toISOString(),
-      };
-      await ctx.repository.save(advancing);
-      ctx.logger.info(
-        `Harness [${task.name}] reloaded ${refreshed.changed.join(", ")} from harness.json.`,
-      );
-    }
-  }
-
-  // Brings handoff flags in line with config and backfills the conclusions of
-  // stages that already ran. Without this the answer to "will my task benefit"
-  // would be "recreate it", which throws away everything already approved.
-  if (ctx.stageDefinitions && advancing.pipeline) {
-    const synced = syncHandoffs(
-      advancing.pipeline,
-      ctx.stageDefinitions(),
-      new Date().toISOString(),
-    );
-    if (synced.enabled.length > 0 || synced.backfilled.length > 0) {
-      advancing = {
-        ...advancing,
-        pipeline: synced.pipeline,
-        updatedAt: new Date().toISOString(),
-      };
-      await ctx.repository.save(advancing);
-      ctx.logger.info(
-        `Harness [${advancing.name}] handoffs: ` +
-          (synced.enabled.length > 0 ? `enabled on ${synced.enabled.join(", ")}` : "") +
-          (synced.enabled.length > 0 && synced.backfilled.length > 0 ? "; " : "") +
-          (synced.backfilled.length > 0
-            ? `carried forward what ${synced.backfilled.join(", ")} already concluded`
-            : "") +
-          ".",
-      );
-    }
-  }
-
-  // Repairs a task whose reviews were spliced after a deployment by an earlier
-  // build. Done here rather than as a stored-state migration because it depends on
-  // stage *kinds*, which only became distinct recently — a task created before that
-  // has no deployment stage to get in front of, and repairs itself once its route
-  // is reloaded. Only stages that have not run move.
-  if (advancing.pipeline) {
-    const ordered = repositionRuleStages(advancing.pipeline, ruleInsertionIndex);
-    if (ordered.moved.length > 0) {
-      advancing = {
-        ...advancing,
-        pipeline: ordered.pipeline,
-        updatedAt: new Date().toISOString(),
-      };
-      await ctx.repository.save(advancing);
-      ctx.tree.refresh();
-      ctx.logger.info(
-        `Harness [${advancing.name}] moved ${ordered.moved.join(", ")} ahead of the ` +
-          "first deployment or gate, so they run before anything is shipped.",
-      );
-    }
-  }
-
   // Status-bar progress, not a notification. A route runs for many minutes and
   // several can run at once; one dismissable toast per task would bury the ones
   // that actually need an answer. The sidebar already shows which stage and
   // subtask each task is on, and Stop Agent is the cancel affordance — so only
   // outcomes that need a human get a notification, below.
-  const report = await withStatus(`Advancing "${task.name}"`, (step) => {
+  //
+  // `driveRoute` takes the run lease, reloads config into the pipeline and drives it —
+  // the same steps a headless runner takes, so the two cannot drift.
+  const driven = await withStatus(`Advancing "${task.name}"`, (step) => {
     step("asking the engine what is next");
-    return ctx.runner.advance(advancing);
+    return driveRoute(
+      {
+        repository: ctx.repository,
+        runner: ctx.runner,
+        leases: ctx.leases,
+        definitions: () => ctx.stageDefinitions?.(),
+        logger: ctx.logger,
+        now: () => new Date().toISOString(),
+        watchState: ctx.onStateFileChanged
+          ? (listener) => {
+              const subscription = ctx.onStateFileChanged!(listener);
+              return () => subscription.dispose();
+            }
+          : undefined,
+      },
+      task.id,
+    );
   });
+  if (driven.kind === "refused") {
+    void vscode.window.showInformationMessage(driven.message);
+    return;
+  }
+  // Shown, not only logged: an advance that declines a stage the project just declared
+  // is otherwise indistinguishable from one where config never changed.
+  for (const warning of driven.warnings) {
+    void vscode.window.showWarningMessage(`"${task.name}" ${warning}`);
+  }
+  const report = driven.report;
 
   ctx.tree.refresh();
-  for (const step of report.steps) {
-    ctx.logger.info(`Harness [${task.name}] ${step}`);
-  }
 
   const outcome = report.outcome;
 

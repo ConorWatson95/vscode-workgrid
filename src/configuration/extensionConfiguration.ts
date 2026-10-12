@@ -20,7 +20,8 @@ const SECTION = "taskWorkspaces";
  * caller uses `HarnessSettings` directly and gets the readers only.
  */
 export class ExtensionConfiguration {
-  private settings(scope?: vscode.Uri): HarnessSettings {
+  /** Every setting as one scope resolves it, for code that takes a `HarnessSettings`. */
+  settings(scope?: vscode.Uri): HarnessSettings {
     // WorkspaceConfiguration already satisfies SettingsReader.
     return new HarnessSettings(vscode.workspace.getConfiguration(SECTION, scope ?? null));
   }

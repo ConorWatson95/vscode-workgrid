@@ -43,9 +43,46 @@ advertises the `io.modelcontextprotocol/ui` extension, and marks them
 `visibility: ["app"]`. So the model can read a run and cannot approve one. Approval is a
 button a person presses, so "Claude says it looks good, so approved" has no path.
 
-Everything else stays in VS Code: stop, re-run, correct, send back, advance, and approving
-a stage that owes a pull request. Each of those either discards work or needs a dialog
-that the dashboard should not reimplement.
+Also app-only: `harness_correct_stage`, `harness_rerun_stage`, `harness_send_back`,
+`harness_answer_questions`, `harness_advance_route` and `harness_stop_route`. Approving a
+stage that owes a pull request stays in VS Code, which has the dialog for it.
+
+## Running a route without VS Code
+
+`harness_advance_route` starts `dist/harnessRunner.js advance --repo <root> --task <id>`
+(`src/runner/main.ts`). It always runs headless, even with VS Code open, so the pane
+never depends on a window.
+
+- **Same runner as the extension.** Both build it with `services/stageRuntime.ts` and
+  drive it with `services/routeDriver.ts`. That covers the pre-advance sync
+  (`domain/advancePreparation.ts`) and the run lease.
+- **Settings come from VS Code's own files**: the user `settings.json`, then the
+  repository's `.vscode/settings.json` (`configuration/vscodeSettingsFiles.ts`). The log
+  names the files it read. Profiles, `.code-workspace` files and language-scoped settings
+  are not read.
+- **Started in two steps.** `--detach` re-launches itself detached and exits at once. On
+  Windows a host that tree-kills a timed-out tool call reaches a detached child while its
+  parent is alive, but not once the parent has gone. Probed both ways.
+- **A run lease** (`TaskPipeline.runLease`, `domain/runLease.ts`) stops two processes
+  advancing one task. It is taken inside `repository.update`. A holder the OS says is
+  dead is taken over, checked by pid *and* process start time. A probe that fails, or a
+  holder on another host, counts as alive. VS Code's stale-subtask sweep skips a task
+  another live process holds.
+- **Stop is a request in the state file** (`stopRequestedAt`). Whoever holds the lease
+  watches the state directory and cancels its own run, then clears the request when it
+  releases the lease. A request older than the lease is ignored.
+- **The launcher waits for the lease** (`mcp/runLauncher.ts`), not just the spawn. A
+  runner that refuses, such as VS Code holding the task, has its reason read from the log
+  and shown.
+- **Logs** go to `<VS Code globalStorage>/task-workspaces.task-workspaces/runner-logs/<task>.log`.
+  The storage folder is shared with the extension, so its activation sweep reaps sessions
+  a crashed runner left behind.
+
+**Phase 1 limits.** Live `ask_user` and the permission gate are forced off headlessly,
+because nobody is attached to answer either mid-turn. A stage that needs information
+replies NEEDS-INFO and the route stops. Answering it in the pane adds the answers to the
+brief, and with `advanceAfterAnswering` on it starts the run again. A refused tool call
+stops the stage, the same as with the gate off in VS Code.
 
 ## Concurrency
 

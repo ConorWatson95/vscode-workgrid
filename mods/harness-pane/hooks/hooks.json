@@ -1,0 +1,4 @@
+{
+  "description": "The harness pane hooks module",
+  "modules": ["./register.jsx"]
+}

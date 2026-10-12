@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { GitClient } from "../git/gitClient";
@@ -8,6 +9,10 @@ import { NodeStateFileIo } from "../persistence/nodeStateFileIo";
 import { NodeStateFileLock } from "../persistence/nodeStateFileLock";
 import { TaskStateStore } from "../persistence/taskStateStore";
 import { HarnessControlService } from "../services/harnessControlService";
+import { loadHarness } from "../services/reviewRulesService";
+import { loadHeadlessSettings } from "../runner/headlessHost";
+import { RunLauncher } from "./runLauncher";
+import { BoardFeed } from "./boardFeed";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
 import { HarnessMcpServer } from "./harnessMcpServer";
 
@@ -68,16 +73,34 @@ async function main(): Promise<void> {
   const repository = await store.forRepository(repositoryRoot);
   logger.info(`serving ${repositoryRoot} from ${repository.path}`);
 
-  const service = new HarnessControlService(repository, repositoryRoot, {
-    now: () => new Date().toISOString(),
-  });
+  // The extension's own settings, read from VS Code's files, so a custom
+  // `harnessConfigPath` is honoured here too and the runner this starts is told nothing
+  // different from what the window would have been.
+  const host = loadHeadlessSettings(repositoryRoot);
+  for (const problem of host.read.problems) logger.warn(`settings not applied: ${problem}`);
+
+  // Read per decision rather than once, so an edit to harness.json reaches the next
+  // re-run without restarting the server.
+  const service = new HarnessControlService(
+    repository,
+    repositoryRoot,
+    { now: () => new Date().toISOString() },
+    () => loadHarness(repositoryRoot, { configuredPath: host.settings.harnessConfigPath() }),
+    new RunLauncher({ repository, repositoryRoot, storageDir: host.storageDir }),
+  );
+  if (process.argv.includes("--watch")) {
+    watchBoard(new BoardFeed(service, repositoryRoot), path.dirname(repository.path), logger);
+    return;
+  }
   const server = new HarnessMcpServer(
     service,
     HARNESS_DASHBOARD_HTML,
     { name: "task-workspaces-harness", version: "0.1.0", repositoryRoot },
     logger,
+    () => host.settings.advanceAfterAnswering(),
   );
 
+  const inFlight = new Set<Promise<void>>();
   const input = readline.createInterface({ input: process.stdin });
   input.on("line", (line) => {
     if (!line.trim()) return;
@@ -90,15 +113,93 @@ async function main(): Promise<void> {
       );
       return;
     }
-    void server
+    const pending: Promise<void> = server
       .handle(message as Parameters<HarnessMcpServer["handle"]>[0])
       .then((reply) => {
         if (reply) process.stdout.write(`${JSON.stringify(reply)}\n`);
       })
-      .catch((error: unknown) => logger.error("unhandled", error));
+      .catch((error: unknown) => logger.error("unhandled", error))
+      .finally(() => inFlight.delete(pending));
+    inFlight.add(pending);
   });
-  input.on("close", () => process.exit(0));
+  // A host that writes its requests and closes stdin at once — a mod's one-shot
+  // `$.process.run` does exactly that — lost every reply still being computed to an
+  // exit that raced it. Answer what was asked, then go.
+  input.on("close", () => {
+    void Promise.allSettled([...inFlight]).then(() => process.exit(0));
+  });
 }
+
+/**
+ * `--watch`: push the board as JSON lines for as long as the host holds the process.
+ *
+ * The *directory* is watched, never the file, because every write is an atomic
+ * rename that replaces the file a file watch was holding. Events arrive in bursts
+ * (temp file, rename, lock), so they are coalesced, and only one read runs at a
+ * time — parsing a 16MB state file takes longer than the gap between bursts. The
+ * interval is the backstop for a watcher that misses an event, which `fs.watch`
+ * is documented to do; it costs one parse when nothing changed, and sends nothing.
+ *
+ * It does not end on stdin closing: a mod's `$.process.spawn` with no input closes
+ * stdin before the child has started, so that would end the feed at once. The host
+ * ends it by killing it when the pane closes; if the host itself dies first, the
+ * parent check stops a feed nobody is reading from polling a 16MB file forever.
+ */
+function watchBoard(feed: BoardFeed, directory: string, logger: Logger): void {
+  const parent = process.ppid;
+  let running = false;
+  let again = false;
+  let timer: NodeJS.Timeout | undefined;
+
+  const poll = async (): Promise<void> => {
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        again = false;
+        for (const message of await feed.poll()) {
+          process.stdout.write(`${JSON.stringify(message)}\n`);
+        }
+      } while (again);
+    } catch (error) {
+      logger.error("board read failed", error);
+    } finally {
+      running = false;
+    }
+  };
+  const soon = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void poll(), WATCH_DEBOUNCE_MS);
+  };
+
+  try {
+    fs.watch(directory, soon).on("error", (error) => logger.error("watch failed", error));
+  } catch (error) {
+    logger.error(`cannot watch ${directory}; falling back to the interval alone`, error);
+  }
+  setInterval(() => void poll(), WATCH_FALLBACK_MS);
+  setInterval(() => {
+    if (!alive(parent)) process.exit(0);
+  }, PARENT_CHECK_MS);
+  void poll();
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists and is not ours to signal, which is still alive.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+const WATCH_DEBOUNCE_MS = 200;
+const WATCH_FALLBACK_MS = 30_000;
+const PARENT_CHECK_MS = 5_000;
 
 main().catch((error: unknown) => {
   process.stderr.write(`[harness-mcp] fatal: ${formatLogError(error)}\n`);

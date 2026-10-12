@@ -29,6 +29,13 @@ async function main() {
       entryPoints: ["src/mcp/main.ts"],
       outfile: "dist/harnessMcpServer.js",
     }),
+    // The headless runner the MCP server starts to advance a route. Same rule: it
+    // must run where VS Code is not.
+    esbuild.context({
+      ...shared,
+      entryPoints: ["src/runner/main.ts"],
+      outfile: "dist/harnessRunner.js",
+    }),
   ]);
 
   if (watch) {

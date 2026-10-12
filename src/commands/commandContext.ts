@@ -21,6 +21,7 @@ import { Logger } from "../logging/logger";
 import { VisualStudioService } from "../projects/visualStudioService";
 import { ReviewPlanService } from "../services/reviewPlanService";
 import { PipelineRunner } from "../services/pipelineRunner";
+import { RunLeaseService } from "../services/runLeaseService";
 import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { PermissionRulesService } from "../services/permissionRulesService";
 import { PermissionGateService } from "../services/permissionGateService";
@@ -60,6 +61,13 @@ export interface CommandContext {
   visualStudio: VisualStudioService;
   reviewPlans: ReviewPlanService;
   runner: PipelineRunner;
+  /**
+   * This window's claim on the routes it advances, in the state file, so a headless
+   * runner and this window never drive one task at once (`domain/runLease.ts`).
+   */
+  leases: RunLeaseService;
+  /** Fires when another process replaces the state file. */
+  onStateFileChanged?: (listener: () => void) => { dispose(): void };
   /**
    * Who holds which worktree, and which of a finished task's may be tidied away.
    * Optional so the harness commands work without it, as they did before.
