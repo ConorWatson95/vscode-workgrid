@@ -1,4 +1,5 @@
 import { liveHeldCalls } from "../domain/heldCalls";
+import { offeredCheckIds } from "../domain/checkCoverage";
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
 import { fatigueAdvice } from "../domain/correctionBrief";
 import { isRetryable, sessionInFlight, stageFindings } from "../domain/harnessControl";
@@ -120,6 +121,12 @@ export interface StageView {
   elapsedMs: number;
   /** Items a person answers at this stage: a gate's verification items, or the stage's own steps. */
   checklist: ChecklistView[];
+  /**
+   * Checks this gate has recorded an outcome for — the only ones an item may be
+   * attached to, since naming a check that never ran would read as unverified rather
+   * than as the gap it is. Absent off a gate and before the gate's check has run.
+   */
+  checks?: { id: string; passed: boolean }[];
   canApprove: boolean;
   canRetry: boolean;
   /** Has output a correction can start from — **Fix This Stage**. */
@@ -422,6 +429,7 @@ function stageView(
     costUsd: usage.costUsd,
     elapsedMs: usage.elapsedMs,
     checklist,
+    checks: checksOf(stage),
     canApprove,
     canRetry,
     canCorrect: !running && isCorrectable(stage),
@@ -472,6 +480,12 @@ function checklistFor(
   return (stage.checklist ?? [])
     .filter((item) => item.kind === "action")
     .map((item) => itemView(item, new Set(item.checked ? [] : [item.id])));
+}
+
+function checksOf(stage: TaskStage): StageView["checks"] {
+  if (stage.kind !== "humanVerification") return undefined;
+  const offered = offeredCheckIds(stage).map((outcome) => ({ id: outcome.id, passed: outcome.passed }));
+  return offered.length > 0 ? offered : undefined;
 }
 
 function itemView(item: ChecklistItem, holding: ReadonlySet<string>): ChecklistView {

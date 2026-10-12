@@ -321,6 +321,74 @@ export class HarnessMcpServer {
         _meta: appOnly,
       },
       {
+        name: "harness_note_checklist_item",
+        title: "Note on verification item",
+        description:
+          "Dashboard-only: records what the operator observed for one item, without " +
+          "changing whether it is ticked. An empty note clears it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            itemId: { type: "string" },
+            note: { type: "string" },
+          },
+          required: ["taskId", "itemId", "note"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_retire_checklist_item",
+        title: "Withdraw verification item",
+        description:
+          "Dashboard-only: withdraws an item nothing can answer, with the operator's " +
+          "reason. The gate stops holding on it and the reason stays on the report.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            itemId: { type: "string" },
+            reason: { type: "string" },
+          },
+          required: ["taskId", "itemId", "reason"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_cover_checklist_item",
+        title: "Attach a check to a verification item",
+        description:
+          "Dashboard-only: names the check that answers an item, ticking it if that check " +
+          "passed. Omit checkId to record that nothing automated answers it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            itemId: { type: "string" },
+            checkId: { type: "string" },
+          },
+          required: ["taskId", "itemId"],
+        },
+        _meta: appOnly,
+      },
+      {
+        name: "harness_settle_deferral",
+        title: "Settle a declined item",
+        description:
+          "Dashboard-only: records who owns work a stage declined as belonging to no " +
+          "stage, or why it needs nobody. The route holds before shipping until each is settled.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            itemId: { type: "string" },
+            resolution: { type: "string" },
+          },
+          required: ["taskId", "itemId", "resolution"],
+        },
+        _meta: appOnly,
+      },
+      {
         name: "harness_correct_stage",
         title: "Fix stage",
         description: "Dashboard-only: files the operator's finding as a correction to a stage that ran.",
@@ -522,6 +590,38 @@ export class HarnessMcpServer {
         return decision(
           await this.service.setChecklistItem(text("taskId") ?? "", text("itemId") ?? "", args.checked === true),
         );
+      case "harness_note_checklist_item":
+        return decision(
+          await this.service.noteChecklistItem(text("taskId") ?? "", text("itemId") ?? "", text("note") ?? ""),
+        );
+      case "harness_retire_checklist_item":
+        return decision(
+          await this.service.retireChecklistItem(
+            text("taskId") ?? "",
+            text("itemId") ?? "",
+            text("reason") ?? "",
+          ),
+        );
+      case "harness_cover_checklist_item":
+        return decision(
+          await this.service.coverChecklistItem(text("taskId") ?? "", text("itemId") ?? "", text("checkId") || undefined),
+        );
+      case "harness_settle_deferral": {
+        const taskId = text("taskId") ?? "";
+        const settled = await this.service.settleDeferral(
+          taskId,
+          text("itemId") ?? "",
+          text("resolution") ?? "",
+        );
+        // The last item holding a route is settled so that the route can ship, so the
+        // same setting that advances after answering advances after this.
+        if (!settled.ok || !settled.value.readyToAdvance || !this.advanceAfterAnswering?.()) {
+          return decision(settled);
+        }
+        const advanced = await this.service.advance(taskId);
+        const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
+        return decision(ok({ ...settled.value, message: `${settled.value.message} ${then}` }));
+      }
       case "harness_correct_stage":
         return decision(
           await this.service.correctStage(

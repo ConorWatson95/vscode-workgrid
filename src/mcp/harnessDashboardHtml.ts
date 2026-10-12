@@ -188,6 +188,12 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   .checks input { margin: 3px 0 0; width: 15px; height: 15px; flex: none; accent-color: var(--accent); }
   .checks .ticked > span { color: var(--muted); }
   .checks small { display: block; color: var(--muted); font-size: 11.5px; }
+  .itemacts { display: flex; gap: 10px; margin: -2px 0 4px 24px; }
+  .linkbtn { border: 0; background: none; padding: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; }
+  .linkbtn:disabled { color: var(--muted); cursor: default; }
+  .editor { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 2px 0 8px 24px; }
+  .editor input[type=text], .editor select { flex: 1 1 220px; min-width: 0; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; }
+  .defer li { margin-bottom: 6px; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
   .actions input[type=text] { flex: 1 1 240px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
   .btn { border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 6px 14px; font-weight: 550; }
@@ -232,6 +238,8 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     view: "board", taskId: null, stageId: null,
     lastKey: null, lastPaint: 0, lastRevision: null,
     flash: null, confirming: false, note: "", report: null,
+    // The one item or declined entry being written about: { kind, id, text, checkId }.
+    edit: null,
     busy: false, canCall: true, allOpen: false,
     displayMode: "inline", modes: [],
     closed: { parked: true, done: true, "no-route": true },
@@ -377,6 +385,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       var sc = (result && result.structuredContent) || {};
       var text = (result && result.content && result.content[0] && result.content[0].text) || "";
       keep = !!(keepComposing && keepComposing(sc));
+      if (!result.isError) state.edit = null;
       state.flash = keep
         ? { ok: false, text: (sc.message || text) + " Your note is kept." }
         : { ok: !result.isError, text: sc.message || text };
@@ -557,7 +566,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     // Whatever field had focus gets it back, caret and all: a poll landing mid-sentence
     // must not cost the operator their place in the note or the start form.
     var active = document.activeElement;
-    var typing = active && active.id && /^(note$|sg-)/.test(active.id) ? active.id : null;
+    var typing = active && active.id && /^(note$|sg-|ed-)/.test(active.id) ? active.id : null;
     var caret = null;
     try { if (typing && typeof active.selectionStart === "number") caret = [active.selectionStart, active.selectionEnd]; } catch (e) { caret = null; }
     var split = state.view === "run" && wide();
@@ -734,9 +743,18 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     var stage = run.stages.filter(function (s) { return s.id === state.stageId; })[0];
     if (stage) html += focusCard(run, stage, summary);
     if (run.deferrals.length) {
-      html += '<div class="card"><div class="section-label" style="margin-top:4px">Declined work nobody owns · ' + run.deferrals.length + "</div><ul>" +
-        run.deferrals.map(function (d) { return "<li>" + esc(d.text) + ' <span class="detail">(' + esc(d.raisedBy) + ")</span></li>"; }).join("") +
-        '</ul><div class="hint">Settle these in VS Code.</div></div>';
+      var locked = state.busy || run.inFlight;
+      html += '<div class="card"><div class="section-label" style="margin-top:4px">Declined work nobody owns · ' + run.deferrals.length + '</div><ul class="defer">' +
+        run.deferrals.map(function (d) {
+          var e = state.edit && state.edit.kind === "settle" && state.edit.id === d.id;
+          return "<li>" + esc(d.text) + ' <span class="detail">(' + esc(d.raisedBy) + ")</span>" +
+            (e
+              ? '<div class="editor" style="margin-left:0"><input type="text" id="ed-text" placeholder="Who owns this, or why it needs nobody" value="' + esc(state.edit.text) + '">' +
+                '<button class="btn primary" id="ed-save"' + (locked ? " disabled" : "") + '>Settle</button><button class="btn" id="ed-cancel">Cancel</button></div>'
+              : ' <button class="linkbtn" data-edit="settle" data-id="' + esc(d.id) + '"' + (locked ? " disabled" : "") + ">Settle…</button>") +
+            "</li>";
+        }).join("") +
+        '</ul><div class="hint">The route holds before shipping until each has an owner.</div></div>';
     }
     html += '<details class="all" id="all"' + (state.allOpen ? " open" : "") + "><summary>All " + run.stages.length +
       ' stages</summary>' + (run.evidenceLine ? '<div class="hint">' + esc(run.evidenceLine) + "</div>" : "") + '<ol class="list">' +
@@ -791,7 +809,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
             (c.checkedBy === "check" ? "<small>ticked by check " + esc(c.coveredBy || "") + "</small>" :
               c.coveredBy ? "<small>covered by " + esc(c.coveredBy) + "</small>" :
               !c.checked && !c.holding ? "<small>not holding this gate</small>" : "") +
-            (c.note ? "<small>" + esc(c.note) + "</small>" : "") + "</span></label></li>";
+            (c.note ? "<small>" + esc(c.note) + "</small>" : "") + "</span></label>" + itemTools(run, s, c) + "</li>";
         }).join("") + "</ul>";
     }
 
@@ -824,6 +842,32 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     return html + "</article>";
   }
 
+  // Note, withdraw and attach-a-check for one item, or the editor for whichever is open.
+  // Withdrawing is offered only on an open verification item: a ticked one has evidence
+  // somebody looked, and a step for the operator is theirs to do, not to withdraw.
+  function itemTools(run, s, c) {
+    var locked = state.busy || run.inFlight;
+    var e = state.edit && state.edit.id === c.id && state.edit.kind !== "settle" ? state.edit : null;
+    if (e) {
+      var field = e.kind === "cover"
+        ? '<select id="ed-check">' + (s.checks || []).map(function (k) {
+            return '<option value="' + esc(k.id) + '"' + (k.id === e.checkId ? " selected" : "") + ">" + esc(k.id) + (k.passed ? " — passed" : " — failed") + "</option>";
+          }).join("") + '<option value=""' + (e.checkId === "" ? " selected" : "") + ">Nothing checks this (a gap)</option></select>"
+        : '<input type="text" id="ed-text" value="' + esc(e.text) + '" placeholder="' +
+          (e.kind === "retire" ? "Why nothing can answer this — kept on the report" : "What you saw (empty clears it)") + '">';
+      return '<div class="editor">' + field + '<button class="btn primary" id="ed-save"' + (locked ? " disabled" : "") + ">" +
+        (e.kind === "retire" ? "Withdraw" : "Save") + '</button><button class="btn" id="ed-cancel">Cancel</button></div>';
+    }
+    var off = locked ? " disabled" : "";
+    var tools = '<button class="linkbtn" data-edit="note" data-id="' + esc(c.id) + '"' + off + ">" + (c.note ? "Edit note" : "Note") + "</button>";
+    var verify = c.kind === "verify" && s.kind === "humanVerification";
+    if (verify && (s.checks || c.coveredBy)) {
+      tools += '<button class="linkbtn" data-edit="cover" data-id="' + esc(c.id) + '"' + off + ">" + (c.coveredBy ? "Change check" : "Attach check") + "</button>";
+    }
+    if (verify && !c.checked) tools += '<button class="linkbtn" data-edit="retire" data-id="' + esc(c.id) + '"' + off + ">Withdraw…</button>";
+    return '<div class="itemacts">' + tools + "</div>";
+  }
+
   function footer() {
     return '<div class="foot">' +
       (state.canCall ? "Live — updates every " + POLL_MS / 1000 + "s." : "Live refresh unavailable in this host; ask again to update.") +
@@ -850,7 +894,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     });
     each("[data-stage]", function (el) {
       el.onclick = function () {
-        state.stageId = el.getAttribute("data-stage"); state.flash = null; state.confirming = false; render();
+        state.stageId = el.getAttribute("data-stage"); state.flash = null; state.confirming = false; state.edit = null; render();
       };
     });
     var mode = $("mode");
@@ -876,6 +920,7 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
         act("harness_set_checklist_item", { taskId: run.taskId, itemId: box.getAttribute("data-item"), checked: box.checked });
       };
     });
+    wireEditor(run, s);
     if (!s) return;
     var approve = $("approve");
     if (approve) approve.onclick = function () {
@@ -914,6 +959,50 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
         state.report = { stageId: s.id, text: text };
         render();
       }).catch(function (e) { state.flash = { ok: false, text: e.message }; render(); });
+    };
+  }
+
+  function wireEditor(run, s) {
+    each("[data-edit]", function (el) {
+      el.onclick = function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        var kind = el.getAttribute("data-edit"), id = el.getAttribute("data-id");
+        var item = s && s.checklist.filter(function (c) { return c.id === id; })[0];
+        var first = s && s.checks && s.checks[0] ? s.checks[0].id : "";
+        state.edit = {
+          kind: kind, id: id,
+          text: kind === "note" && item ? item.note || "" : "",
+          checkId: kind === "cover" ? (item && item.coveredBy) || first : ""
+        };
+        state.flash = null;
+        render();
+        var f = $(kind === "cover" ? "ed-check" : "ed-text"); if (f) f.focus();
+      };
+    });
+    var e = state.edit;
+    if (!e) return;
+    var text = $("ed-text");
+    if (text) {
+      text.oninput = function () { e.text = text.value; };
+      text.onkeydown = function (k) {
+        if (k.key === "Enter") { var b = $("ed-save"); if (b && !b.disabled) b.click(); }
+        else if (k.key === "Escape") { state.edit = null; render(); }
+      };
+    }
+    var pick = $("ed-check");
+    if (pick) pick.onchange = function () { e.checkId = pick.value; };
+    var cancel = $("ed-cancel");
+    if (cancel) cancel.onclick = function () { state.edit = null; render(); };
+    var save = $("ed-save");
+    if (save) save.onclick = function () {
+      if (e.kind === "settle") act("harness_settle_deferral", { taskId: run.taskId, itemId: e.id, resolution: e.text });
+      else if (e.kind === "retire") act("harness_retire_checklist_item", { taskId: run.taskId, itemId: e.id, reason: e.text });
+      else if (e.kind === "note") act("harness_note_checklist_item", { taskId: run.taskId, itemId: e.id, note: e.text });
+      else {
+        var args = { taskId: run.taskId, itemId: e.id };
+        if (e.checkId) args.checkId = e.checkId;
+        act("harness_cover_checklist_item", args);
+      }
     };
   }
 

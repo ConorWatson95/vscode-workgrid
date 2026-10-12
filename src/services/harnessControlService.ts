@@ -7,6 +7,10 @@ import {
   decideApproval,
   decideChecklistItem,
   decideCorrection,
+  decideDeferral,
+  decideItemCoverage,
+  decideItemNote,
+  decideItemRetirement,
   decideRerun,
   decideRetry,
   decideSendBack,
@@ -136,6 +140,42 @@ export class HarnessControlService {
   ): Promise<Result<ControlOutcome, ControlRefusal>> {
     const at = this.clock.now();
     return this.decide(taskId, (task) => decideChecklistItem(task, { itemId, checked, at }));
+  }
+
+  noteChecklistItem(
+    taskId: string,
+    itemId: string,
+    note: string,
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const at = this.clock.now();
+    return this.decide(taskId, (task) => decideItemNote(task, { itemId, note, at }));
+  }
+
+  retireChecklistItem(
+    taskId: string,
+    itemId: string,
+    reason: string,
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const at = this.clock.now();
+    return this.decide(taskId, (task) => decideItemRetirement(task, { itemId, reason, at }));
+  }
+
+  coverChecklistItem(
+    taskId: string,
+    itemId: string,
+    checkId: string | undefined,
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const at = this.clock.now();
+    return this.decide(taskId, (task) => decideItemCoverage(task, { itemId, checkId, at }));
+  }
+
+  settleDeferral(
+    taskId: string,
+    itemId: string,
+    resolution: string,
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const at = this.clock.now();
+    return this.decide(taskId, (task) => decideDeferral(task, { itemId, resolution, at }));
   }
 
   correctStage(

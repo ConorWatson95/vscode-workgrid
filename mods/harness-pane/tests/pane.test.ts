@@ -399,6 +399,137 @@ test("a long route folds what has passed and what is still to come around the st
   await ui.unmount();
 });
 
+/** A session starting in C:/repo, which does or does not declare a harness. */
+function startSession($: any, on: any, harness: boolean, surface: string | null) {
+  const opened: any[] = [];
+  const spawned: any[] = [];
+  on("command.register", () => ({ value: undefined }));
+  // Core's own answer, beneath the plugin: it echoes the cwd.
+  on("session.start", ($: unknown, e: any) => ({ cwd: e.cwd }));
+  on("session.repo", () => ({ value: { root: "C:/repo" } }));
+  on("fs.exists", ($: unknown, e: any) => ({
+    // The engine hands the path over in the platform's own spelling.
+    value: harness && e.path.replace(/\\/g, "/") === "C:/repo/.taskworkspaces/harness.json",
+  }));
+  on("ui.open", ($: unknown, e: any) => {
+    opened.push(e);
+    return { value: { isPlaced: true } };
+  });
+  on("process.spawn", async function* (_$: unknown, e: any) {
+    spawned.push(e.argv);
+    yield { stream: "stdout", text: FEED };
+    return { value: { code: 0, signal: null } };
+  });
+  return { opened, spawned, start: () => $.session.start({ cwd: "C:/repo", surface, isInteractive: surface !== null }) };
+}
+
+test("the pane opens itself, without taking focus, in a session someone is looking at in a harness repository", async ($, on) => {
+  const { opened, spawned, start } = startSession($, on, true, "terminal");
+  await start();
+  expect(opened).toHaveLength(1);
+  expect(opened[0].id).toBe("harness");
+  expect(opened[0].focus).toBeUndefined();
+  expect(spawned[0]).toContain("--watch");
+});
+
+test("a -p run never opens the pane: every stage session is one", async ($, on) => {
+  const { opened, spawned, start } = startSession($, on, true, null);
+  await start();
+  expect(opened).toHaveLength(0);
+  expect(spawned).toHaveLength(0);
+});
+
+test("a repository that declares no harness does not get the pane", async ($, on) => {
+  const { opened, start } = startSession($, on, false, "terminal");
+  await start();
+  expect(opened).toHaveLength(0);
+});
+
+const tooled = {
+  ...snapshot,
+  stages: [
+    {
+      ...stage,
+      checks: [
+        { id: "export-opens", passed: true },
+        { id: "totals", passed: false },
+      ],
+    },
+  ],
+  deferrals: [{ id: "d1", text: "Nobody rebuilds the DAR cache on UAT", raisedBy: "SQL review" }],
+};
+
+test("an item's menu notes it, attaches a check, and withdraws it, each as its own decision", async ($, on) => {
+  const { ui, calls } = await mountWith($, on, tooled, () => ({ ok: true, message: "Done." }));
+
+  expect(await ui.find({ key: "itemnote:c1" })).toBeUndefined();
+  await ui.press({ key: "itemmenu:c1" });
+  await ui.press({ key: "itemnote:c1" });
+  await ui.input({ key: "itemnote", text: "opens, but slowly", submit: true } as never);
+  await settle(() => ui.find({ type: "Text", text: /^Done\.$/ }));
+  // Done closes the editor.
+  expect(await ui.find({ key: "itemnote" })).toBeUndefined();
+
+  await ui.press({ key: "itemmenu:c1" });
+  await ui.press({ key: "itemcover:c1" });
+  expect((await ui.find({ key: "cover:totals" }))?.props.label).toBe("✕ totals");
+  await ui.press({ key: "cover:export-opens" });
+  await settle(() => calls.length === 2);
+
+  await ui.press({ key: "itemmenu:c1" });
+  await ui.press({ key: "itemcover:c1" });
+  await ui.press({ key: "cover:none" });
+  await settle(() => calls.length === 3);
+
+  await ui.press({ key: "itemmenu:c1" });
+  await ui.press({ key: "itemretire:c1" });
+  await ui.input({ key: "itemretire", text: "the control is hidden for this tenant", submit: true } as never);
+  await settle(() => calls.length === 4);
+
+  expect(calls).toEqual([
+    { name: "harness_note_checklist_item", arguments: { taskId: "t1", itemId: "c1", note: "opens, but slowly" } },
+    { name: "harness_cover_checklist_item", arguments: { taskId: "t1", itemId: "c1", checkId: "export-opens" } },
+    { name: "harness_cover_checklist_item", arguments: { taskId: "t1", itemId: "c1" } },
+    {
+      name: "harness_retire_checklist_item",
+      arguments: { taskId: "t1", itemId: "c1", reason: "the control is hidden for this tenant" },
+    },
+  ]);
+  await ui.unmount();
+});
+
+test("a ticked item can have its check changed but cannot be withdrawn", async ($, on) => {
+  const ticked = { ...tooled, stages: [{ ...tooled.stages[0], checklist: [{ ...stage.checklist[0], checked: true }] }] };
+  const { ui } = await mountWith($, on, ticked, () => ({ ok: true, message: "Done." }));
+  await ui.press({ key: "itemmenu:c1" });
+  expect(await ui.find({ key: "itemcover:c1" })).toBeDefined();
+  expect(await ui.find({ key: "itemretire:c1" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("declined work is listed above the stages and settled with a sentence, which a refusal keeps", async ($, on) => {
+  const { ui, calls } = await mountWith($, on, tooled, (args) =>
+    args.resolution.trim()
+      ? { ok: true, message: "Settled. Nothing else is outstanding." }
+      : { ok: false, kind: "refused", message: "Say who owns this, or why it needs nobody." },
+  );
+  expect(await ui.find({ type: "Text", text: /^Declined · Nobody rebuilds the DAR cache/ })).toBeDefined();
+
+  await ui.press({ key: "settle:d1" });
+  await ui.input({ key: "settle", text: " ", submit: true } as never);
+  await settle(() => ui.find({ type: "Text", text: /Say who owns this/ }));
+  expect(await ui.find({ key: "settle" })).toBeDefined();
+
+  await ui.input({ key: "settle", text: "the UAT release owns it", submit: true } as never);
+  await settle(() => ui.find({ type: "Text", text: /^Settled\./ }));
+  expect(calls[1]).toEqual({
+    name: "harness_settle_deferral",
+    arguments: { taskId: "t1", itemId: "d1", resolution: "the UAT release owns it" },
+  });
+  expect(await ui.find({ key: "settle" })).toBeUndefined();
+  await ui.unmount();
+});
+
 const suggestionBoard = {
   configured: true,
   sources: [{ id: "jira", label: "JIRA" }],

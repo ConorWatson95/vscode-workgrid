@@ -5,10 +5,17 @@ import {
   approveStage,
   correctStage,
   isCorrectable,
+  nextAction,
+  outstandingDeferrals,
+  resolveDeferral,
+  retireChecklistItem,
   retryStage,
   setChecklistItem,
   unansweredQuestions,
 } from "./pipelineEngine";
+import { offeredCheckIds, setItemCoverage, tickAnsweredItems } from "./checkCoverage";
+import { checklistGates, gateFor } from "./checklistScope";
+import { appendIntervention } from "./interventions";
 import { claimAnswers } from "./hostRequests";
 import { pipelineRevision } from "./pipelineRevision";
 import { missingPullRequestUrl } from "./pullRequestEvidence";
@@ -22,7 +29,7 @@ import {
   sendBackTargets,
   sendBackToStage,
 } from "./stageRefresh";
-import { TaskPipeline, TaskStage } from "./taskPipeline";
+import { ChecklistItem, TaskPipeline, TaskStage } from "./taskPipeline";
 import { TaskWorkspace } from "./taskWorkspace";
 
 /**
@@ -559,6 +566,224 @@ export function decideChecklistItem(
     changed: true,
     message: request.checked ? "Ticked." : "Unticked.",
   });
+}
+
+export interface DeferralRequest {
+  itemId: string;
+  /** Who owns the work, or why it needs nobody. Required: it is what was missing. */
+  resolution: string;
+  at: string;
+}
+
+/**
+ * Settles one item a stage declined as belonging to no stage.
+ *
+ * One item per call, where VS Code walks every outstanding one in a row of input boxes:
+ * a dashboard shows them side by side, so each gets its own box and its own answer. A
+ * reason is required for the reason `resolveDeferral` gives — what was missing when
+ * every stage declined the work is the knowledge of who owns it, and silence reproduces
+ * the gap.
+ */
+export function decideDeferral(
+  task: TaskWorkspace | undefined,
+  request: DeferralRequest,
+): Result<ControlOutcome, ControlRefusal> {
+  const found = withRoute(task);
+  if (!found.ok) return found;
+  const { task: current, pipeline } = found.value;
+  if (!request.resolution.trim()) {
+    return err({
+      kind: "refused",
+      message: "Say who owns this, or why it needs nobody. That is the thing that was missing.",
+    });
+  }
+  if (!outstandingDeferrals(pipeline).some((item) => item.id === request.itemId)) {
+    return ok({ task: current, changed: false, message: "That item is already settled." });
+  }
+  const running = sessionInFlight(pipeline);
+  if (running) return err(inFlight(running));
+
+  const settled = resolveDeferral(pipeline, request.itemId, {
+    resolution: request.resolution,
+    at: request.at,
+  });
+  if (!settled.ok) return err({ kind: "refused", message: settled.error.message });
+  const left = outstandingDeferrals(settled.value).length;
+  return ok({
+    task: withPipeline(current, settled.value, request.at),
+    changed: true,
+    message: left > 0 ? `Settled. ${left} still outstanding.` : "Settled. Nothing else is outstanding.",
+    // Only a route this item was holding is ready to carry on. Settling the last item
+    // raised by a stage still at its gate releases nothing, and starting a runner then
+    // would spend a process to stop at the same gate.
+    readyToAdvance:
+      nextAction(pipeline).kind === "deferredWork" &&
+      nextAction(settled.value).kind !== "deferredWork",
+  });
+}
+
+export interface ItemRetirementRequest {
+  itemId: string;
+  /** Why nothing can answer the item. Required, and kept with it on the report. */
+  reason: string;
+  at: string;
+}
+
+/**
+ * Withdraws a verification item nothing can answer, with the reason.
+ *
+ * The operator's act, never a stage's — a gate that may withdraw its own questions
+ * passes trivially. Counted as its own intervention, because a route accumulating these
+ * is one whose review writes items nothing can answer, a different fix from one that
+ * asks too much.
+ */
+export function decideItemRetirement(
+  task: TaskWorkspace | undefined,
+  request: ItemRetirementRequest,
+): Result<ControlOutcome, ControlRefusal> {
+  const found = withItem(task, request.itemId);
+  if (!found.ok) return found;
+  const { task: current, pipeline, item } = found.value;
+  if (item.retired) return ok({ task: current, changed: false, message: "Already withdrawn." });
+  const running = sessionInFlight(pipeline);
+  if (running) return err(inFlight(running));
+
+  const retired = retireChecklistItem(pipeline, request.itemId, {
+    reason: request.reason,
+    at: request.at,
+  });
+  if (!retired.ok) return err({ kind: "refused", message: retired.error.message });
+  return ok({
+    task: withPipeline(
+      current,
+      {
+        ...retired.value,
+        interventions: appendIntervention(retired.value.interventions, {
+          kind: "retirement",
+          stageId: item.raisedByStage,
+          at: request.at,
+        }),
+      },
+      request.at,
+    ),
+    changed: true,
+    message: "Withdrawn. The gate no longer holds on it, and the reason stays on the report.",
+  });
+}
+
+export interface ItemNoteRequest {
+  itemId: string;
+  /** What was observed. Empty clears an existing note. */
+  note: string;
+  at: string;
+}
+
+/**
+ * Records what was observed while verifying an item, without changing whether it is
+ * ticked — quietly ticking an item because its note was edited would put evidence
+ * against work nobody verified.
+ */
+export function decideItemNote(
+  task: TaskWorkspace | undefined,
+  request: ItemNoteRequest,
+): Result<ControlOutcome, ControlRefusal> {
+  const found = withItem(task, request.itemId);
+  if (!found.ok) return found;
+  const { task: current, pipeline, item } = found.value;
+  const note = request.note.trim();
+  if ((item.note ?? "") === note) return ok({ task: current, changed: false, message: "No change." });
+  const running = sessionInFlight(pipeline);
+  if (running) return err(inFlight(running));
+
+  const updated = setChecklistItem(pipeline, request.itemId, {
+    checked: item.checked,
+    note,
+    at: item.checkedAt ?? request.at,
+  });
+  if (!updated.ok) return err({ kind: "refused", message: updated.error.message });
+  return ok({
+    task: withPipeline(current, updated.value, request.at),
+    changed: true,
+    message: note ? "Note saved." : "Note cleared.",
+  });
+}
+
+export interface ItemCoverageRequest {
+  itemId: string;
+  /** The check that answers the item, or undefined to record that nothing does. */
+  checkId?: string;
+  at: string;
+}
+
+/**
+ * Names the check that answers an item, and ticks it at once if that check passed.
+ *
+ * Only a check the item's gate has recorded an outcome for may be named: an item naming
+ * a check that does not run reports as unverified rather than as the gap it is. The gate
+ * is the one the item's scope sends it to, not the stage that raised it, since on a
+ * route with two verifications those are different stages with different checks.
+ */
+export function decideItemCoverage(
+  task: TaskWorkspace | undefined,
+  request: ItemCoverageRequest,
+): Result<ControlOutcome, ControlRefusal> {
+  const found = withItem(task, request.itemId);
+  if (!found.ok) return found;
+  const { task: current, pipeline, item } = found.value;
+  if (item.coveredBy === request.checkId) {
+    return ok({ task: current, changed: false, message: "No change." });
+  }
+  const gate = gateFor(checklistGates(pipeline), item.scope);
+  const stage = gate && pipeline.stages.find((s) => s.id === gate.stageId);
+  if (request.checkId !== undefined && !offeredCheckIds(stage).some((o) => o.id === request.checkId)) {
+    return err({
+      kind: "refused",
+      message: gate
+        ? `"${gate.stageName}" has recorded no outcome for a check "${request.checkId}". ` +
+          "Run its check first, then attach one it ran."
+        : "This item has no verification gate to attach a check from.",
+    });
+  }
+  const running = sessionInFlight(pipeline);
+  if (running) return err(inFlight(running));
+
+  let updated = setItemCoverage(pipeline, request.itemId, request.checkId);
+  const settled = gate ? tickAnsweredItems(updated, gate.stageId, request.at) : undefined;
+  if (settled) updated = settled.pipeline;
+  const ticked = settled?.ticked.some((candidate) => candidate.id === request.itemId) ?? false;
+  return ok({
+    task: withPipeline(current, updated, request.at),
+    changed: true,
+    message:
+      request.checkId === undefined
+        ? "Recorded as a gap: nothing automated answers it, so it stays for a person."
+        : ticked
+          ? `Ticked: "${request.checkId}" has already passed.`
+          : `Attached to "${request.checkId}". It ticks when that check passes.`,
+  });
+}
+
+function withRoute(
+  task: TaskWorkspace | undefined,
+): Result<{ task: TaskWorkspace; pipeline: TaskPipeline }, ControlRefusal> {
+  if (!task) return err({ kind: "unknownTask", message: "That task no longer exists." });
+  if (!task.pipeline) {
+    return err({ kind: "noPipeline", message: `"${task.name}" has no route attached.` });
+  }
+  return ok({ task, pipeline: task.pipeline });
+}
+
+function withItem(
+  task: TaskWorkspace | undefined,
+  itemId: string,
+): Result<{ task: TaskWorkspace; pipeline: TaskPipeline; item: ChecklistItem }, ControlRefusal> {
+  const found = withRoute(task);
+  if (!found.ok) return found;
+  const item = found.value.pipeline.stages
+    .flatMap((stage) => stage.checklist ?? [])
+    .find((candidate) => candidate.id === itemId);
+  if (!item) return err({ kind: "refused", message: "That checklist item no longer exists." });
+  return ok({ ...found.value, item });
 }
 
 function locate(

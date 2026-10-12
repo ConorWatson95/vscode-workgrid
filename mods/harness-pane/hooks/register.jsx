@@ -9,6 +9,9 @@
 
 const PANE = "harness";
 const SERVER = "/../../dist/harnessMcpServer.js";
+// A repository runs the harness when it declares one. Read at the repository root,
+// where the extension reads it too.
+const HARNESS_CONFIG = "/.taskworkspaces/harness.json";
 const GROUPS = [
   ["needs-you", "Needs you"],
   ["working", "Working"],
@@ -75,6 +78,9 @@ const view = {
   taskOptions: undefined,
   // A task just started, opened once the board carries it.
   reveal: undefined,
+  // The one checklist item or declined entry being written about:
+  // { key: taskId + ":" + id, kind: "menu" | "note" | "retire" | "cover" | "settle", text }.
+  editing: undefined,
 };
 const SUGGESTED = "suggested";
 
@@ -86,17 +92,25 @@ export function register(on) {
       argumentHint: "[repository path]",
       immediate: true,
     });
-    return next(e);
+    const started = await next(e);
+    // Opens itself in a session somebody is looking at, in a repository that runs the
+    // harness. Never in a `-p` run, which draws nowhere: every stage session is one,
+    // and each would otherwise start a feed of its own. Without focus, so it never takes
+    // the prompt from the person who just opened the session; a narrow terminal simply
+    // declines to place it, and /harness still opens it there.
+    if (e.surface) {
+      const repo = (await $.session.repo())?.root;
+      if (repo && (await $.fs.exists(repo + HARNESS_CONFIG).catch(() => false))) {
+        await openPane($, repo, false).catch(() => undefined);
+      }
+    }
+    return started;
   });
 
   on("command.run", { command: "harness" }, async ($, e) => {
     const repo = e.args.trim() || (await $.session.repo())?.root;
     if (!repo) return { text: "harness: not in a git repository; pass one, /harness C:\\Dev\\repo" };
-    if (repo !== view.repo) stopFeed();
-    view.repo = repo;
-    view.server = $.plugin.root + SERVER;
-    if (!view.feed) startFeed($);
-    const opened = await $.ui.open({ id: PANE, title: "Harness", focus: true, closeOnEscape: true });
+    const opened = await openPane($, repo, true);
     return opened.isPlaced ? {} : { text: "harness: " + opened.reason };
   });
 
@@ -110,6 +124,15 @@ export function register(on) {
   on("ui.render", { component: "Pane", requestId: PANE }, ($, e) => {
     return drawTree($, $.ui.resolve(e), e.props.bodyColumns || 80);
   });
+}
+
+function openPane($, repo, focus) {
+  if (repo !== view.repo) stopFeed();
+  view.repo = repo;
+  view.server = $.plugin.root + SERVER;
+  if (!view.feed) startFeed($);
+  // `focus` is `true` or absent; the host refuses `false`.
+  return $.ui.open(focus ? { id: PANE, title: "Harness", focus: true, closeOnEscape: true } : { id: PANE, title: "Harness", closeOnEscape: true });
 }
 
 // --- the feed ----------------------------------------------------------------
@@ -163,6 +186,7 @@ function stopFeed() {
   view.starting = undefined;
   view.taskOptions = undefined;
   view.reveal = undefined;
+  view.editing = undefined;
   if (feed) void feed.return();
 }
 
@@ -305,6 +329,16 @@ function tick($, run, item) {
   });
 }
 
+function itemDecision($, run, item, label, tool, extra) {
+  return decide($, label, tool, { taskId: run.taskId, itemId: item.id, ...extra }).then(() => closeEditor($));
+}
+
+/** A refusal keeps the editor open, so what was typed is answered rather than lost. */
+function closeEditor($) {
+  if (view.flash?.ok) view.editing = undefined;
+  $.ui.invalidate("ui.render");
+}
+
 // --- drawing ---------------------------------------------------------------------
 //
 // A tree, because that is what the VS Code view is and what the eye already reads:
@@ -398,6 +432,7 @@ function drawTask($, ui, run, hotkey, columns) {
     if (advance) rows.push(advance);
   }
   rows.push(...drawHeldCalls($, ui, snapshot, columns));
+  rows.push(...drawDeferrals($, ui, snapshot, columns));
   for (const part of foldStages(snapshot)) {
     if (part.stage) {
       rows.push(...drawStage($, ui, snapshot, part.stage, columns));
@@ -497,17 +532,164 @@ function drawStage($, ui, run, stage, columns) {
           label={clip(item.text, Math.floor(columns * 0.6))}
           onPress={() => (view.busy ? undefined : tick($, run, item))}
         />
+        <Button
+          key={"itemmenu:" + item.id}
+          plain
+          dimColor
+          label="⋯"
+          onPress={() => edit($, run.taskId + ":" + item.id, editingKind(run.taskId + ":" + item.id) ? undefined : "menu")}
+        />
         <Text dimColor wrap="truncate-end">
-          {[item.checked ? (item.checkedBy === "check" ? "verified" : "done") : item.kind === "action" ? "for you to do" : "for you to verify", item.coveredBy]
+          {[
+            item.checked ? (item.checkedBy === "check" ? "verified" : "done") : item.kind === "action" ? "for you to do" : "for you to verify",
+            item.coveredBy,
+            item.note,
+          ]
             .filter(Boolean)
             .join(" · ")}
         </Text>
       </Row>,
     );
+    rows.push(...drawItemTools($, ui, run, stage, item));
   }
   const actions = drawActions($, ui, run, stage, actsHere);
   if (actions) rows.push(<Row ui={ui} depth={3}>{actions}</Row>);
   if (stage.state !== "pending") rows.push(...drawReport($, ui, run, stage));
+  return rows;
+}
+
+/**
+ * Note, attach a check, and withdraw, for the one item whose menu is open. Withdrawing
+ * is offered only on an open verification item: a ticked one has evidence somebody
+ * looked, and a step for the operator is theirs to do, not to withdraw. A check can be
+ * attached only from those the gate has recorded an outcome for.
+ */
+function drawItemTools($, ui, run, stage, item) {
+  const { Text, Button, Input } = ui;
+  const key = run.taskId + ":" + item.id;
+  const kind = editingKind(key);
+  if (!kind) return [];
+  if (view.busy) return [<Row ui={ui} depth={4}><Text color="suggestion">{view.busy}</Text></Row>];
+  const close = <Button key="item:cancel" plain dimColor label="Cancel" onPress={() => edit($, key, undefined)} />;
+  const verify = item.kind === "verify" && stage.kind === "humanVerification";
+  if (kind === "note" || kind === "retire") {
+    const retire = kind === "retire";
+    return [
+      <Row ui={ui} depth={4}>
+        <Input
+          key={retire ? "itemretire" : "itemnote"}
+          autoFocus
+          label={retire ? "Why nothing can answer it: " : "Note: "}
+          value={retire ? undefined : item.note}
+          placeholder={retire ? "kept with the item on the report" : "what you saw; empty clears it"}
+          submitLabel={retire ? "withdraw" : "save"}
+          onSubmit={(text) =>
+            retire
+              ? itemDecision($, run, item, "Withdrawing…", "harness_retire_checklist_item", { reason: text ?? "" })
+              : itemDecision($, run, item, "Saving the note…", "harness_note_checklist_item", { note: text ?? "" })
+          }
+        />
+        {close}
+      </Row>,
+    ];
+  }
+  if (kind === "cover") {
+    return [
+      <Row ui={ui} depth={4}>
+        <Text dimColor>Answered by:</Text>
+        {(stage.checks ?? []).map((check) => (
+          <Button
+            key={"cover:" + check.id}
+            plain
+            label={(check.passed ? "✓ " : "✕ ") + check.id + (check.id === item.coveredBy ? " (now)" : "")}
+            onPress={() =>
+              itemDecision($, run, item, "Attaching " + check.id + "…", "harness_cover_checklist_item", { checkId: check.id })
+            }
+          />
+        ))}
+        <Button
+          key="cover:none"
+          plain
+          label="nothing checks this"
+          onPress={() => itemDecision($, run, item, "Recording a gap…", "harness_cover_checklist_item", {})}
+        />
+        {close}
+      </Row>,
+    ];
+  }
+  const tools = [
+    <Button key={"itemnote:" + item.id} plain label={item.note ? "Edit note" : "Note"} onPress={() => edit($, key, "note")} />,
+  ];
+  if (verify && (stage.checks || item.coveredBy)) {
+    tools.push(
+      <Button
+        key={"itemcover:" + item.id}
+        plain
+        label={item.coveredBy ? "Change check" : "Attach check"}
+        onPress={() => edit($, key, "cover")}
+      />,
+    );
+  }
+  if (verify && !item.checked) {
+    tools.push(<Button key={"itemretire:" + item.id} plain label="Withdraw" onPress={() => edit($, key, "retire")} />);
+  }
+  return [
+    <Row ui={ui} depth={4}>
+      {tools}
+      {close}
+    </Row>,
+  ];
+}
+
+/**
+ * Work a stage declined as belonging to no stage. The route holds in front of a
+ * shipping stage until each has an owner, so they sit above the stages, where the
+ * person deciding whether to advance will see them.
+ */
+function drawDeferrals($, ui, run, columns) {
+  const { Text, Button, Input } = ui;
+  const rows = [];
+  for (const item of run.deferrals ?? []) {
+    const key = run.taskId + ":" + item.id;
+    const settling = editingKind(key) === "settle";
+    rows.push(
+      <Row ui={ui} depth={2}>
+        <Text> </Text>
+        <Icon ui={ui} glyph="!" color="warning" />
+        <Text wrap="truncate-end">{clip("Declined · " + item.text, Math.floor(columns * 0.55))}</Text>
+        <Text dimColor>({item.raisedBy})</Text>
+        {settling ? null : (
+          <Button key={"settle:" + item.id} plain label="Settle" onPress={() => edit($, key, "settle")} />
+        )}
+      </Row>,
+    );
+    if (!settling) continue;
+    rows.push(
+      <Row ui={ui} depth={3}>
+        {view.busy ? (
+          <Text color="suggestion">{view.busy}</Text>
+        ) : (
+          [
+            <Input
+              key="settle"
+              autoFocus
+              label="Owner, or why it needs nobody: "
+              placeholder="the route holds before shipping until this is said"
+              submitLabel="settle"
+              onSubmit={(text) =>
+                decide($, "Settling…", "harness_settle_deferral", {
+                  taskId: run.taskId,
+                  itemId: item.id,
+                  resolution: text ?? "",
+                }).then(() => closeEditor($))
+              }
+            />,
+            <Button key="settle:cancel" plain dimColor label="Cancel" onPress={() => edit($, key, undefined)} />,
+          ]
+        )}
+      </Row>,
+    );
+  }
   return rows;
 }
 
@@ -1348,6 +1530,17 @@ function openNext($) {
   view.openTasks.clear();
   view.openStages.clear();
   toggleTask($, next);
+}
+
+function editingKind(key) {
+  return view.editing?.key === key ? view.editing.kind : undefined;
+}
+
+/** One editor at a time, across items and declined entries alike. */
+function edit($, key, kind) {
+  view.editing = kind ? { key, kind } : undefined;
+  view.flash = undefined;
+  $.ui.invalidate("ui.render");
 }
 
 function setConfirm($, confirm) {

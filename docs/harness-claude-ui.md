@@ -48,6 +48,23 @@ Also app-only: `harness_correct_stage`, `harness_rerun_stage`, `harness_send_bac
 `harness_stop_route`. Approving a
 stage that owes a pull request stays in VS Code, which has the dialog for it.
 
+Checklist items and declined work are also app-only:
+
+- `harness_note_checklist_item` records what was seen and never ticks.
+- `harness_cover_checklist_item` attaches a check the item's gate has run, or records a gap.
+  It ticks the item at once if that check passed.
+- `harness_retire_checklist_item` withdraws an item nothing can answer. It needs a reason
+  and counts as a `retirement` intervention.
+- `harness_settle_deferral` settles one declined item. It needs a sentence, and it starts
+  the route when that was the last item holding it, as answering does.
+
+## The pane opens itself
+
+In an interactive session whose repository has `.taskworkspaces/harness.json`, the pane
+opens at `session.start` without taking focus. It never opens in a `-p` run (no `surface`),
+which is what every stage session is. Below 144 columns the host leaves it unplaced, and
+`/harness` still opens it.
+
 ## Running a route without VS Code
 
 `harness_advance_route` starts `dist/harnessRunner.js advance --repo <root> --task <id>`

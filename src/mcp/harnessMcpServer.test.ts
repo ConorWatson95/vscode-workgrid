@@ -304,6 +304,124 @@ describe("running a route from the dashboard", () => {
   });
 });
 
+describe("settling declined work and managing items from Claude", () => {
+  const started: string[] = [];
+  const runs: RunControl = {
+    async start(taskId) {
+      started.push(taskId);
+      return { ok: true, message: "Advancing in a headless runner (pid 42)." };
+    },
+  };
+  const verify = (): TaskStage =>
+    gate({
+      id: "verify",
+      name: "Verify locally",
+      kind: "humanVerification",
+      checklist: [
+        { id: "c1", text: "totals match the workbook", checked: false, raisedByStage: "verify" },
+        { id: "c2", text: "the export is hidden for this tenant", checked: false, raisedByStage: "verify" },
+      ],
+      checkOutcomes: [{ id: "totals", passed: true }],
+    });
+  const heldRoute = (): TaskStage[] => [
+    gate({ status: "passed" }),
+    gate({
+      id: "ship",
+      name: "Ship",
+      kind: "deployment",
+      status: "pending",
+      requiresApproval: false,
+      subtasks: [{ id: "ship-1", title: "x", prompt: "x", status: "pending" }],
+    }),
+  ];
+  const declined = {
+    deferrals: [
+      { id: "d1", text: "nobody creates the table", raisedByStage: "review", raisedByStageName: "Code review", at: AT },
+    ],
+  };
+
+  it("offers the four new decisions to the dashboard only", async () => {
+    const { rpc } = await setup();
+    const tools: { name: string; _meta?: Json }[] = (await rpc("tools/list")).tools;
+    for (const name of [
+      "harness_note_checklist_item",
+      "harness_retire_checklist_item",
+      "harness_cover_checklist_item",
+      "harness_settle_deferral",
+    ]) {
+      expect(tools.find((t) => t.name === name)?._meta?.ui?.visibility).toEqual(["app"]);
+    }
+    const { rpc: plain } = await setup([gate()], false);
+    const names = (await plain("tools/list")).tools.map((t: { name: string }) => t.name);
+    expect(names).not.toContain("harness_settle_deferral");
+  });
+
+  it("settles the last declined item and starts the route it was holding, when the setting says to", async () => {
+    started.length = 0;
+    const { call, repository } = await setup(heldRoute(), true, { runs, advanceAfterAnswering: true, pipeline: declined });
+    const shown = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run;
+    expect(shown.deferrals).toEqual([{ id: "d1", text: "nobody creates the table", raisedBy: "Code review" }]);
+
+    const result = await call("harness_settle_deferral", { taskId: "t1", itemId: "d1", resolution: "the publish stage" });
+    expect(result.structuredContent.message).toMatch(/Nothing else is outstanding\. Advancing in a headless runner/);
+    expect(started).toEqual(["t1"]);
+    expect((await repository.get("t1"))!.pipeline!.deferrals![0]).toMatchObject({ resolved: true, resolution: "the publish stage" });
+  });
+
+  it("refuses a settlement with no reason, and starts nothing", async () => {
+    started.length = 0;
+    const { call } = await setup(heldRoute(), true, { runs, advanceAfterAnswering: true, pipeline: declined });
+    const result = await call("harness_settle_deferral", { taskId: "t1", itemId: "d1", resolution: " " });
+    expect(result.isError).toBe(true);
+    expect(started).toEqual([]);
+  });
+
+  it("shows a gate's checks, and attaching a passed one ticks the item", async () => {
+    const { call, repository } = await setup([verify()]);
+    const shown = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run;
+    expect(shown.stages[0].checks).toEqual([{ id: "totals", passed: true }]);
+
+    await call("harness_cover_checklist_item", { taskId: "t1", itemId: "c1", checkId: "totals" });
+    const item = (await repository.get("t1"))!.pipeline!.stages[0].checklist![0];
+    expect(item).toMatchObject({ coveredBy: "totals", checked: true });
+  });
+
+  it("drives note, withdraw and settle from the dashboard's own buttons", async () => {
+    const { call, repository } = await setup([...heldRoute().slice(0, 1), verify(), heldRoute()[1]], true, {
+      pipeline: declined,
+    });
+    const page = mountDashboard((name, args) => call(name, args));
+    await page.settle();
+    page.show((await call("harness_refresh", { taskId: "t1" })).structuredContent);
+    await page.settle();
+    page.attrs("data-stage").find((el: Json) => el.getAttribute("data-stage") === "verify").onclick();
+
+    const open = (kind: string, id: string) =>
+      page.attrs("data-edit").find((el: Json) => el.getAttribute("data-edit") === kind && el.getAttribute("data-id") === id);
+    const type = async (text: string) => {
+      const field = page.byId("ed-text");
+      field.value = text;
+      field.oninput();
+      page.byId("ed-save").onclick();
+      await page.settle();
+    };
+
+    open("note", "c1").onclick({ preventDefault: () => undefined });
+    await type("saw 42 rows");
+    open("retire", "c2").onclick({ preventDefault: () => undefined });
+    await type("the control is hidden for this tenant");
+    open("settle", "d1").onclick({ preventDefault: () => undefined });
+    await type("the publish stage creates it");
+
+    const pipeline = (await repository.get("t1"))!.pipeline!;
+    const items = pipeline.stages.find((s) => s.id === "verify")!.checklist!;
+    expect(items[0]).toMatchObject({ note: "saw 42 rows", checked: false });
+    expect(items[1].retired).toBeTruthy();
+    expect(pipeline.deferrals![0]).toMatchObject({ resolved: true, resolution: "the publish stage creates it" });
+    expect(page.html()).not.toContain('id="ed-text"');
+  });
+});
+
 describe("HARNESS_DASHBOARD_HTML", () => {
   it("loads nothing from anywhere, so the host's default policy fits", () => {
     expect(HARNESS_DASHBOARD_HTML).not.toMatch(/<script[^>]+src=/i);
@@ -437,7 +555,10 @@ describe("HarnessMcpServer suggestions", () => {
 // an element exists exactly when the markup carries its id or attribute, and tools/call
 // is answered by the test. Elements are kept per id or attribute value, so the handler
 // the page wired is the one a test fires.
-function mountDashboard(respond: (name: string, args: Json) => Json, hostCapabilities: Json = { serverTools: {} }) {
+function mountDashboard(
+  respond: (name: string, args: Json) => Json | Promise<Json>,
+  hostCapabilities: Json = { serverTools: {} },
+) {
   type Msg = { jsonrpc: "2.0"; id?: number; method?: string; params?: Json };
   const sent: Msg[] = [];
   const answered = new Set<number>();
@@ -461,8 +582,12 @@ function mountDashboard(respond: (name: string, args: Json) => Json, hostCapabil
     querySelectorAll: (selector: string) => {
       const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1];
       if (!attr) return [];
-      return [...(root.innerHTML as string).matchAll(new RegExp(`${attr}="([^"]*)"`, "g"))].map((m) =>
-        element(`${attr}=${m[1]}`, { getAttribute: () => decode(m[1]) }),
+      // Each match is the whole tag, so an element answers for any attribute it carries:
+      // two buttons sharing data-edit="note" differ by their data-id.
+      return [...(root.innerHTML as string).matchAll(new RegExp(`<[^<>]*\\s${attr}="[^"]*"[^<>]*>`, "g"))].map((m) =>
+        element(`${attr}=${m[0]}`, {
+          getAttribute: (name: string = attr) => decode(new RegExp(`\\s${name}="([^"]*)"`).exec(m[0])?.[1] ?? ""),
+        }),
       );
     },
     querySelector: () => null,
@@ -490,7 +615,7 @@ function mountDashboard(respond: (name: string, args: Json) => Json, hostCapabil
         answered.add(m.id!);
         const result =
           m.method === "ui/initialize" ? { hostCapabilities }
-          : m.method === "tools/call" ? respond(m.params.name, m.params.arguments)
+          : m.method === "tools/call" ? await respond(m.params.name, m.params.arguments)
           : {};
         onMessage({ source: parent, data: { jsonrpc: "2.0", id: m.id, result } });
       }

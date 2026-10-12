@@ -3,6 +3,10 @@ import {
   decideApproval,
   decideChecklistItem,
   decideCorrection,
+  decideDeferral,
+  decideItemCoverage,
+  decideItemNote,
+  decideItemRetirement,
   decideRerun,
   decideRetry,
   decideSendBack,
@@ -208,6 +212,112 @@ describe("decideChecklistItem", () => {
   it("refuses an item that has gone", () => {
     const outcome = decideChecklistItem(withItem(false), { itemId: "zz", checked: true, at: AT });
     expect(outcome.ok).toBe(false);
+  });
+});
+
+describe("decideDeferral", () => {
+  const held = () => {
+    const t = task([
+      stage({ id: "review", name: "Review", status: "passed" }),
+      stage({
+        id: "ship",
+        name: "Ship",
+        kind: "deployment",
+        status: "pending",
+        requiresApproval: false,
+        subtasks: [subtask({ status: "pending" })],
+      }),
+    ]);
+    t.pipeline!.deferrals = [
+      { id: "d1", text: "nobody creates the table", raisedByStage: "review", raisedByStageName: "Review", at: AT },
+      { id: "d2", text: "nobody seeds it", raisedByStage: "review", raisedByStageName: "Review", at: AT },
+    ];
+    return t;
+  };
+
+  it("refuses a settlement without a reason, since the reason is what was missing", () => {
+    const outcome = decideDeferral(held(), { itemId: "d1", resolution: "  ", at: AT });
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("settles one item and says how many remain, without releasing the route", () => {
+    const outcome = decideDeferral(held(), { itemId: "d1", resolution: "the publish stage", at: AT });
+    expect(outcome.ok && outcome.value.message).toBe("Settled. 1 still outstanding.");
+    expect(outcome.ok && outcome.value.readyToAdvance).toBe(false);
+  });
+
+  it("is ready to advance once the last item holding the route is settled", () => {
+    let t = held();
+    const first = decideDeferral(t, { itemId: "d1", resolution: "the publish stage", at: AT });
+    if (!first.ok) throw new Error(first.error.message);
+    t = first.value.task;
+    const second = decideDeferral(t, { itemId: "d2", resolution: "live-only by design", at: AT });
+    expect(second.ok && second.value.readyToAdvance).toBe(true);
+    const settled = second.ok ? second.value.task.pipeline!.deferrals! : [];
+    expect(settled.every((item) => item.resolved)).toBe(true);
+  });
+
+  it("is a no-op on an item already settled", () => {
+    const t = held();
+    t.pipeline!.deferrals![0].resolved = true;
+    const outcome = decideDeferral(t, { itemId: "d1", resolution: "again", at: AT });
+    expect(outcome.ok && outcome.value.changed).toBe(false);
+  });
+});
+
+describe("checklist item decisions", () => {
+  const gate = (overrides: Partial<TaskStage> = {}) =>
+    task([
+      stage({
+        kind: "humanVerification",
+        checklist: [{ id: "c1", text: "totals match", checked: false, raisedByStage: "gate" }],
+        ...overrides,
+      }),
+    ]);
+
+  it("withdraws an item with its reason and counts it as a retirement", () => {
+    const outcome = decideItemRetirement(gate(), { itemId: "c1", reason: "the control is hidden here", at: AT });
+    if (!outcome.ok) throw new Error(outcome.error.message);
+    const pipeline = outcome.value.task.pipeline!;
+    expect(pipeline.stages[0].checklist![0].retired).toBeTruthy();
+    expect(pipeline.interventions?.some((i) => i.kind === "retirement")).toBe(true);
+  });
+
+  it("notes an item without ticking it", () => {
+    const outcome = decideItemNote(gate(), { itemId: "c1", note: "saw 42 rows", at: AT });
+    if (!outcome.ok) throw new Error(outcome.error.message);
+    const item = outcome.value.task.pipeline!.stages[0].checklist![0];
+    expect(item.note).toBe("saw 42 rows");
+    expect(item.checked).toBe(false);
+  });
+
+  it("attaches a check the gate ran and ticks the item when it passed", () => {
+    const t = gate({ checkOutcomes: [{ id: "totals", passed: true }] });
+    const outcome = decideItemCoverage(t, { itemId: "c1", checkId: "totals", at: AT });
+    if (!outcome.ok) throw new Error(outcome.error.message);
+    const item = outcome.value.task.pipeline!.stages[0].checklist![0];
+    expect(item.coveredBy).toBe("totals");
+    expect(item.checked).toBe(true);
+  });
+
+  it("refuses a check the gate has no outcome for", () => {
+    const t = gate({ checkOutcomes: [{ id: "totals", passed: true }] });
+    const outcome = decideItemCoverage(t, { itemId: "c1", checkId: "made-up", at: AT });
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("refuses all three while a session is running", () => {
+    const t = task([
+      stage({
+        kind: "humanVerification",
+        checklist: [{ id: "c1", text: "x", checked: false, raisedByStage: "gate" }],
+        checkOutcomes: [{ id: "totals", passed: true }],
+      }),
+      stage({ id: "busy", name: "Busy", status: "active", subtasks: [subtask({ status: "active" })] }),
+    ]);
+    expect(decideItemNote(t, { itemId: "c1", note: "n", at: AT }).ok).toBe(false);
+    expect(decideItemRetirement(t, { itemId: "c1", reason: "r", at: AT }).ok).toBe(false);
+    expect(decideItemCoverage(t, { itemId: "c1", checkId: "totals", at: AT }).ok).toBe(false);
   });
 });
 
