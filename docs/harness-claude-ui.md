@@ -164,14 +164,19 @@ fail-open, and it is announced.
 ## Running it
 
 After `npm run build`, the server is `dist/harnessMcpServer.js`, and it ships inside the vsix.
-Example entry for a host's MCP config:
+On activation the extension also copies it, with the runner it starts, to a path that does
+not change between releases (`services/serverBundleInstaller.ts`):
+`%APPDATA%/Code/User/globalStorage/task-workspaces.task-workspaces/mcp-server/harnessMcpServer.js`.
+Point a host there rather than into `~/.vscode/extensions/task-workspaces.task-workspaces-<version>`,
+which names one release and goes on running it after an upgrade. The extension's output
+channel logs the path at startup. Example entry for a host's MCP config:
 
 ```json
 {
   "mcpServers": {
     "task-workspaces": {
       "command": "node",
-      "args": ["<extension or checkout>/dist/harnessMcpServer.js", "--repo", "C:/Dev/qubeautoapp"]
+      "args": ["<global storage>/mcp-server/harnessMcpServer.js", "--repo", "C:/Dev/qubeautoapp"]
     }
   }
 }

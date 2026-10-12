@@ -50,6 +50,7 @@ import { externalWaitSince, groupForTask } from "./ui/taskGrouping";
 import { ClaudeStageSessionRunner } from "./agents/stageSessionRunner";
 import { ProtocolSkillInstaller } from "./services/protocolSkillInstaller";
 import { buildStageRuntime } from "./services/stageRuntime";
+import { SERVER_BUNDLE_DIR, installServerBundle } from "./services/serverBundleInstaller";
 import { RunLeaseService } from "./services/runLeaseService";
 import { STATE_FILE_NAME, taskStateDir } from "./persistence/taskStateFile";
 import { StateFileWatch, watchStateFile } from "./persistence/stateFileWatcher";
@@ -147,6 +148,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusService,
     logger,
   );
+
+  // Hosts such as Claude Desktop start the harness MCP server by path. Pointed into this
+  // versioned install folder, they kept running the release they were configured
+  // against; the global storage copy has no version in its path. See
+  // `services/serverBundleInstaller.ts`.
+  const serverBundle = installServerBundle(
+    vscode.Uri.joinPath(context.extensionUri, "dist").fsPath,
+    vscode.Uri.joinPath(context.globalStorageUri, SERVER_BUNDLE_DIR).fsPath,
+    logger,
+  );
+  if (serverBundle) {
+    logger.info(
+      `Harness MCP server: ${serverBundle.server}` +
+        (serverBundle.updated.length > 0 ? ` (updated ${serverBundle.updated.join(", ")})` : ""),
+    );
+  }
 
   const skillInstaller = new ProtocolSkillInstaller(logger);
   /** Where the harness's protocol skill lives, once a repository is resolved. */
