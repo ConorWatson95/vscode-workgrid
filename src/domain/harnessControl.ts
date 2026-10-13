@@ -217,7 +217,18 @@ export function decideApproval(
     task: withPipeline(task!, approved.value, request.at),
     changed: true,
     message: `Approved "${stage.name}".`,
+    readyToAdvance: hasWorkToRun(approved.value),
   });
+}
+
+/**
+ * Whether an advance would run something. After a decision this is what separates
+ * "the route can continue" from "it stops at the next gate, or is finished", and
+ * starting a runner for the second spends a process to stop where it already is.
+ */
+function hasWorkToRun(pipeline: TaskPipeline): boolean {
+  const next = nextAction(pipeline).kind;
+  return next === "run" || next === "split";
 }
 
 export function decideRetry(
@@ -383,6 +394,7 @@ export function decideSendBack(
       task: withPipeline(task!, corrected.value, request.at),
       changed: true,
       message: `"${target.name}" will fix ${summary} on the next advance.`,
+      readyToAdvance: hasWorkToRun(corrected.value),
     });
   }
 
@@ -401,6 +413,7 @@ export function decideSendBack(
     task: withPipeline(task!, refreshed, request.at),
     changed: true,
     message: `Sent ${summary} back to "${target.name}"; ${sent.reopened.length} stage(s) re-opened.`,
+    readyToAdvance: hasWorkToRun(refreshed),
   });
 }
 

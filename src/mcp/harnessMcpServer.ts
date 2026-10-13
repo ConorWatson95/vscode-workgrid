@@ -1,4 +1,5 @@
-import { ok } from "../utilities/result";
+import { ControlOutcome, ControlRefusal } from "../domain/harnessControl";
+import { Result, ok } from "../utilities/result";
 import { HarnessControlService } from "../services/harnessControlService";
 import { SuggestionBoard, SuggestionControlService } from "../services/suggestionControlService";
 import { RunSnapshot, RunSummary, StageView } from "../ui/harnessSnapshot";
@@ -518,6 +519,23 @@ export class HarnessMcpServer {
     ];
   }
 
+  /**
+   * Starts the route after a decision whose only purpose was to let it continue —
+   * answering, approving, sending back, settling the last declined item — on the
+   * setting VS Code's own commands read. Approving and sending back from here used to
+   * stop there, so a route approved from Claude sat idle until somebody pressed
+   * Advance, while the same click in VS Code carried on.
+   */
+  private async thenAdvance(
+    taskId: string,
+    outcome: Result<ControlOutcome, ControlRefusal>,
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    if (!outcome.ok || !outcome.value.readyToAdvance || !this.advanceAfterAnswering?.()) return outcome;
+    const advanced = await this.service.advance(taskId);
+    const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
+    return ok({ ...outcome.value, message: `${outcome.value.message} ${then}` });
+  }
+
   private async callTool(params: Record<string, unknown>): Promise<CallResult> {
     const name = String(params.name ?? "");
     const args = (params.arguments ?? {}) as Record<string, unknown>;
@@ -592,11 +610,14 @@ export class HarnessMcpServer {
       }
       case "harness_approve_stage":
         return decision(
-          await this.service.approveStage(
+          await this.thenAdvance(
             text("taskId") ?? "",
-            text("stageId") ?? "",
-            text("revision") ?? "",
-            text("note"),
+            await this.service.approveStage(
+              text("taskId") ?? "",
+              text("stageId") ?? "",
+              text("revision") ?? "",
+              text("note"),
+            ),
           ),
         );
       case "harness_retry_stage":
@@ -632,12 +653,7 @@ export class HarnessMcpServer {
         );
         // The last item holding a route is settled so that the route can ship, so the
         // same setting that advances after answering advances after this.
-        if (!settled.ok || !settled.value.readyToAdvance || !this.advanceAfterAnswering?.()) {
-          return decision(settled);
-        }
-        const advanced = await this.service.advance(taskId);
-        const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
-        return decision(ok({ ...settled.value, message: `${settled.value.message} ${then}` }));
+        return decision(await this.thenAdvance(taskId, settled));
       }
       case "harness_correct_stage":
         return decision(
@@ -659,14 +675,17 @@ export class HarnessMcpServer {
         );
       case "harness_send_back":
         return decision(
-          await this.service.sendBack(text("taskId") ?? "", {
-            fromStageId: text("fromStageId") ?? "",
-            targetStageId: text("targetStageId") ?? "",
-            revision: text("revision") ?? "",
-            how: text("how") === "rerun" ? "rerun" : "fix",
-            findings: text("findings"),
-            note: text("note"),
-          }),
+          await this.thenAdvance(
+            text("taskId") ?? "",
+            await this.service.sendBack(text("taskId") ?? "", {
+              fromStageId: text("fromStageId") ?? "",
+              targetStageId: text("targetStageId") ?? "",
+              revision: text("revision") ?? "",
+              how: text("how") === "rerun" ? "rerun" : "fix",
+              findings: text("findings"),
+              note: text("note"),
+            }),
+          ),
         );
       case "harness_answer_questions": {
         const given = args.answers && typeof args.answers === "object" ? args.answers : {};
@@ -678,14 +697,8 @@ export class HarnessMcpServer {
         const taskId = text("taskId") ?? "";
         const answered = await this.service.answerQuestions(taskId, text("askedAt") ?? "", answers);
         // An answer that joined the brief leaves the stage pending, and the operator
-        // answered so that it would run. The same setting VS Code's answer command
-        // reads decides whether it does so without a second click.
-        if (!answered.ok || !answered.value.readyToAdvance || !this.advanceAfterAnswering?.()) {
-          return decision(answered);
-        }
-        const advanced = await this.service.advance(taskId);
-        const then = advanced.ok ? advanced.value.message : `Not advanced: ${advanced.error.message}`;
-        return decision(ok({ ...answered.value, message: `${answered.value.message} ${then}` }));
+        // answered so that it would run.
+        return decision(await this.thenAdvance(taskId, answered));
       }
       case "harness_decide_held_call":
         return decision(

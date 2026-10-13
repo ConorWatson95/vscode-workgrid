@@ -310,6 +310,24 @@ describe("running a route from the dashboard", () => {
     expect(started).toEqual(["t1"]);
   });
 
+  it("starts the route after an approval from Claude, as the same click in VS Code does", async () => {
+    started.length = 0;
+    const { call } = await setup([gate(), implementing()], true, { runs, advanceAfterAnswering: true });
+    const revision = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run.revision;
+    const result = await call("harness_approve_stage", { taskId: "t1", stageId: "review", revision });
+    expect(result.structuredContent.message).toMatch(/^Approved "Code review"\. Advancing in a headless runner/);
+    expect(started).toEqual(["t1"]);
+  });
+
+  it("starts nothing after approving the last stage, since there is nothing left to run", async () => {
+    started.length = 0;
+    const { call } = await setup([gate()], true, { runs, advanceAfterAnswering: true });
+    const revision = (await call("harness_refresh", { taskId: "t1" })).structuredContent.run.revision;
+    const result = await call("harness_approve_stage", { taskId: "t1", stageId: "review", revision });
+    expect(result.structuredContent.message).toBe('Approved "Code review".');
+    expect(started).toEqual([]);
+  });
+
   it("leaves the route where it is when the setting is off", async () => {
     started.length = 0;
     const { call } = await setup([implementing()], true, { runs, pipeline: { pendingQuestion: question } });
