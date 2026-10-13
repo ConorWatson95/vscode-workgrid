@@ -530,21 +530,43 @@ test("declined work is listed above the stages and settled with a sentence, whic
   await ui.unmount();
 });
 
-test("hovering a task shows its description and ticket, drawn hidden until the pointer is on it", async ($, on) => {
+test("hovering a task swaps its status for the description in place, moving no row", async ($, on) => {
+  const described = {
+    ...urgent,
+    description: "Export the pyramid to Excel\nwith the period range",
+    ticketUrl: "https://jira/browse/NMGB-1",
+  };
+  const { ui } = await mountWith($, on, { ...snapshot, ...described }, () => ({}), described);
+  const card = await ui.find({ key: "card:t1" });
+  expect(card?.type).toBe("Box");
+  const hidden = findHidden(card);
+  expect(hidden?.props?.position).toBe("absolute");
+  expect(hidden?.hover).toEqual({ display: "flex" });
+  expect(await ui.find({ type: "Text", text: /^Export the pyramid to Excel with the period range\s*$/ })).toBeDefined();
+  await ui.unmount();
+});
+
+test("opening a task shows its full description and the ticket's link", async ($, on) => {
   const described = {
     ...urgent,
     description: "Export the pyramid to Excel with the period range",
     ticketUrl: "https://jira/browse/NMGB-1",
   };
   const { ui } = await mountWith($, on, { ...snapshot, ...described }, () => ({}), described);
-  const card = await ui.find({ key: "card:t1" });
-  expect(card?.type).toBe("Box");
-  const hidden = (card!.children as any[]).find((child) => child?.props?.display === "none");
-  expect(hidden?.hover).toEqual({ display: "flex" });
-  expect(await ui.find({ type: "Text", text: /^Export the pyramid to Excel/ })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: "Export the pyramid to Excel with the period range" })).toBeDefined();
   expect(await ui.find({ type: "Text", text: "NMGB-1 · https://jira/browse/NMGB-1" })).toBeDefined();
   await ui.unmount();
 });
+
+function findHidden(node: any): any {
+  if (!node || typeof node !== "object") return undefined;
+  if (node.props?.display === "none") return node;
+  for (const child of node.children ?? []) {
+    const found = findHidden(child);
+    if (found) return found;
+  }
+  return undefined;
+}
 
 test("a task with nothing to describe gets no card", async ($, on) => {
   const { ui } = await mountWith($, on, { ...snapshot, ticket: undefined }, () => ({}), { ...urgent, ticket: undefined });

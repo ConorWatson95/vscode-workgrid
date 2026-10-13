@@ -421,11 +421,12 @@ function drawTask($, ui, run, hotkey, columns) {
         label={clip(run.name, Math.floor(columns * 0.55))}
         onPress={() => toggleTask($, run)}
       />
-      <Text dimColor wrap="truncate-end">{description}</Text>
+      <TaskGist ui={ui} run={run} status={description} columns={columns} />
     </Row>
   );
   const rows = [drawTaskCard(ui, run, row)];
   if (!open) return rows;
+  rows.push(...drawAbout(ui, run, columns));
   const snapshot = view.runs.get(run.taskId);
   if (!snapshot) return [...rows, <Row ui={ui} depth={2}><Text dimColor>Loading…</Text></Row>];
   if (!snapshot.inFlight) {
@@ -465,33 +466,64 @@ function drawTask($, ui, run, hotkey, columns) {
 }
 
 /**
- * The task's description and ticket, shown while the pointer is on its row. The row
- * says what the route is doing; this says what the work is, which a name clipped to
- * half the pane rarely does. In the flow rather than placed over the rows beneath,
- * so it never paints over text it does not own; the pointer stays inside the keyed
- * Box either way, so the reveal settles.
+ * The row is a hover scope, so the pointer anywhere on it, name included, lights
+ * the gist drawn over its status. Keyed only when there is something to reveal.
  */
 function drawTaskCard(ui, run, row) {
+  const { Box } = ui;
+  if (!gistOf(run)) return row;
+  return <Box key={"card:" + run.taskId}>{row}</Box>;
+}
+
+/**
+ * The status text, and over it while the row is hovered, the first line of what the
+ * work is. Drawn in place rather than as a card: a card in the flow pushed every row
+ * beneath it down, so moving the pointer down the list moved the list under it. This
+ * occupies the same cell either way, padded so the status beneath never shows through.
+ */
+function TaskGist({ ui, run, status, columns }) {
   const { Box, Text } = ui;
-  const ticket = run.ticket && [run.ticket, run.ticketUrl].filter(Boolean).join(" · ");
-  if (!run.description && !ticket) return row;
+  const gist = gistOf(run);
   return (
-    <Box key={"card:" + run.taskId} flexDirection="column">
-      {row}
-      <Box
-        display="none"
-        hover={{ display: "flex" }}
-        flexDirection="column"
-        marginLeft={6}
-        borderStyle="round"
-        borderDimColor
-        paddingX={1}
-      >
-        {run.description ? <Text wrap="wrap">{run.description}</Text> : null}
-        {ticket ? <Text dimColor wrap="truncate-end">{ticket}</Text> : null}
-      </Box>
+    <Box flexGrow={1} overflow="hidden">
+      <Text dimColor wrap="truncate-end">{status}</Text>
+      {gist ? (
+        <Box position="absolute" top={0} left={0} right={0} display="none" hover={{ display: "flex" }}>
+          <Text wrap="truncate-end">{gist.padEnd(columns)}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
+}
+
+function gistOf(run) {
+  const line = (run.description ?? "").replace(/\s+/g, " ").trim();
+  return line || run.ticketUrl || "";
+}
+
+/**
+ * What the work is, in full, at the top of an opened task: the hover shows one line,
+ * and the ticket's link is where the rest of it lives.
+ */
+function drawAbout(ui, run, columns) {
+  const { Text } = ui;
+  const rows = [];
+  const line = (run.description ?? "").replace(/\s+/g, " ").trim();
+  if (line) {
+    rows.push(
+      <Row ui={ui} depth={2}>
+        <Text dimColor wrap="wrap">{clip(line, Math.max(80, (columns - 6) * 3))}</Text>
+      </Row>,
+    );
+  }
+  if (run.ticketUrl) {
+    rows.push(
+      <Row ui={ui} depth={2}>
+        <Text dimColor wrap="truncate-end">{[run.ticket, run.ticketUrl].filter(Boolean).join(" · ")}</Text>
+      </Row>,
+    );
+  }
+  return rows;
 }
 
 /**
