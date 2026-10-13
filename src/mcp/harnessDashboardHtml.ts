@@ -749,7 +749,9 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       (run.ticketUrl && linkable(run.ticketUrl)
         ? '<div class="sub"><a class="ref" href="#" data-url="' + esc(run.ticketUrl) + '">' + esc(run.ticketUrl) + "</a></div>"
         : run.ticketUrl ? '<div class="sub">' + esc(run.ticketUrl) + "</div>" : "") +
-      (run.description ? '<p class="desc">' + esc(run.description) + "</p>" : "") + "</div>";
+      (run.description ? '<p class="desc">' + esc(run.description) + "</p>" : "") +
+      '<div class="sub"><button class="linkbtn" id="task-report"' + (state.busy ? " disabled" : "") +
+      ' title="Every stage that ran, in full, as a page in your browser">Full task report in browser ↗</button></div>' + "</div>";
     if (run.inFlight) html += '<div class="callout info">A session is running on <b>' + esc(run.inFlight) + "</b>. Decisions wait until it stops.</div>";
     html += '<ol class="route">' + run.stages.map(function (s, i) {
       return '<li><button class="node n-' + s.state + (s.id === state.stageId ? " sel" : "") + '" data-stage="' + esc(s.id) +
@@ -892,7 +894,10 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
         : '<button class="btn primary" id="approve"' + (state.busy ? " disabled" : "") + ">Approve…</button>";
     }
     if (s.canRetry) buttons += '<button class="btn" id="retry"' + (state.busy ? " disabled" : "") + ">Retry stage</button>";
-    if (s.state !== "pending") buttons += '<button class="btn" id="report">Full report</button>';
+    if (s.state !== "pending") {
+      buttons += '<button class="btn" id="report">Full report</button>' +
+        '<button class="btn" id="report-open" title="Write this stage\'s report as a page and open it in your browser">Open in browser</button>';
+    }
     if (buttons) html += '<div class="actions">' + buttons + "</div>";
     if (state.confirming && state.movedWhileDeciding) {
       html += '<div class="flash bad">This run changed while you were writing. Confirming checks it against what you saw when you pressed Approve, so a change that matters is refused, not approved over.</div>';
@@ -990,6 +995,8 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       };
     });
     wireEditor(run, s);
+    var taskReport = $("task-report");
+    if (taskReport) taskReport.onclick = function () { act("harness_open_report", { taskId: run.taskId }); };
     var rmOpen = $("rm-open");
     if (rmOpen) rmOpen.onclick = function () { state.edit = { kind: "remove", id: run.taskId, stage: "confirm" }; render(); };
     var rmCancel = $("rm-cancel");
@@ -1025,6 +1032,10 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     var retry = $("retry");
     if (retry) retry.onclick = function () {
       act("harness_retry_stage", { taskId: run.taskId, stageId: s.id, revision: run.revision });
+    };
+    var reportOpen = $("report-open");
+    if (reportOpen) reportOpen.onclick = function () {
+      act("harness_open_report", { taskId: run.taskId, stageId: s.id });
     };
     var report = $("report");
     if (report) report.onclick = function () {

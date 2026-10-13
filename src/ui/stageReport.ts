@@ -842,13 +842,11 @@ function formatSubtaskDetail(subtask: Subtask, worktreePath?: string): string[] 
   }
 
   if ((activity.commands ?? []).length > 0) {
-    lines.push("", "### Commands run", "", "```");
-    for (const command of activity.commands ?? []) lines.push(command);
-    lines.push("```");
+    lines.push("", "### Commands run", "", ...codeBlock((activity.commands ?? []).join("\n")));
   }
 
   if (activity.output?.trim()) {
-    lines.push("", "### Output", "", "```", activity.output.trimEnd(), "```");
+    lines.push("", "### Output", "", ...codeBlock(activity.output.trimEnd()));
   }
 
   // Above the files-read block: when a session fails, this is what is being looked
@@ -856,7 +854,7 @@ function formatSubtaskDetail(subtask: Subtask, worktreePath?: string): string[] 
   if ((activity.errors ?? []).length > 0) {
     lines.push("", "### Session errors", "");
     for (const error of activity.errors ?? []) {
-      lines.push("```", error.trimEnd(), "```");
+      lines.push(...codeBlock(error.trimEnd()));
     }
   }
 
@@ -875,6 +873,21 @@ function formatSubtaskDetail(subtask: Subtask, worktreePath?: string): string[] 
   }
 
   return lines;
+}
+
+/**
+ * Recorded text as a code block whose fence nothing inside it can close.
+ *
+ * Command output is routinely markdown itself — a Playwright failure prints its error
+ * and page snapshot in ``` fences — and a plain ``` fence was closed by the first of
+ * them. Everything after rendered as prose and the rest of the report inside a code
+ * block, in the preview and in the browser alike. A fence longer than any backtick
+ * run in the text is the CommonMark answer.
+ */
+function codeBlock(text: string): string[] {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [fence, text, fence];
 }
 
 /** Every stage of a task, for "show me everything this task has done". */
@@ -907,6 +920,12 @@ export function formatTaskReport(
   pipeline: TaskPipeline | undefined,
   /** Injected so an open gate wait can be measured without this module reading a clock. */
   now: number = Date.now(),
+  /**
+   * Each stage that ran, in full, folded under its summary. For a reader that is not
+   * the markdown preview: a browser opens the whole route without complaint, and the
+   * summarising below exists only because the preview would not.
+   */
+  stageDetail?: (stage: TaskStage) => string,
 ): string {
   if (!pipeline || pipeline.stages.length === 0) {
     return `# ${taskName}\n\n_This task has no route, so there is nothing to report._`;
@@ -963,8 +982,10 @@ export function formatTaskReport(
   if (ran.length > 0) {
     parts.push("", "", "## Stages that have run", "");
     for (const stage of ran) parts.push(formatStageSummary(stage));
-    parts.push("", "_Open a stage in the tree and choose \"Show What This Did\" for its" +
-      " commands, output and replies._");
+    if (!stageDetail) {
+      parts.push("", "_Open a stage in the tree and choose \"Show What This Did\" for its" +
+        " commands, output and replies._");
+    }
   }
   if (untouched.length > 0) {
     parts.push("", "", "## Not yet run", "");
@@ -972,5 +993,12 @@ export function formatTaskReport(
       parts.push(`- ${stage.name} (${stage.status})`);
     }
   }
-  return capReport(parts.join("\n"));
+  if (!stageDetail) return capReport(parts.join("\n"));
+  if (ran.length > 0) {
+    parts.push("", "", "## Each stage in full", "");
+    for (const stage of ran) {
+      parts.push(`<details><summary>${stage.name} — ${stage.status}</summary>`, "", stageDetail(stage), "", "</details>", "");
+    }
+  }
+  return parts.join("\n");
 }

@@ -37,6 +37,21 @@ so a `vscode` import anywhere beneath them fails a test, not the bundle.
 Read tools, offered to every host: `harness_dashboard` (opens the view), `harness_list_runs`,
 `harness_get_run`, `harness_get_stage_report`.
 
+`harness_open_report` is offered to every host too, because it decides nothing. It writes
+a report to `<storage>/reports/<name>.html` and opens it in the default browser
+(`mcp/reportFiles.ts`):
+
+- Given a `stageId`, it writes that stage's report.
+- Without one, it writes the whole task: the summary, then every stage that ran in full,
+  each folded.
+
+The pane and the dashboard have buttons for both.
+
+The page comes from `ui/reportHtml.ts`, a small markdown renderer kept in the codebase on
+purpose. Reports carry agent replies and command output verbatim, so the renderer escapes
+everything. The only markup it lets through is the `<details>`/`<summary>` the report
+itself emits.
+
 Decision tools: `harness_approve_stage`, `harness_retry_stage`, `harness_set_checklist_item`,
 plus `harness_refresh` for polling. The server registers these **only** when the host
 advertises the `io.modelcontextprotocol/ui` extension, and marks them

@@ -27,7 +27,7 @@ import {
   snapshotRun,
   summariseRun,
 } from "../ui/harnessSnapshot";
-import { formatStageReport } from "../ui/stageReport";
+import { formatStageReport, formatTaskReport } from "../ui/stageReport";
 import {
   TaskRemovalDeps,
   describeRemovalError,
@@ -131,6 +131,34 @@ export class HarnessControlService {
     const stage = task?.pipeline?.stages.find((s) => s.id === stageId);
     if (!task || !stage) return undefined;
     return formatStageReport(task.name, stage, task.pipeline, task.worktreePath);
+  }
+
+  /**
+   * A report to read outside the pane: one stage's, or the whole task's with every
+   * stage that ran folded in beneath its summary.
+   */
+  async reportFor(
+    taskId: string,
+    stageId?: string,
+  ): Promise<{ name: string; title: string; markdown: string } | undefined> {
+    const task = (await this.tasks()).find((t) => t.id === taskId);
+    if (!task) return undefined;
+    if (stageId) {
+      const stage = task.pipeline?.stages.find((s) => s.id === stageId);
+      if (!stage) return undefined;
+      return {
+        name: `${task.name}-${stage.id}`,
+        title: `${stage.name} — ${task.name}`,
+        markdown: formatStageReport(task.name, stage, task.pipeline, task.worktreePath),
+      };
+    }
+    return {
+      name: task.name,
+      title: task.name,
+      markdown: formatTaskReport(task.name, task.pipeline, Date.parse(this.clock.now()), (stage) =>
+        formatStageReport(task.name, stage, task.pipeline, task.worktreePath),
+      ),
+    };
   }
 
   approveStage(

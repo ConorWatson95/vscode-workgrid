@@ -4,6 +4,7 @@ import { HarnessControlService } from "../services/harnessControlService";
 import { SuggestionBoard, SuggestionControlService } from "../services/suggestionControlService";
 import { RunSnapshot, RunSummary, StageView } from "../ui/harnessSnapshot";
 import { GROUP_ORDER } from "../ui/taskGrouping";
+import { ReportOpener } from "./reportFiles";
 
 /**
  * MCP server exposing the harness to Claude as a client: read tools for the model,
@@ -72,6 +73,8 @@ export class HarnessMcpServer {
     private readonly advanceAfterAnswering?: () => boolean,
     /** Suggested work. Absent means the tools for it are not offered. */
     private readonly suggestions?: SuggestionControlService,
+    /** Opens a report in the machine's browser. Absent means the tool is not offered. */
+    private readonly reports?: ReportOpener,
   ) {}
 
   /** Replies to a request; `undefined` for a notification, which gets no reply. */
@@ -212,6 +215,23 @@ export class HarnessMcpServer {
         },
       },
     ];
+    if (this.reports) {
+      // Offered to the model as well as the apps: it changes nothing in the harness,
+      // and "open the report" is a fair thing to ask Claude for in words.
+      read.push({
+        name: "harness_open_report",
+        title: "Open a report in the browser",
+        description:
+          "Opens a report on this machine in the default browser: one stage's, or with no " +
+          "stageId the whole task's, every stage that ran included. Use it when the person " +
+          "wants to read a report rather than have it summarised.",
+        inputSchema: {
+          type: "object",
+          properties: { taskId: { type: "string" }, stageId: { type: "string" } },
+          required: ["taskId"],
+        },
+      });
+    }
     if (this.suggestions) {
       read.push({
         name: "harness_list_suggestions",
@@ -606,6 +626,17 @@ export class HarnessMcpServer {
                     "(Show What This Stage Did) for the rest.",
             },
           ],
+        };
+      }
+      case "harness_open_report": {
+        if (!this.reports) return failure("This server cannot open reports.");
+        const report = await this.service.reportFor(text("taskId") ?? "", text("stageId"));
+        if (!report) return failure("No such task or stage.");
+        const opened = await this.reports.open(report);
+        if (!opened.ok) return failure(opened.error);
+        return {
+          content: [{ type: "text", text: `Opened "${report.title}" in the browser (${opened.value}).` }],
+          structuredContent: { ok: true, message: `Opened "${report.title}".`, file: opened.value },
         };
       }
       case "harness_approve_stage":

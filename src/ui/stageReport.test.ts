@@ -167,6 +167,18 @@ describe("formatStageReport", () => {
     expect(report).toContain("Resolved SQL files: 2");
   });
 
+  it("fences output that carries fences of its own so they cannot close it", () => {
+    // A Playwright failure prints its error and page snapshot in ``` fences, and a
+    // plain fence around it was closed by the first, spilling the rest of the report.
+    const printed = "# Error details\n\n```\nExpected: true\n```\n\n```yaml\n- generic\n```";
+    const report = formatStageReport(
+      "t",
+      stage({ subtasks: [{ ...stage().subtasks[0], activity: { ...stage().subtasks[0].activity!, output: printed } }] }),
+      undefined,
+    );
+    expect(report).toContain("### Output\n\n````\n" + printed + "\n````");
+  });
+
   it("reports what the agent said", () => {
     expect(formatStageReport("t", stage(), undefined)).toContain(
       "It would change 2 objects.",

@@ -568,6 +568,22 @@ function findHidden(node: any): any {
   return undefined;
 }
 
+test("a report opens in the browser, the whole task's or one stage's", async ($, on) => {
+  const { ui, calls } = await mountWith($, on, snapshot, (args) => ({
+    ok: true,
+    message: args.stageId ? 'Opened "Code review — Pyramid export".' : 'Opened "Pyramid export".',
+  }));
+  await ui.press({ key: "open-report:t1" });
+  await settle(() => ui.find({ type: "Text", text: /Opened "Pyramid export"/ }));
+  await ui.press({ key: "open-report:t1:s-gate" });
+  await settle(() => ui.find({ type: "Text", text: /Opened "Code review/ }));
+  expect(calls.map((c) => [c.name, c.arguments])).toEqual([
+    ["harness_open_report", { taskId: "t1" }],
+    ["harness_open_report", { taskId: "t1", stageId: "s-gate" }],
+  ]);
+  await ui.unmount();
+});
+
 test("a task with nothing to describe gets no card", async ($, on) => {
   const { ui } = await mountWith($, on, { ...snapshot, ticket: undefined }, () => ({}), { ...urgent, ticket: undefined });
   expect(await ui.find({ key: "card:t1" })).toBeUndefined();

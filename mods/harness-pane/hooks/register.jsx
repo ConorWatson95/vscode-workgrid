@@ -265,6 +265,15 @@ async function decide($, label, tool, args, timeoutMs) {
 }
 
 /**
+ * A report in the machine's browser, where all of it can be read: the pane draws in
+ * character cells, and a stage's account runs to tens of thousands of them. With no
+ * stage, the whole task, every stage that ran folded in under its summary.
+ */
+function openReport($, taskId, stageId) {
+  return decide($, "Opening the report…", "harness_open_report", stageId ? { taskId, stageId } : { taskId });
+}
+
+/**
  * The stage's whole report, fetched when asked for: it runs to tens of
  * thousands of characters and the feed carries only an excerpt. Kept against
  * the revision it was read at, so a report about a run that has since moved is
@@ -429,6 +438,19 @@ function drawTask($, ui, run, hotkey, columns) {
   rows.push(...drawAbout(ui, run, columns));
   const snapshot = view.runs.get(run.taskId);
   if (!snapshot) return [...rows, <Row ui={ui} depth={2}><Text dimColor>Loading…</Text></Row>];
+  rows.push(
+    <Row ui={ui} depth={2}>
+      <Text> </Text>
+      <Icon ui={ui} glyph="↗" color="suggestion" />
+      <Button
+        key={"open-report:" + run.taskId}
+        plain
+        dimColor
+        label="Full report in browser"
+        onPress={() => void openReport($, run.taskId)}
+      />
+    </Row>,
+  );
   if (!snapshot.inFlight) {
     const advance = drawAdvance($, ui, snapshot, view.focus === run.taskId);
     if (advance) rows.push(advance);
@@ -1195,6 +1217,13 @@ function drawReport($, ui, run, stage) {
           if (!view.output.has(key) || current) return;
           void loadReport($, run, stage);
         }}
+      />
+      <Button
+        key={"open-report:" + key}
+        plain
+        dimColor
+        label="Open in browser"
+        onPress={() => void openReport($, run.taskId, stage.id)}
       />
       {shown && current?.loading ? <Text dimColor>reading the full report…</Text> : null}
     </Row>,

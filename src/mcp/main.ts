@@ -25,6 +25,7 @@ import { WorktreeProvisioner } from "../services/worktreeProvisioner";
 import { BoardFeed } from "./boardFeed";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
 import { HarnessMcpServer } from "./harnessMcpServer";
+import { FileReportOpener } from "./reportFiles";
 
 /**
  * Stdio entry for the harness MCP server: `node dist/harnessMcpServer.js --repo <path>`.
@@ -171,6 +172,7 @@ async function main(): Promise<void> {
     logger,
     () => host.settings.advanceAfterAnswering(),
     suggestions,
+    new FileReportOpener(path.join(host.storageDir, "reports")),
   );
 
   const inFlight = new Set<Promise<void>>();

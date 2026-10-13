@@ -5,6 +5,7 @@ import { InMemoryTaskRepository } from "../persistence/taskRepository";
 import { HarnessControlService, RunControl, TaskRemovalControl } from "../services/harnessControlService";
 import { err, ok } from "../utilities/result";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
+import { ReportOpener } from "./reportFiles";
 import {
   APP_MIME_TYPE,
   DASHBOARD_URI,
@@ -57,6 +58,7 @@ async function setup(
     pipeline?: Partial<TaskPipeline>;
     task?: Partial<TaskWorkspace>;
     removal?: (repository: InMemoryTaskRepository) => TaskRemovalControl;
+    reports?: ReportOpener;
   } = {},
 ) {
   const repository = new InMemoryTaskRepository();
@@ -76,6 +78,8 @@ async function setup(
     { name: "test", version: "0", repositoryRoot: ROOT },
     undefined,
     () => options.advanceAfterAnswering ?? false,
+    undefined,
+    options.reports,
   );
   let id = 0;
   const rpc = async (method: string, params: Record<string, unknown> = {}): Promise<Json> =>
@@ -590,6 +594,64 @@ describe("removing a task", () => {
     await page.settle();
     expect(await repository.get("t1")).toBeUndefined();
     expect(page.html()).toContain("Removed &quot;Pyramid export&quot;");
+  });
+});
+
+describe("opening a report in the browser", () => {
+  function fakeReports() {
+    const opened: { name: string; title: string; markdown: string }[] = [];
+    const reports: ReportOpener = {
+      open: async (report) => {
+        opened.push(report);
+        return ok(`C:/storage/reports/${report.name}.html`);
+      },
+    };
+    return { opened, reports };
+  }
+
+  it("opens one stage's report, and the whole task's with every stage that ran in full", async () => {
+    const { opened, reports } = fakeReports();
+    const { call } = await setup([gate()], false, { reports });
+    const stage = await call("harness_open_report", { taskId: "t1", stageId: "review" });
+    expect(stage.structuredContent).toMatchObject({ ok: true, message: 'Opened "Code review — Pyramid export".' });
+    expect(opened[0].markdown).toContain("Code review");
+
+    await call("harness_open_report", { taskId: "t1" });
+    expect(opened[1].title).toBe("Pyramid export");
+    expect(opened[1].markdown).toContain("## Each stage in full");
+    expect(opened[1].markdown).toContain("<details><summary>Code review — awaiting-approval</summary>");
+    expect(opened[1].markdown).not.toContain("Show What This Did");
+  });
+
+  it("is offered to the model, since it decides nothing, and only where a server can open files", async () => {
+    const { reports } = fakeReports();
+    const names = async (r?: ReportOpener) =>
+      ((await (await setup([gate()], false, { reports: r })).rpc("tools/list")).tools as Json[]).map((t) => t.name);
+    expect(await names(reports)).toContain("harness_open_report");
+    expect(await names(undefined)).not.toContain("harness_open_report");
+  });
+
+  it("names a stage that does not exist rather than opening an empty page", async () => {
+    const { opened, reports } = fakeReports();
+    const { call } = await setup([gate()], true, { reports });
+    const result = await call("harness_open_report", { taskId: "t1", stageId: "nope" });
+    expect(result.isError).toBe(true);
+    expect(opened).toEqual([]);
+  });
+
+  it("opens from the dashboard's buttons, for the task and for the selected stage", async () => {
+    const { opened, reports } = fakeReports();
+    const { call } = await setup([gate()], true, { reports });
+    const page = mountDashboard((name, args) => call(name, args));
+    await page.settle();
+    page.show((await call("harness_refresh", { taskId: "t1" })).structuredContent);
+    await page.settle();
+    page.byId("task-report").onclick();
+    await page.settle();
+    page.byId("report-open").onclick();
+    await page.settle();
+    expect(opened.map((r) => r.title)).toEqual(["Pyramid export", "Code review — Pyramid export"]);
+    expect(page.html()).toContain("Opened &quot;Code review — Pyramid export&quot;.");
   });
 });
 
