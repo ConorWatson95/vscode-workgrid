@@ -28,6 +28,13 @@ import {
   summariseRun,
 } from "../ui/harnessSnapshot";
 import { formatStageReport } from "../ui/stageReport";
+import {
+  TaskRemovalDeps,
+  describeRemovalError,
+  planTaskRemoval,
+  removeTaskCompletely,
+  untrackTask,
+} from "./taskRemoval";
 import { Result, err, ok } from "../utilities/result";
 
 /**
@@ -39,6 +46,16 @@ import { Result, err, ok } from "../utilities/result";
 export interface RunControl {
   /** Resolves once the runner holds the task, or with why it did not. */
   start(taskId: string): Promise<{ ok: boolean; message: string }>;
+}
+
+/**
+ * What removing a task needs beyond the store: the git and archive half of removal,
+ * and the OS's word on whether a run lease's holder is still alive.
+ */
+export interface TaskRemovalControl {
+  deps: TaskRemovalDeps;
+  /** True while a process other than a dead one holds the task's run lease. */
+  runIsLive(task: TaskWorkspace): boolean;
 }
 
 /** Injected so nothing here reads the wall clock. */
@@ -71,6 +88,8 @@ export class HarnessControlService {
     private readonly definitions?: () => StageDefinitionSource,
     /** Absent means this client cannot start runs, and says so when asked to. */
     private readonly runs?: RunControl,
+    /** Absent means this client cannot remove tasks. */
+    private readonly removal?: TaskRemovalControl,
   ) {}
 
   private async tasks(): Promise<TaskWorkspace[]> {
@@ -268,6 +287,58 @@ export class HarnessControlService {
         ? ok({ task: stopping, changed: true, message: "Asked the run to stop. It stops at the current step." })
         : err({ kind: "refused", message: `"${task.name}" is not advancing.` });
     });
+  }
+
+  /**
+   * Removes a task the way VS Code's Remove does: transcripts archived, the worktrees
+   * its stages made tidied away, its own worktree removed, the branch kept.
+   *
+   * Refused while anything is running against the worktree, because a stage writing
+   * into a directory being deleted is how half a removal happens; this client cannot
+   * stop another process's session, so the run is stopped first. Refused on
+   * uncommitted changes unless the caller has said to discard them — the count is in
+   * the refusal, so the question can be asked with the number in it. When git will not
+   * remove the worktree, `untrack` stops tracking the task and leaves the folder.
+   */
+  async removeTask(
+    taskId: string,
+    options: { discardChanges?: boolean; untrack?: boolean } = {},
+  ): Promise<Result<ControlOutcome, ControlRefusal>> {
+    const task = (await this.tasks()).find((t) => t.id === taskId);
+    if (!task) return err({ kind: "unknownTask", message: "That task no longer exists." });
+    if (!this.removal) return err({ kind: "refused", message: "This client cannot remove tasks." });
+
+    const running = task.pipeline && sessionInFlight(task.pipeline);
+    if (running || this.removal.runIsLive(task)) {
+      return err({
+        kind: "inFlight",
+        message: running
+          ? `"${running.name}" is running. Stop the route first.`
+          : `"${task.name}" is being advanced. Stop the route first.`,
+      });
+    }
+
+    if (options.untrack) {
+      await untrackTask(this.removal.deps, task);
+      return ok({ task, changed: true, message: `Stopped tracking "${task.name}". Its folder may remain at ${task.worktreePath}.` });
+    }
+
+    const plan = await planTaskRemoval(this.removal.deps, task);
+    if (plan.changedFileCount > 0 && !options.discardChanges) {
+      return err({
+        kind: "dirty",
+        changedFileCount: plan.changedFileCount,
+        message: `"${task.name}" has ${plan.changedFileCount} uncommitted change(s). Removing the worktree discards them.`,
+      });
+    }
+
+    const removed = await removeTaskCompletely(this.removal.deps, task, plan, {
+      force: plan.changedFileCount > 0,
+    });
+    if (!removed.ok) {
+      return err({ kind: "removalFailed", message: describeRemovalError(removed.error) });
+    }
+    return ok({ task, changed: true, message: `Removed "${task.name}". ${plan.detail.join(" ")}` });
   }
 
   /**

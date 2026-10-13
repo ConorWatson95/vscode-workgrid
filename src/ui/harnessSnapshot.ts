@@ -57,6 +57,10 @@ export interface RunSummary {
   /** The stage the route is stopped at or working on, by name. */
   currentStage?: string;
   ticket?: string;
+  /** Where the ticket lives, when the source gave a link. */
+  ticketUrl?: string;
+  /** The task's brief, capped at `DESCRIPTION_CHARS`: what a row shows on hover. */
+  description?: string;
   updatedAt: string;
   /** What the board says about this run in one line, and since when; see `attentionOf`. */
   attention: Attention;
@@ -181,6 +185,8 @@ export interface RunSnapshot extends RunSummary {
 }
 
 export const EXCERPT_CHARS = 1_200;
+/** The board carries every run's brief, so a long one is cut rather than re-sent whole. */
+export const DESCRIPTION_CHARS = 600;
 
 export function summariseRun(task: TaskWorkspace): RunSummary {
   // Held calls are mirrored into the state file by the process holding them
@@ -200,6 +206,8 @@ export function summariseRun(task: TaskWorkspace): RunSummary {
     groupLabel: groupLabel(group),
     currentStage: currentStage(task.pipeline)?.name,
     ticket: task.origin?.ref,
+    ...(task.origin?.url ? { ticketUrl: task.origin.url } : {}),
+    ...(task.description?.trim() ? { description: capDescription(task.description.trim()) } : {}),
     updatedAt: task.updatedAt,
     attention: attentionOf(task, group),
     progress: {
@@ -480,6 +488,10 @@ function checklistFor(
   return (stage.checklist ?? [])
     .filter((item) => item.kind === "action")
     .map((item) => itemView(item, new Set(item.checked ? [] : [item.id])));
+}
+
+function capDescription(text: string): string {
+  return text.length <= DESCRIPTION_CHARS ? text : text.slice(0, DESCRIPTION_CHARS - 1).trimEnd() + "…";
 }
 
 function checksOf(stage: TaskStage): StageView["checks"] {

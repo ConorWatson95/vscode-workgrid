@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { GitClient } from "../git/gitClient";
@@ -8,7 +9,10 @@ import { Logger, formatLogError } from "../logging/logger";
 import { NodeStateFileIo } from "../persistence/nodeStateFileIo";
 import { NodeStateFileLock } from "../persistence/nodeStateFileLock";
 import { TaskStateStore } from "../persistence/taskStateStore";
+import { SessionArchive } from "../agents/sessionArchive";
+import { writeArchivedHistory } from "../persistence/archivedHistoryFiles";
 import { HarnessControlService } from "../services/harnessControlService";
+import { WorktreeClaimService, gitWorktreeClaimPort } from "../services/worktreeClaimService";
 import { loadHarness } from "../services/reviewRulesService";
 import { loadHeadlessSettings } from "../runner/headlessHost";
 import { RunLauncher, ScanLauncher, launchNode } from "./runLauncher";
@@ -87,6 +91,29 @@ async function main(): Promise<void> {
   const host = loadHeadlessSettings(repositoryRoot);
   for (const problem of host.read.problems) logger.warn(`settings not applied: ${problem}`);
 
+  // Removal writes the same archive VS Code does, under the same storage directory, and
+  // records it in a file beside the transcripts because VS Code's own index is a Memento
+  // nothing outside the window can write.
+  const taskService = new TaskWorkspaceService(repository, worktrees, statusService, logger);
+  const historyDir = path.join(host.storageDir, "history");
+  const removal = {
+    deps: {
+      service: taskService,
+      repository,
+      claims: new WorktreeClaimService(gitWorktreeClaimPort(worktrees, statusService), repository, logger),
+      archive: new SessionArchive(historyDir),
+      recordHistory: async (entry: Parameters<typeof writeArchivedHistory>[1]) => writeArchivedHistory(historyDir, entry),
+      homeDir: os.homedir(),
+      logger,
+      now: () => new Date().toISOString(),
+    },
+    // A lease from another machine is treated as live, as the runner treats it.
+    runIsLive: (task: { pipeline?: { runLease?: { pid: number; host: string } } }) => {
+      const lease = task.pipeline?.runLease;
+      return !!lease && (lease.host !== os.hostname() || alive(lease.pid));
+    },
+  };
+
   // Read per decision rather than once, so an edit to harness.json reaches the next
   // re-run without restarting the server.
   const service = new HarnessControlService(
@@ -95,6 +122,7 @@ async function main(): Promise<void> {
     { now: () => new Date().toISOString() },
     () => loadHarness(repositoryRoot, { configuredPath: host.settings.harnessConfigPath() }),
     new RunLauncher({ repository, repositoryRoot, storageDir: host.storageDir }),
+    removal,
   );
   // Suggested work: read from the scan file beside the state file, scanned by a
   // headless runner, and started through the same creation VS Code uses.
@@ -120,7 +148,7 @@ async function main(): Promise<void> {
       };
     },
     settings: () => host.settings,
-    service: new TaskWorkspaceService(repository, worktrees, statusService, logger),
+    service: taskService,
     provisioner: new WorktreeProvisioner(logger),
     logger,
     now: () => new Date().toISOString(),

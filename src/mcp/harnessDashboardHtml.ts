@@ -154,6 +154,9 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   .runhead h2 { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.3; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .runhead h2 .ref { font-size: 13px; }
   .runhead .sub { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+  .runhead .desc { font-size: 12.5px; margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .remove { margin-top: 14px; }
+  .remove .hint { margin-bottom: 6px; }
   .route { list-style: none; display: flex; gap: 4px; overflow-x: auto; padding: 12px 0 10px; margin: 0; scrollbar-width: none; }
   .route::-webkit-scrollbar { display: none; }
   .node { display: flex; align-items: center; gap: 5px; max-width: 160px; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 2px 9px 2px 7px; font-size: 12px; color: var(--muted); white-space: nowrap; }
@@ -606,7 +609,12 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       "</header>";
   }
 
-  function board() { return runGroups() + suggestionsSection(); }
+  function board() {
+    var flash = state.boardFlash
+      ? '<div class="flash ' + (state.boardFlash.ok ? "ok" : "bad") + '">' + esc(state.boardFlash.text) + "</div>"
+      : "";
+    return flash + runGroups() + suggestionsSection();
+  }
 
   function runGroups() {
     if (!state.runs.length) return '<div class="empty">No routed tasks in ' + esc(state.repositoryRoot || "this repository") + ".</div>";
@@ -629,7 +637,11 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
   function row(r) {
     var a = r.attention || { status: r.groupLabel, tone: "idle" };
     var selected = state.view === "run" && r.taskId === state.taskId;
-    return '<button class="row tone-' + a.tone + (selected ? " sel" : "") + '" data-task="' + esc(r.taskId) + '">' +
+    // The description and ticket, as the row's tooltip: the name says which task,
+    // this says what the work is.
+    var tip = [r.description, [r.ticket, r.ticketUrl].filter(Boolean).join(" · ")].filter(Boolean).join("\n\n");
+    return '<button class="row tone-' + a.tone + (selected ? " sel" : "") + '" data-task="' + esc(r.taskId) + '"' +
+      (tip ? ' title="' + esc(tip) + '"' : "") + ">" +
       '<span class="what"><span class="title">' + ref(r) + '<span class="name">' + esc(r.name) + "</span></span>" +
       '<span class="need">' + esc(a.need || a.status) + "</span></span>" +
       '<span class="meta">' + (a.since ? '<span class="age" title="' + esc(a.since) + '">' + age(a.since) + "</span>" : "") +
@@ -733,7 +745,11 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     html += '<div class="runhead"><h2>' + ref(summary) + "<span>" + esc(name) + "</span></h2>";
     if (!run) return html + '</div><div class="loading">Loading…</div>';
     html += '<div class="sub">' + esc(run.route || "") + " · " + esc(run.branch) + " · " + money(run.costUsd) + " spent" +
-      (run.discardedCostUsd ? " (" + money(run.discardedCostUsd) + " discarded)" : "") + "</div></div>";
+      (run.discardedCostUsd ? " (" + money(run.discardedCostUsd) + " discarded)" : "") + "</div>" +
+      (run.ticketUrl && linkable(run.ticketUrl)
+        ? '<div class="sub"><a class="ref" href="#" data-url="' + esc(run.ticketUrl) + '">' + esc(run.ticketUrl) + "</a></div>"
+        : run.ticketUrl ? '<div class="sub">' + esc(run.ticketUrl) + "</div>" : "") +
+      (run.description ? '<p class="desc">' + esc(run.description) + "</p>" : "") + "</div>";
     if (run.inFlight) html += '<div class="callout info">A session is running on <b>' + esc(run.inFlight) + "</b>. Decisions wait until it stops.</div>";
     html += '<ol class="route">' + run.stages.map(function (s, i) {
       return '<li><button class="node n-' + s.state + (s.id === state.stageId ? " sel" : "") + '" data-stage="' + esc(s.id) +
@@ -763,7 +779,60 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
           '<span class="g">' + GLYPH[s.state] + '</span><span class="nm">' + esc(s.name) + "</span><small>" + esc(s.statusLabel) +
           (s.detail ? " · " + esc(s.detail) : "") + "</small></button></li>";
       }).join("") + "</ol></details>";
-    return html;
+    return html + removeCard(run);
+  }
+
+  // Removing a task, as VS Code's "Remove worktree" does: the worktree goes, the branch
+  // stays. Two steps, because nothing here can undo it, and a dirty worktree is asked
+  // about again with the count in front of the person.
+  function removeCard(run) {
+    if (run.inFlight || run.advancing) return "";
+    var e = state.edit && state.edit.kind === "remove" && state.edit.id === run.taskId ? state.edit : null;
+    if (!e) {
+      return '<div class="remove"><button class="linkbtn" id="rm-open"' + (state.busy ? " disabled" : "") + ">Remove task…</button></div>";
+    }
+    var off = state.busy ? " disabled" : "";
+    var said = e.stage === "dirty"
+      ? ["The uncommitted changes are discarded with the worktree.", "Discard changes and remove"]
+      : e.stage === "failed"
+        ? ["Git would not remove the folder. Stop tracking the task and remove the folder yourself?", "Stop tracking anyway"]
+        : ["Removes the worktree at " + run.worktreePath + ". Branch " + run.branch + " is kept.", "Remove"];
+    return '<div class="remove card">' +
+      (e.flash ? '<div class="flash bad" style="margin:0 0 6px">' + esc(e.flash) + "</div>" : "") +
+      '<div class="hint">' + esc(said[0]) + "</div>" +
+      '<div class="actions"><button class="btn" id="rm-confirm"' + off + ">" + (state.busy ? "Removing…" : esc(said[1])) + "</button>" +
+      '<button class="btn" id="rm-cancel"' + off + ">Cancel</button></div></div>";
+  }
+
+  function removeTask(run) {
+    var e = state.edit;
+    var args = { taskId: run.taskId };
+    if (e.stage === "dirty") args.discardChanges = true;
+    if (e.stage === "failed") args.untrack = true;
+    state.busy = true;
+    render();
+    call("harness_remove_task", args).then(function (result) {
+      var sc = (result && result.structuredContent) || {};
+      var text = sc.message || resultText(result);
+      if (!result.isError) {
+        state.edit = null;
+        closeRun();
+        state.boardFlash = { ok: true, text: text };
+        return;
+      }
+      state.edit = {
+        kind: "remove", id: run.taskId, flash: text,
+        stage: sc.kind === "dirty" ? "dirty" : sc.kind === "removalFailed" ? "failed" : e.stage
+      };
+    }).catch(function (err) {
+      state.edit = { kind: "remove", id: run.taskId, stage: e.stage, flash: err.message };
+    }).then(function () {
+      state.busy = false;
+      // The refresh repaints only on a moved revision, and a refusal moves nothing.
+      state.lastRevision = null;
+      state.lastKey = null;
+      return refresh();
+    });
   }
 
   function focusCard(run, s, summary) {
@@ -921,6 +990,12 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
       };
     });
     wireEditor(run, s);
+    var rmOpen = $("rm-open");
+    if (rmOpen) rmOpen.onclick = function () { state.edit = { kind: "remove", id: run.taskId, stage: "confirm" }; render(); };
+    var rmCancel = $("rm-cancel");
+    if (rmCancel) rmCancel.onclick = function () { state.edit = null; render(); };
+    var rmConfirm = $("rm-confirm");
+    if (rmConfirm) rmConfirm.onclick = function () { removeTask(run); };
     if (!s) return;
     var approve = $("approve");
     if (approve) approve.onclick = function () {

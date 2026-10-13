@@ -69,6 +69,9 @@ const HEADLESS_ROOTS = [
   "src/persistence/suggestionScanFile.ts",
   "src/services/housekeeping.ts",
   "src/runner/update.ts",
+  // Removing a task, which Claude does by the same steps VS Code's Remove takes.
+  "src/services/taskRemoval.ts",
+  "src/persistence/archivedHistoryFiles.ts",
 ];
 
 function resolveImport(fromFile: string, specifier: string): string | undefined {

@@ -30,7 +30,7 @@ import { ReviewPlanService } from "./reviewPlanService";
 import { loadHarness } from "./reviewRulesService";
 import { SessionProcessRegistry } from "./sessionProcessRegistry";
 import { TaskCommitService } from "./taskCommitService";
-import { WorktreeClaimService } from "./worktreeClaimService";
+import { WorktreeClaimService, gitWorktreeClaimPort } from "./worktreeClaimService";
 import { WorktreeDiscardService } from "./worktreeDiscardService";
 
 /**
@@ -378,31 +378,7 @@ export function buildStageRuntime(options: StageRuntimeOptions) {
    * is in `domain/worktreeLease.ts`, and this is the git it needs.
    */
   const worktreeClaims = new WorktreeClaimService(
-    {
-      async list(repositoryRoot) {
-        const listed = await worktreeService.listWorktrees(repositoryRoot);
-        return listed.ok
-          ? listed.value.map((tree) => ({ path: tree.path, branch: tree.branch }))
-          : undefined;
-      },
-      async isDirty(worktreePath) {
-        const status = await statusService.getStatus(worktreePath);
-        // Undefined, not false: unreadable must not read as clean, or cleanup would
-        // remove a worktree nobody could inspect.
-        return status.ok ? status.value.isDirty : undefined;
-      },
-      async countUnmerged(worktreePath, baseBranch) {
-        const ahead = await statusService.getCommitsAhead(worktreePath, baseBranch);
-        return ahead.ok ? ahead.value : undefined;
-      },
-      async remove(repositoryRoot, worktreePath) {
-        const removed = await worktreeService.removeWorktree(repositoryRoot, worktreePath);
-        if (removed.ok) return undefined;
-        return removed.error.kind === "git"
-          ? removed.error.error.message
-          : removed.error.message;
-      },
-    },
+    gitWorktreeClaimPort(worktreeService, statusService),
     repository,
     logger,
   );

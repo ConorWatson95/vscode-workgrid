@@ -58,6 +58,29 @@ Checklist items and declined work are also app-only:
 - `harness_settle_deferral` settles one declined item. It needs a sentence, and it starts
   the route when that was the last item holding it, as answering does.
 
+`harness_remove_task` removes a task the way VS Code's "Remove worktree" does
+(`services/taskRemoval.ts`, which VS Code's command now also uses):
+
+1. Archive the transcripts.
+2. Remove the worktrees the task's stages created.
+3. Remove the task's own worktree and stop tracking the task. The branch is always kept.
+
+It is refused in three cases:
+
+- **A session is running, or a live process holds the run lease.** This client cannot stop
+  another process's session, so stop the route first.
+- **The worktree has uncommitted changes**, unless `discardChanges` is set. The refusal
+  carries `changedFileCount`.
+- **Git will not remove the folder.** The refusal is `removalFailed`; `untrack: true` then
+  forgets the task and leaves the folder.
+
+VS Code's archive index is in its global state, which nothing outside the window can
+write. So each removal also writes `<storage>/history/<taskId>/archived.json`, and VS Code
+merges those records into its list.
+
+A task row's hover shows its description and ticket: a card in the pane, and the row's
+tooltip in the dashboard. The run view's header shows them too.
+
 ## The pane opens itself
 
 In an interactive session whose repository has `.taskworkspaces/harness.json`, the pane

@@ -398,10 +398,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   nativeWatcher.start();
   context.subscriptions.push({ dispose: () => nativeWatcher.dispose() });
 
-  const archive = new SessionArchive(
-    vscode.Uri.joinPath(context.globalStorageUri, "history").fsPath,
-  );
-  const archivedHistory = new ArchivedHistoryRepository(context.globalState);
+  const historyDir = vscode.Uri.joinPath(context.globalStorageUri, "history").fsPath;
+  const archive = new SessionArchive(historyDir);
+  const archivedHistory = new ArchivedHistoryRepository(context.globalState, historyDir);
 
   const diffProvider = new DiffContentProvider();
   context.subscriptions.push(

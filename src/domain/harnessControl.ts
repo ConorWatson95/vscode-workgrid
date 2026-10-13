@@ -72,6 +72,10 @@ export type ControlRefusal =
   | { kind: "needsPullRequest"; message: string }
   | { kind: "notCorrectable"; message: string }
   | { kind: "weakBrief"; message: string }
+  /** The worktree holds uncommitted changes, which removing it would discard. */
+  | { kind: "dirty"; message: string; changedFileCount: number }
+  /** Git would not remove the worktree; the task can still be untracked. */
+  | { kind: "removalFailed"; message: string }
   | { kind: "refused"; message: string };
 
 export interface ControlOutcome {

@@ -117,3 +117,30 @@ describe("summariseRun attention", () => {
     expect(run.attention).toEqual({ status: "All stages resolved", tone: "done" });
   });
 });
+
+describe("summariseRun description", () => {
+  it("carries the task's description and the ticket's link, for a hover to show", () => {
+    const run = summariseRun({
+      ...task([done("a")]),
+      description: "  Export the pyramid with the period range  ",
+      origin: { sourceId: "jira", ref: "NMGB-1", url: "https://jira/browse/NMGB-1", at: "2026-10-08T09:00:00.000Z" },
+    });
+    expect(run).toMatchObject({
+      ticket: "NMGB-1",
+      ticketUrl: "https://jira/browse/NMGB-1",
+      description: "Export the pyramid with the period range",
+    });
+  });
+
+  it("caps a long description, since the board carries every run's", () => {
+    const run = summariseRun({ ...task([done("a")]), description: "x".repeat(5000) });
+    expect(run.description!.length).toBeLessThanOrEqual(600);
+    expect(run.description!.endsWith("…")).toBe(true);
+  });
+
+  it("leaves both out when the task has neither", () => {
+    const run = summariseRun({ ...task([done("a")]), description: "   " });
+    expect(run).not.toHaveProperty("description");
+    expect(run).not.toHaveProperty("ticketUrl");
+  });
+});

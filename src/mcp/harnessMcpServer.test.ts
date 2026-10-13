@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { TaskPipeline, TaskStage } from "../domain/taskPipeline";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { InMemoryTaskRepository } from "../persistence/taskRepository";
-import { HarnessControlService, RunControl } from "../services/harnessControlService";
+import { HarnessControlService, RunControl, TaskRemovalControl } from "../services/harnessControlService";
+import { err, ok } from "../utilities/result";
 import { HARNESS_DASHBOARD_HTML } from "./harnessDashboardHtml";
 import {
   APP_MIME_TYPE,
@@ -50,12 +51,25 @@ type Json = any;
 async function setup(
   stages: TaskStage[] = [gate()],
   appCapable = true,
-  options: { runs?: RunControl; advanceAfterAnswering?: boolean; pipeline?: Partial<TaskPipeline> } = {},
+  options: {
+    runs?: RunControl;
+    advanceAfterAnswering?: boolean;
+    pipeline?: Partial<TaskPipeline>;
+    task?: Partial<TaskWorkspace>;
+    removal?: (repository: InMemoryTaskRepository) => TaskRemovalControl;
+  } = {},
 ) {
   const repository = new InMemoryTaskRepository();
   const seeded = task(stages);
-  await repository.save({ ...seeded, pipeline: { ...seeded.pipeline!, ...options.pipeline } });
-  const service = new HarnessControlService(repository, ROOT, { now: () => AT }, undefined, options.runs);
+  await repository.save({ ...seeded, ...options.task, pipeline: { ...seeded.pipeline!, ...options.pipeline } });
+  const service = new HarnessControlService(
+    repository,
+    ROOT,
+    { now: () => AT },
+    undefined,
+    options.runs,
+    options.removal?.(repository),
+  );
   const server = new HarnessMcpServer(
     service,
     HARNESS_DASHBOARD_HTML,
@@ -419,6 +433,145 @@ describe("settling declined work and managing items from Claude", () => {
     expect(items[1].retired).toBeTruthy();
     expect(pipeline.deferrals![0]).toMatchObject({ resolved: true, resolution: "the publish stage creates it" });
     expect(page.html()).not.toContain('id="ed-text"');
+  });
+});
+
+describe("removing a task", () => {
+  /** Git's half of removal, faked: a worktree with `dirty` changes that git removes unless `gitRefuses`. */
+  function fakeRemoval(state: { dirty?: number; gitRefuses?: boolean; live?: boolean } = {}) {
+    const record = { forced: [] as boolean[], archived: [] as string[], history: [] as Json[], untracked: [] as string[] };
+    const build = (repository: InMemoryTaskRepository): TaskRemovalControl => ({
+      runIsLive: () => state.live ?? false,
+      deps: {
+        service: {
+          getLiveState: async () => ({
+            worktreeExists: true,
+            isDirty: (state.dirty ?? 0) > 0,
+            changedFileCount: state.dirty ?? 0,
+            commitsAhead: 0,
+          }),
+          removeTask: async (id: string, options: { force: boolean }) => {
+            record.forced.push(options.force);
+            if (state.gitRefuses) {
+              return err({ kind: "worktree", error: { kind: "git", error: { message: "Permission denied" } } } as Json);
+            }
+            await repository.delete(id);
+            return ok(undefined);
+          },
+        },
+        repository: {
+          delete: async (id: string) => {
+            record.untracked.push(id);
+            await repository.delete(id);
+          },
+        },
+        archive: {
+          archiveWorktree: (_home: string, worktreePath: string) => {
+            record.archived.push(worktreePath);
+            return [{ id: "s1", title: "stage", mtimeMs: 1, file: "C:/history/t1/s1.jsonl" }];
+          },
+        },
+        recordHistory: async (entry: Json) => {
+          record.history.push(entry);
+        },
+        homeDir: "C:/Users/me",
+        logger: { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined },
+        now: () => AT,
+      },
+    });
+    return { record, build };
+  }
+
+  it("is a dashboard-only decision", async () => {
+    const { rpc } = await setup();
+    const tools: { name: string; _meta?: Json }[] = (await rpc("tools/list")).tools;
+    expect(tools.find((t) => t.name === "harness_remove_task")?._meta?.ui?.visibility).toEqual(["app"]);
+  });
+
+  it("archives the transcripts, removes the worktree and forgets the task, keeping the branch", async () => {
+    const fake = fakeRemoval();
+    const { call, repository } = await setup([gate()], true, { removal: fake.build });
+    const result = await call("harness_remove_task", { taskId: "t1" });
+    expect(result.structuredContent).toMatchObject({ ok: true });
+    expect(result.structuredContent.message).toMatch(/Branch feat\/pyramid is kept\./);
+    expect(await repository.get("t1")).toBeUndefined();
+    expect(fake.record.archived).toEqual(["C:/repo-worktrees/t1"]);
+    expect(fake.record.history[0]).toMatchObject({ taskId: "t1", branchName: "feat/pyramid", archivedAt: AT });
+    expect(fake.record.forced).toEqual([false]);
+  });
+
+  it("refuses uncommitted changes with the count, and discards them only when told to", async () => {
+    const fake = fakeRemoval({ dirty: 3 });
+    const { call, repository } = await setup([gate()], true, { removal: fake.build });
+    const refused = await call("harness_remove_task", { taskId: "t1" });
+    expect(refused.structuredContent).toMatchObject({ ok: false, kind: "dirty", changedFileCount: 3 });
+    expect(await repository.get("t1")).toBeDefined();
+    expect(fake.record.archived).toEqual([]);
+
+    await call("harness_remove_task", { taskId: "t1", discardChanges: true });
+    expect(fake.record.forced).toEqual([true]);
+    expect(await repository.get("t1")).toBeUndefined();
+  });
+
+  it("refuses while a session runs or a live process holds the run", async () => {
+    const running = gate({ status: "active", subtasks: [{ id: "s1", title: "x", prompt: "x", status: "active" }] });
+    const { call } = await setup([running], true, { removal: fakeRemoval().build });
+    expect((await call("harness_remove_task", { taskId: "t1" })).structuredContent).toMatchObject({ kind: "inFlight" });
+
+    const held = fakeRemoval({ live: true });
+    const { call: callHeld, repository } = await setup([gate()], true, { removal: held.build });
+    const refused = await callHeld("harness_remove_task", { taskId: "t1" });
+    expect(refused.structuredContent.message).toMatch(/Stop the route first/);
+    expect(await repository.get("t1")).toBeDefined();
+  });
+
+  it("offers to untrack a task whose worktree git will not remove", async () => {
+    const fake = fakeRemoval({ gitRefuses: true });
+    const { call, repository } = await setup([gate()], true, { removal: fake.build });
+    const refused = await call("harness_remove_task", { taskId: "t1" });
+    expect(refused.structuredContent).toMatchObject({ ok: false, kind: "removalFailed", message: "Git error: Permission denied" });
+    expect(await repository.get("t1")).toBeDefined();
+
+    await call("harness_remove_task", { taskId: "t1", untrack: true });
+    expect(fake.record.untracked).toEqual(["t1"]);
+    expect(await repository.get("t1")).toBeUndefined();
+  });
+
+  it("says so when this client was built without removal", async () => {
+    const { call } = await setup();
+    expect((await call("harness_remove_task", { taskId: "t1" })).structuredContent.message).toMatch(/cannot remove tasks/);
+  });
+
+  it("shows the description and ticket, and removes from the dashboard's own buttons", async () => {
+    const fake = fakeRemoval({ dirty: 2 });
+    const { call, repository } = await setup([gate()], true, {
+      removal: fake.build,
+      task: {
+        description: "Export the pyramid with the period range",
+        origin: { sourceId: "jira", ref: "NMGB-1", url: "https://jira.example/browse/NMGB-1", at: AT },
+      },
+    });
+    const page = mountDashboard((name, args) => call(name, args));
+    await page.settle();
+    page.show((await call("harness_refresh", { taskId: "t1" })).structuredContent);
+    await page.settle();
+    expect(page.html()).toContain('<p class="desc">Export the pyramid with the period range</p>');
+    page.byId("back").onclick();
+    expect(page.html()).toContain(
+      'title="Export the pyramid with the period range\n\nNMGB-1 · https://jira.example/browse/NMGB-1"',
+    );
+    page.attrs("data-task")[0].onclick();
+    await page.settle();
+
+    page.byId("rm-open").onclick();
+    expect(page.html()).toContain("Removes the worktree at C:/repo-worktrees/t1. Branch feat/pyramid is kept.");
+    page.byId("rm-confirm").onclick();
+    await page.settle();
+    expect(page.html()).toContain("Discard changes and remove");
+    page.byId("rm-confirm").onclick();
+    await page.settle();
+    expect(await repository.get("t1")).toBeUndefined();
+    expect(page.html()).toContain("Removed &quot;Pyramid export&quot;");
   });
 });
 

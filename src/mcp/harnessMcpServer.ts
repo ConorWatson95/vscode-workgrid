@@ -497,6 +497,23 @@ export class HarnessMcpServer {
         },
         _meta: appOnly,
       },
+      {
+        name: "harness_remove_task",
+        title: "Remove task",
+        description:
+          "Dashboard-only: removes the task's worktree and stops tracking it, keeping its branch. " +
+          "Refused while a run is live, and on uncommitted changes unless discardChanges is set.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            taskId: { type: "string" },
+            discardChanges: { type: "boolean" },
+            untrack: { type: "boolean" },
+          },
+          required: ["taskId"],
+        },
+        _meta: appOnly,
+      },
       ...suggestionTools,
     ];
   }
@@ -683,6 +700,13 @@ export class HarnessMcpServer {
         return decision(await this.service.advance(text("taskId") ?? ""));
       case "harness_stop_route":
         return decision(await this.service.stop(text("taskId") ?? ""));
+      case "harness_remove_task":
+        return decision(
+          await this.service.removeTask(text("taskId") ?? "", {
+            discardChanges: args.discardChanges === true,
+            untrack: args.untrack === true,
+          }),
+        );
       case "harness_list_suggestions": {
         const board = await this.suggestions!.board();
         return { content: [{ type: "text", text: describeSuggestions(board) }] };
@@ -749,7 +773,7 @@ function decision(
   if (!outcome.ok) {
     return {
       content: [{ type: "text", text: outcome.error.message }],
-      structuredContent: { ok: false, kind: outcome.error.kind, message: outcome.error.message },
+      structuredContent: { ok: false, ...outcome.error },
       isError: true,
     };
   }

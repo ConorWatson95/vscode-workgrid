@@ -195,11 +195,11 @@ test("Report fetches the stage's whole report, which the feed does not carry", a
   await ui.unmount();
 });
 
-async function mountWith($: any, on: any, run: unknown, reply: (args: any) => unknown) {
+async function mountWith($: any, on: any, run: unknown, reply: (args: any) => unknown, row: unknown = urgent) {
   const calls: any[] = [];
   const feed = [
     { type: "run", run },
-    { type: "board", repositoryRoot: "C:/repo", runs: [urgent] },
+    { type: "board", repositoryRoot: "C:/repo", runs: [row] },
   ]
     .map((m) => JSON.stringify(m))
     .join("\n") + "\n";
@@ -527,6 +527,71 @@ test("declined work is listed above the stages and settled with a sentence, whic
     arguments: { taskId: "t1", itemId: "d1", resolution: "the UAT release owns it" },
   });
   expect(await ui.find({ key: "settle" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("hovering a task shows its description and ticket, drawn hidden until the pointer is on it", async ($, on) => {
+  const described = {
+    ...urgent,
+    description: "Export the pyramid to Excel with the period range",
+    ticketUrl: "https://jira/browse/NMGB-1",
+  };
+  const { ui } = await mountWith($, on, { ...snapshot, ...described }, () => ({}), described);
+  const card = await ui.find({ key: "card:t1" });
+  expect(card?.type).toBe("Box");
+  const hidden = (card!.children as any[]).find((child) => child?.props?.display === "none");
+  expect(hidden?.hover).toEqual({ display: "flex" });
+  expect(await ui.find({ type: "Text", text: /^Export the pyramid to Excel/ })).toBeDefined();
+  expect(await ui.find({ type: "Text", text: "NMGB-1 · https://jira/browse/NMGB-1" })).toBeDefined();
+  await ui.unmount();
+});
+
+test("a task with nothing to describe gets no card", async ($, on) => {
+  const { ui } = await mountWith($, on, { ...snapshot, ticket: undefined }, () => ({}), { ...urgent, ticket: undefined });
+  expect(await ui.find({ key: "card:t1" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("Remove asks first, names what goes and what stays, and asks again before discarding changes", async ($, on) => {
+  const { ui, calls } = await mountWith($, on, snapshot, (args) =>
+    args.discardChanges
+      ? { ok: true, message: 'Removed "Pyramid export". Branch feature/nmgb-1 is kept.' }
+      : { ok: false, kind: "dirty", changedFileCount: 3, message: '"Pyramid export" has 3 uncommitted change(s).' },
+  );
+  await ui.press({ key: "remove:t1" });
+  expect(calls).toEqual([]);
+  expect(await ui.find({ type: "Text", text: /^Removes the worktree at C:\/w\/t1\. Branch feature\/nmgb-1 is kept\.$/ })).toBeDefined();
+
+  await ui.press({ key: "remove:confirm" });
+  await settle(() => ui.find({ type: "Text", text: /3 uncommitted change/ }));
+  expect(await ui.find({ type: "Button", text: "Discard changes and remove" })).toBeDefined();
+
+  await ui.press({ key: "remove:confirm" });
+  await settle(() => ui.find({ type: "Text", text: /^Removed "Pyramid export"/ }));
+  expect(calls.map((c) => c.arguments)).toEqual([{ taskId: "t1" }, { taskId: "t1", discardChanges: true }]);
+  expect(await ui.find({ key: "remove:confirm" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("a worktree git will not remove can still be untracked", async ($, on) => {
+  const { ui, calls } = await mountWith($, on, snapshot, (args) =>
+    args.untrack
+      ? { ok: true, message: 'Stopped tracking "Pyramid export".' }
+      : { ok: false, kind: "removalFailed", message: "Git error: Permission denied" },
+  );
+  await ui.press({ key: "remove:t1" });
+  await ui.press({ key: "remove:confirm" });
+  await settle(() => ui.find({ type: "Button", text: "Stop tracking anyway" }));
+  await ui.press({ key: "remove:confirm" });
+  await settle(() => ui.find({ type: "Text", text: /^Stopped tracking/ }));
+  expect(calls.map((c) => c.arguments)).toEqual([{ taskId: "t1" }, { taskId: "t1", untrack: true }]);
+  await ui.unmount();
+});
+
+test("a task being advanced offers no Remove", async ($, on) => {
+  const advancing = { by: "headless", pid: 42, since: "2026-10-09T07:00:00Z", stopRequested: false };
+  const { ui } = await mountWith($, on, { ...snapshot, advancing }, () => ({}));
+  expect(await ui.find({ key: "remove:t1" })).toBeUndefined();
   await ui.unmount();
 });
 

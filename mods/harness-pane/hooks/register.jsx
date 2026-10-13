@@ -410,7 +410,7 @@ function drawTask($, ui, run, hotkey, columns) {
   const description = [run.attention.need ?? run.attention.status, ageText(run.attention.since), run.ticket]
     .filter(Boolean)
     .join(" · ");
-  const rows = [
+  const row = (
     <Row ui={ui} depth={1}>
       <Chevron ui={ui} open={open} />
       <Icon ui={ui} glyph={glyph} color={color} />
@@ -422,14 +422,16 @@ function drawTask($, ui, run, hotkey, columns) {
         onPress={() => toggleTask($, run)}
       />
       <Text dimColor wrap="truncate-end">{description}</Text>
-    </Row>,
-  ];
+    </Row>
+  );
+  const rows = [drawTaskCard(ui, run, row)];
   if (!open) return rows;
   const snapshot = view.runs.get(run.taskId);
   if (!snapshot) return [...rows, <Row ui={ui} depth={2}><Text dimColor>Loading…</Text></Row>];
   if (!snapshot.inFlight) {
     const advance = drawAdvance($, ui, snapshot, view.focus === run.taskId);
     if (advance) rows.push(advance);
+    if (!snapshot.advancing) rows.push(...drawRemove($, ui, snapshot));
   }
   rows.push(...drawHeldCalls($, ui, snapshot, columns));
   rows.push(...drawDeferrals($, ui, snapshot, columns));
@@ -460,6 +462,89 @@ function drawTask($, ui, run, hotkey, columns) {
     if (open) for (const stage of part.stages) rows.push(...drawStage($, ui, snapshot, stage, columns));
   }
   return rows;
+}
+
+/**
+ * The task's description and ticket, shown while the pointer is on its row. The row
+ * says what the route is doing; this says what the work is, which a name clipped to
+ * half the pane rarely does. In the flow rather than placed over the rows beneath,
+ * so it never paints over text it does not own; the pointer stays inside the keyed
+ * Box either way, so the reveal settles.
+ */
+function drawTaskCard(ui, run, row) {
+  const { Box, Text } = ui;
+  const ticket = run.ticket && [run.ticket, run.ticketUrl].filter(Boolean).join(" · ");
+  if (!run.description && !ticket) return row;
+  return (
+    <Box key={"card:" + run.taskId} flexDirection="column">
+      {row}
+      <Box
+        display="none"
+        hover={{ display: "flex" }}
+        flexDirection="column"
+        marginLeft={6}
+        borderStyle="round"
+        borderDimColor
+        paddingX={1}
+      >
+        {run.description ? <Text wrap="wrap">{run.description}</Text> : null}
+        {ticket ? <Text dimColor wrap="truncate-end">{ticket}</Text> : null}
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * Removing a task, as VS Code's Remove does with "Remove worktree": the worktree goes,
+ * the task stops being tracked, the branch stays. Asked in two steps because it cannot
+ * be undone from here, and the harness refuses a dirty worktree until the person has
+ * said, with the count in front of them, that the changes may go.
+ */
+function drawRemove($, ui, run) {
+  const { Text, Button } = ui;
+  const key = run.taskId;
+  const kind = editingKind(key);
+  if (!kind) {
+    return [
+      <Row ui={ui} depth={2}>
+        <Text> </Text>
+        <Icon ui={ui} glyph="✕" color="error" />
+        <Button key={"remove:" + key} plain dimColor label="Remove task…" onPress={() => edit($, key, "remove")} />
+      </Row>,
+    ];
+  }
+  const send = (label, args) =>
+    decide($, label, "harness_remove_task", { taskId: run.taskId, ...args }).then((outcome) => {
+      if (outcome?.ok) view.editing = undefined;
+      else if (outcome?.kind === "dirty") view.editing = { key, kind: "remove-dirty" };
+      else if (outcome?.kind === "removalFailed") view.editing = { key, kind: "remove-failed" };
+      $.ui.invalidate("ui.render");
+    });
+  const cancel = <Button key="remove:cancel" plain dimColor label="Cancel" onPress={() => edit($, key, undefined)} />;
+  if (view.busy) {
+    return [
+      <Row ui={ui} depth={3}>
+        <Text color="suggestion">{view.busy}</Text>
+      </Row>,
+    ];
+  }
+  const [explain, label, args] =
+    kind === "remove-dirty"
+      ? ["The uncommitted changes are discarded with the worktree.", "Discard changes and remove", { discardChanges: true }]
+      : kind === "remove-failed"
+        ? ["Git would not remove the folder. Stop tracking the task and remove the folder yourself?", "Stop tracking anyway", { untrack: true }]
+        : ["Removes the worktree at " + run.worktreePath + ". Branch " + run.branch + " is kept.", "Remove", {}];
+  return [
+    <Row ui={ui} depth={3}>
+      <ui.Box flexShrink={1}>
+        <Text wrap="wrap">{explain}</Text>
+      </ui.Box>
+    </Row>,
+    <Row ui={ui} depth={3}>
+      <Button key="remove:confirm" plain label={label} onPress={() => send("Removing…", args)} />
+      {cancel}
+    </Row>,
+  ];
 }
 
 /**

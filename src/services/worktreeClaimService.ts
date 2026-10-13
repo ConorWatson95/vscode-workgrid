@@ -1,3 +1,5 @@
+import { GitStatusService } from "../git/gitStatusService";
+import { GitWorktreeService } from "../git/gitWorktreeService";
 import { Logger } from "../logging/logger";
 import { TaskRepository } from "../persistence/taskRepository";
 import { TaskWorkspace } from "../domain/taskWorkspace";
@@ -49,6 +51,37 @@ export interface WorktreeGit {
   ): Promise<number | undefined>;
   /** Removes a worktree, returning a message if it refused. */
   remove(repositoryRoot: string, worktreePath: string): Promise<string | undefined>;
+}
+
+/**
+ * The port over the git services, built in one place so the stage runtime and a removal
+ * from Claude cannot disagree about what "dirty" or "unmerged" means.
+ */
+export function gitWorktreeClaimPort(
+  worktrees: Pick<GitWorktreeService, "listWorktrees" | "removeWorktree">,
+  status: Pick<GitStatusService, "getStatus" | "getCommitsAhead">,
+): WorktreeGit {
+  return {
+    async list(repositoryRoot) {
+      const listed = await worktrees.listWorktrees(repositoryRoot);
+      return listed.ok ? listed.value.map((tree) => ({ path: tree.path, branch: tree.branch })) : undefined;
+    },
+    async isDirty(worktreePath) {
+      const read = await status.getStatus(worktreePath);
+      // Undefined, not false: unreadable must not read as clean, or cleanup would
+      // remove a worktree nobody could inspect.
+      return read.ok ? read.value.isDirty : undefined;
+    },
+    async countUnmerged(worktreePath, baseBranch) {
+      const ahead = await status.getCommitsAhead(worktreePath, baseBranch);
+      return ahead.ok ? ahead.value : undefined;
+    },
+    async remove(repositoryRoot, worktreePath) {
+      const removed = await worktrees.removeWorktree(repositoryRoot, worktreePath);
+      if (removed.ok) return undefined;
+      return removed.error.kind === "git" ? removed.error.error.message : removed.error.message;
+    },
+  };
 }
 
 /** Worktree paths present before a stage ran. */

@@ -126,6 +126,14 @@ import { LiveAgentSession } from "../agents/claudeAgents";
 import { ChatItem } from "../agents/streamJson";
 import { PermissionDenial } from "../agents/permissionDenials";
 import { withStatus } from "../ui/statusProgress";
+import {
+  TaskRemovalDeps,
+  describeRemovalError,
+  describeWorktreeError,
+  planTaskRemoval,
+  removeTaskCompletely,
+  untrackTask,
+} from "../services/taskRemoval";
 import { QuestionPanel } from "../ui/questionPanel";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -3813,38 +3821,17 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
   const task = await resolveTask(ctx, arg);
   if (!task) return;
 
-  const live = await ctx.service.getLiveState(task);
+  const removal = removalDeps(ctx);
+  const plan = await planTaskRemoval(removal, task);
   const keepBranch = "Remove worktree";
   const withBranch = "Remove worktree + branch";
-
-  // Planned before the prompt so the dialog can say what else goes. A route's stages
-  // create worktrees the user never asked for by name — a promote/* tree per
-  // environment — and removing the task without them left the directories behind with
-  // nothing left pointing at them. The plan stays conservative here exactly as it is at
-  // route completion: agreeing to remove a task is not agreeing to discard uncommitted
-  // work in a tree you may not know exists.
-  const claimPlan =
-    ctx.worktreeClaims && (task.worktreeClaims ?? []).length > 0
-      ? await ctx.worktreeClaims.planFor(task)
-      : undefined;
-  const alsoRemoving = claimPlan?.remove.length ?? 0;
-  const alsoKeeping = claimPlan?.retain.length ?? 0;
-  const claimDetail = [
-    alsoRemoving > 0
-      ? `Also removing ${alsoRemoving} worktree(s) this task created.`
-      : "",
-    alsoKeeping > 0
-      ? `Keeping ${alsoKeeping}: ${claimPlan!.retain.map((r) => r.reason).join("; ")}.`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const detail = [`Branch: ${task.branchName}`, claimDetail].filter(Boolean).join("\n");
+  // The shared plan says the branch is kept, which is true only of the first choice.
+  const detail = [`Branch: ${task.branchName}`, ...plan.detail.slice(1)].join("\n");
 
   // Offer branch deletion as an extra choice in the confirmation box.
-  const choice = live.isDirty
+  const choice = plan.changedFileCount > 0
     ? await vscode.window.showWarningMessage(
-        `"${task.name}" has ${live.changedFileCount} uncommitted change(s). Removing the worktree will discard them.`,
+        `"${task.name}" has ${plan.changedFileCount} uncommitted change(s). Removing the worktree will discard them.`,
         { modal: true, detail },
         keepBranch,
         withBranch,
@@ -3856,27 +3843,12 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
         withBranch,
       );
   if (choice !== keepBranch && choice !== withBranch) return;
-  const force = live.isDirty;
   const deleteBranch = choice === withBranch;
 
   // Removal archives transcripts, stops the agent and shells out to git, none of
   // which reported anything — so a slow `git worktree remove` was
   // indistinguishable from a click that had not registered.
   const result = await withStatus(`Removing "${task.name}"`, async (step) => {
-    // Preserve Claude history before the worktree (and its transcripts) vanish.
-    step("archiving agent transcripts");
-    const archived = ctx.archive.archiveWorktree(os.homedir(), task.worktreePath, task.id);
-    if (archived.length > 0) {
-      await ctx.archivedHistory.add({
-        taskId: task.id,
-        name: task.name,
-        branchName: task.branchName,
-        archivedAt: new Date().toISOString(),
-        sessions: archived,
-      });
-      ctx.logger.info(`Archived ${archived.length} session(s) for "${task.name}".`);
-    }
-
     // Cancel the route first: stopping only the session ends the current subtask,
     // which the driver reads as a finished turn and answers by starting the next
     // one — against a worktree that is about to be deleted.
@@ -3884,41 +3856,18 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
     ctx.runner.cancel(task.id);
     ctx.sessions.stop(task.id);
     ctx.terminals.disposeTerminal(task.id);
-
-    // Before the task's own worktree, because `apply` re-reads the task to drop the
-    // claims it cleared — and once `removeTask` has run there is no task to re-read,
-    // so the claims would be dropped into nothing while the directories stayed.
-    if (claimPlan && claimPlan.remove.length > 0 && ctx.worktreeClaims) {
-      step(`removing ${claimPlan.remove.length} worktree(s) this task created`);
-      const outcome = await ctx.worktreeClaims.apply(
-        task,
-        claimPlan,
-        new Date().toISOString(),
-      );
-      for (const failure of outcome.failed) {
-        ctx.logger.warn(
-          `Could not remove "${failure.path}" while removing "${task.name}": ${failure.reason}`,
-        );
-      }
-    }
-
-    step("removing the worktree");
-    return ctx.service.removeTask(task.id, { force });
+    return removeTaskCompletely(removal, task, plan, { force: plan.changedFileCount > 0 }, step);
   });
   if (!result.ok) {
-    const message =
-      result.error.kind === "worktree" && "error" in result.error
-        ? describeWorktreeError(result.error.error)
-        : "Failed to remove task workspace.";
     // The git worktree removal failed (e.g. a locked file on Windows). Offer to
     // stop tracking the task anyway so it doesn't linger in the list.
     const pick = await vscode.window.showErrorMessage(
-      `${message}`,
+      describeRemovalError(result.error),
       { modal: true, detail: "The worktree folder may still exist on disk. You can stop tracking this task here and remove the folder manually." },
       "Untrack task anyway",
     );
     if (pick === "Untrack task anyway") {
-      await ctx.repository.delete(task.id);
+      await untrackTask(removal, task);
       ctx.tree.refresh();
     }
     return;
@@ -3928,6 +3877,19 @@ async function removeCommand(ctx: CommandContext, arg: unknown): Promise<void> {
     await deleteTaskBranch(ctx, task);
   }
   ctx.tree.refresh();
+}
+
+function removalDeps(ctx: CommandContext): TaskRemovalDeps {
+  return {
+    service: ctx.service,
+    repository: ctx.repository,
+    claims: ctx.worktreeClaims,
+    archive: ctx.archive,
+    recordHistory: (entry) => ctx.archivedHistory.add(entry),
+    homeDir: os.homedir(),
+    logger: ctx.logger,
+    now: () => new Date().toISOString(),
+  };
 }
 
 /**
@@ -4404,15 +4366,6 @@ async function stopAgentCommand(ctx: CommandContext, arg: unknown): Promise<void
       `Nothing was running for "${task.name}".`,
     );
   }
-}
-
-function describeWorktreeError(error: unknown): string {
-  const e = error as { kind?: string; message?: string; error?: { message?: string } };
-  if (e?.kind === "dirty" && e.message) return e.message;
-  if (e?.kind === "unmerged" && e.message) return e.message;
-  if (e?.kind === "validation" && e.message) return e.message;
-  if (e?.error?.message) return `Git error: ${e.error.message}`;
-  return "Failed to remove task workspace.";
 }
 
 /**
