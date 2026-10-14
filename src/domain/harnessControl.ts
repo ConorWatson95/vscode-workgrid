@@ -16,7 +16,7 @@ import {
 import { offeredCheckIds, setItemCoverage, tickAnsweredItems } from "./checkCoverage";
 import { checklistGates, gateFor } from "./checklistScope";
 import { appendIntervention } from "./interventions";
-import { claimAnswers } from "./hostRequests";
+import { claimAnswers, liveCallOf } from "./hostRequests";
 import { pipelineRevision } from "./pipelineRevision";
 import { missingPullRequestUrl } from "./pullRequestEvidence";
 import { shouldAskForPullRequest } from "./pullRequestWait";
@@ -474,7 +474,7 @@ export function decideAnswers(
     { ...answered, pendingQuestion: { ...answered.pendingQuestion!, submittedAt: request.at } },
     request.at,
   );
-  if (question.liveCallId) {
+  if (liveCallOf(pipeline, question)) {
     return ok({
       task: submitted,
       changed: true,

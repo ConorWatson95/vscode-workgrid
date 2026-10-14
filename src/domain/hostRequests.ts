@@ -1,5 +1,5 @@
 import { clearQuestion, unansweredQuestions } from "./pipelineEngine";
-import { PendingQuestion } from "./taskPipeline";
+import { PendingQuestion, TaskPipeline } from "./taskPipeline";
 import { TaskWorkspace } from "./taskWorkspace";
 
 /**
@@ -27,6 +27,42 @@ import { TaskWorkspace } from "./taskWorkspace";
  * wait would take every live answer away from the session waiting for it.
  */
 export const LIVE_GRACE_MS = 30_000;
+
+/**
+ * The call a live question is waiting on, or undefined when nothing can be waiting.
+ *
+ * A call is held by the session running the question's subtask, so once that subtask
+ * is no longer `active` — reclaimed after its host died, stopped, reverted — no process
+ * holds the call however long anyone waits. Without this an answer given afterwards was
+ * marked submitted for a call that would never collect it, and the task sat parked:
+ * the grace period below only helps when some window is serving the file, and with
+ * only Claude open nothing was. Derived rather than cleared on every path that ends a
+ * session, because a record written by an earlier build still carries the id.
+ */
+export function liveCallOf(
+  pipeline: TaskPipeline,
+  question: PendingQuestion,
+): string | undefined {
+  if (!question.liveCallId) return undefined;
+  const subtask = pipeline.stages
+    .flatMap((stage) => stage.subtasks)
+    .find((candidate) => candidate.id === question.subtaskId);
+  return subtask?.status === "active" ? question.liveCallId : undefined;
+}
+
+/**
+ * Answers already submitted that no live call can now receive, ready for the brief.
+ *
+ * What a background host delivers with nobody waiting on the question: it is not a
+ * window's to answer live, and leaving it would park the task with its answer unread.
+ */
+export function orphanedAnswers(task: TaskWorkspace): boolean {
+  const pipeline = task.pipeline;
+  const question = pipeline?.pendingQuestion;
+  if (!pipeline || !question || !submitted(question)) return false;
+  if (unansweredQuestions(pipeline).length > 0) return false;
+  return liveCallOf(pipeline, question) === undefined;
+}
 
 export type HostAction =
   | { kind: "answerLive"; taskId: string; callId: string }
@@ -56,7 +92,7 @@ export function hostWork(
     if (!pipeline) continue;
     const question = pipeline.pendingQuestion;
     if (question && submitted(question) && unansweredQuestions(pipeline).length === 0) {
-      const callId = question.liveCallId;
+      const callId = liveCallOf(pipeline, question);
       if (callId && owns(callId)) {
         actions.push({ kind: "answerLive", taskId: task.id, callId });
       } else if (callId) {
@@ -89,7 +125,7 @@ export function claimAnswers(
   if (!task || !pipeline || !question || !submitted(question)) return undefined;
   if (unansweredQuestions(pipeline).length > 0) return undefined;
   // A different question has replaced the one this window meant to deliver.
-  if (callId !== undefined && question.liveCallId !== callId) return undefined;
+  if (callId !== undefined && liveCallOf(pipeline, question) !== callId) return undefined;
 
   return {
     task: {

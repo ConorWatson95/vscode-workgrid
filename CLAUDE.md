@@ -4344,6 +4344,17 @@ in flight pick it up at the next advance, and any whose plan document was never 
 the expected path will stop. That is the mechanism working and will read as breakage, which
 is the whole reason to see it happen on one short route first.
 
+**It stopped, and for two reasons that were not the experiment** (14 Oct 2026). On
+`sql-quick` `sq-dev-promote` was refused with
+`docs/plans/${branch}/sq-dev-plan.md does not exist in the worktree`. The plan existed.
+First, `planFile` was read **unsubstituted**: `planOutput` resolved its placeholders
+and its reader did not, so `${branch}` was looked for literally. Second, the writer
+was never told the path. The intent said `docs/plans/<branch>/`, and the model wrote
+`chore-include-…` for the branch `chore/include-…`. A planning stage is now handed its
+resolved `planOutput` path in the prompt (`planOutputInstruction`), so writer and
+reader cannot spell it differently. Finding the plan lifts the hold the old read
+raised. Neither cause tested the coupling question above, so it is still open.
+
 ### A correction whose whole brief was one word
 
 `domain/correctionBrief.ts`, 16 Sep 2026. On RU-563 `rc-implement-app` was corrected
@@ -4837,6 +4848,13 @@ and no daemon. Rules, each load-bearing:
   `stageRuntime`, so VS Code and the runner share it. `heldCalls` is a mirror, never the
   record: the owner rewrites it from what it is actually holding. Clients show it only
   while a session is running, since a process that died mid-hold never cleared it.
+- **A live question outlives the session that asked it** (`liveCallOf`, 14 Oct 2026). A
+  headless run asked, died, and was reclaimed. The question kept its `liveCallId`, so an
+  answer given from Claude afterwards was marked submitted for a call nobody held. Only
+  a process running a stage delivers answers, and none was, so the task sat parked with
+  its answer unread. A call is live only while its subtask is `active`. `revertSubtask`
+  drops the id, `decideAnswers` and `hostWork` send an answer to a dead call into the
+  brief, and housekeeping delivers any already stuck (`deliverOrphanedAnswers`).
 - **Suggested work reaches Claude through a file** (`persistence/suggestionScanFile.ts`,
   `services/suggestionControlService.ts`, 12 Oct 2026). The pane starts a server process
   per call with a 60s timeout, so a scan held in memory had nowhere to land and could not

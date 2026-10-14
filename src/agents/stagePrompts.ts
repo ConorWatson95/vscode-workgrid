@@ -6,6 +6,7 @@ import {
   PlanStep,
   StepAccount,
   parseStepAccounts,
+  planOutputInstruction,
   planStepInstruction,
   stripStepAccounts,
 } from "../domain/planSteps";
@@ -823,7 +824,7 @@ Stay within this objective.${deferralInstruction()}${blockedInstruction(stage)}$
     stage.planFile && planSteps && planSteps.length > 0
       ? planStepInstruction(stage.planFile, planSteps)
       : ""
-  }${handoffInstruction(stage)}${verdictInstruction(stage)}`;
+  }${stage.planOutput ? planOutputInstruction(stage.planOutput) : ""}${handoffInstruction(stage)}${verdictInstruction(stage)}`;
 
   // A workflow command leads, with the brief following as its argument. Sending
   // the command alone would leave a cold session with no task, no brief and no

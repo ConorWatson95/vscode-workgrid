@@ -51,6 +51,9 @@ function task(pipeline: Partial<TaskPipeline> = {}, id = "t1"): TaskWorkspace {
   };
 }
 
+/** The asking subtask still running, which is what holds a live call open. */
+const running = [stage({ subtasks: [{ id: "impl-1", title: "x", prompt: "x", status: "active" }] })];
+
 const answered = (overrides: Partial<PendingQuestion> = {}) =>
   question({
     items: [
@@ -77,7 +80,7 @@ describe("decideAnswers", () => {
   });
 
   it("records a live question's answers for the session's owner to deliver", () => {
-    const t = task({ pendingQuestion: question({ liveCallId: "call-1" }) });
+    const t = task({ stages: running, pendingQuestion: question({ liveCallId: "call-1" }) });
     const outcome = decideAnswers(t, {
       askedAt: question().askedAt,
       answers: { "impl-1-q1": "tab 3", "impl-1-q2": " monthly " },
@@ -88,6 +91,22 @@ describe("decideAnswers", () => {
     const pending = outcome.value.task.pipeline!.pendingQuestion!;
     expect(pending.items.map((i) => i.answer)).toEqual(["tab 3", "monthly"]);
     expect(pending.submittedAt).toBe(AT);
+  });
+
+  it("puts the answers in the brief when the session that asked has stopped", () => {
+    // The parked task: a headless run asked, died and was reclaimed, and the answer
+    // given afterwards waited for a call no process held any more.
+    const t = task({ pendingQuestion: question({ liveCallId: "call-1" }) });
+    const outcome = decideAnswers(t, {
+      askedAt: question().askedAt,
+      answers: { "impl-1-q1": "tab 3", "impl-1-q2": "monthly" },
+      at: AT,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.readyToAdvance).toBe(true);
+    expect(outcome.value.task.pipeline!.pendingQuestion).toBeUndefined();
+    expect(outcome.value.task.description).toContain("A: tab 3");
   });
 
   it("is allowed while the asking session runs, since a live question is asked by one", () => {
@@ -123,7 +142,7 @@ describe("decideAnswers", () => {
 
 describe("hostWork", () => {
   it("delivers a live answer only in the window that owns the call", () => {
-    const tasks = [task({ pendingQuestion: answered({ liveCallId: "call-1" }) })];
+    const tasks = [task({ stages: running, pendingQuestion: answered({ liveCallId: "call-1" }) })];
     expect(hostWork(tasks, NOW, (id) => id === "call-1").actions).toEqual([
       { kind: "answerLive", taskId: "t1", callId: "call-1" },
     ]);
@@ -137,6 +156,11 @@ describe("hostWork", () => {
     expect(hostWork(tasks, NOW + LIVE_GRACE_MS, () => false).actions).toEqual([
       { kind: "answerBrief", taskId: "t1" },
     ]);
+  });
+
+  it("delivers an answer for a stopped session into the brief without waiting", () => {
+    const tasks = [task({ pendingQuestion: answered({ liveCallId: "call-1" }) })];
+    expect(hostWork(tasks, NOW, () => false).actions).toEqual([{ kind: "answerBrief", taskId: "t1" }]);
   });
 
   it("delivers a NEEDS-INFO answer anywhere, and ignores questions nobody submitted", () => {

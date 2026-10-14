@@ -2197,6 +2197,67 @@ describe("plan-step accounting", () => {
     expect(deferral?.text).toContain("needs a human to authorise it");
   });
 
+  it("resolves placeholders in the plan's path, as the stage that wrote it did", async () => {
+    // `planOutput` files the plan under the branch; read literally, `${branch}` named a
+    // folder that never exists and every stage reading the plan was refused.
+    const route: RouteDefinition = {
+      ...PLANNED,
+      stages: PLANNED.stages.map((stage) =>
+        stage.id === "deploy" ? { ...stage, planFile: "docs/plans/${branch}/plan.md" } : stage,
+      ),
+    };
+    const created = createPipeline(route);
+    // Held by a build that read the path literally; finding the plan lifts it.
+    const subject = {
+      ...task(),
+      pipeline: {
+        ...created,
+        stages: created.stages.map((stage) =>
+          stage.id === "deploy"
+            ? { ...stage, blocked: "docs/plans/${branch}/plan.md does not exist in the worktree" }
+            : stage,
+        ),
+      },
+    };
+    const path = `docs/plans/${subject.branchName}/plan.md`;
+    const sessions = fakeSessions({
+      "deploy:": { text: ["STEP 1: done — a", "STEP 2: done — b", "STEP 3: done — c"].join("\n") },
+    });
+    const { runner, repo } = makeRunner(sessions, { files: { [path]: PLAN } });
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const stage = (await repo.get(subject.id))?.pipeline?.stages.find((s) => s.id === "deploy");
+    expect(stage?.status).toBe("passed");
+    expect(stage?.blocked).toBeUndefined();
+    const prompt = sessions.calls.find((c) => c.label.startsWith("deploy:"))!.prompt;
+    expect(prompt).toContain(path);
+    expect(prompt).not.toContain("${branch}");
+  });
+
+  it("tells a planning stage the exact path its plan must be written to", async () => {
+    // Told only `docs/plans/<branch>/`, a model spelled a slashed branch with a hyphen
+    // and the stage reading the plan was refused for its absence.
+    const route: RouteDefinition = {
+      ...PLANNED,
+      stages: PLANNED.stages.map((stage) =>
+        stage.id === "deploy"
+          ? { ...stage, planFile: undefined, planOutput: "docs/plans/${branch}/plan.md" }
+          : stage,
+      ),
+    };
+    const subject = { ...task(), pipeline: createPipeline(route) };
+    const sessions = fakeSessions({ "deploy:": { text: "Planned." } });
+    const { runner, repo } = makeRunner(sessions, { files: {} });
+    await repo.save(subject);
+
+    await runner.advance(subject);
+
+    const prompt = sessions.calls.find((c) => c.label.startsWith("deploy:"))!.prompt;
+    expect(prompt).toContain(`Write the plan to exactly this path, relative to the worktree: docs/plans/${subject.branchName}/plan.md`);
+  });
+
   it("will not run a stage whose plan file is missing", async () => {
     // Running it anyway means improvising from the brief and reporting done, which is
     // the state per-step accounting exists to make impossible.

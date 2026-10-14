@@ -187,6 +187,24 @@ export function unaccountedSteps(
  * parsed — so a stage that renumbers, merges or overlooks a step in its own
  * reading still gets asked about every step the engine is holding.
  */
+/**
+ * Where a planning stage must file its plan, spelled exactly.
+ *
+ * The stage that executes the plan reads it from the declared path with the task's
+ * placeholders filled in, so the writer has to use the same spelling. Route prose
+ * names the path as `docs/plans/<branch>/...`, and a model left to render a branch
+ * containing a slash wrote `chore-include-...` where the reader looked in
+ * `chore/include-...`: the plan existed, the next stage was refused for its absence,
+ * and the open-question check on the plan read nothing either.
+ */
+export function planOutputInstruction(planPath: string): string {
+  return `
+
+Write the plan to exactly this path, relative to the worktree: ${planPath}
+Use that spelling, including any slashes in it — a later stage reads the plan from
+there and is refused if it is anywhere else.`;
+}
+
 export function planStepInstruction(
   planPath: string,
   steps: readonly PlanStep[],

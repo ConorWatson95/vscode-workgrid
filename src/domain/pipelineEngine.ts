@@ -2620,8 +2620,16 @@ export function revertSubtask(
 
   // If nothing else in the stage has started, the stage is back to pending too.
   const anyProgress = subtasks.some((s) => s.status !== "pending");
+  // The session holding a live question's call is gone with the subtask, so the
+  // question is now one the brief answers. `liveCallOf` reaches the same conclusion
+  // for records written before this; clearing it here keeps the record honest.
+  const question = pipeline.pendingQuestion;
+  const pendingQuestion =
+    question?.subtaskId === subtaskId && question.liveCallId
+      ? { ...question, liveCallId: undefined }
+      : question;
   return ok({
-    ...replaceStage(pipeline, {
+    ...replaceStage({ ...pipeline, pendingQuestion }, {
       ...stage,
       status: anyProgress ? stage.status : "pending",
       subtasks,

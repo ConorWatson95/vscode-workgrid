@@ -1,3 +1,4 @@
+import { liveCallOf } from "../domain/hostRequests";
 import { liveHeldCalls } from "../domain/heldCalls";
 import { offeredCheckIds } from "../domain/checkCoverage";
 import { checklistGates, gateFor, itemsForGate } from "../domain/checklistScope";
@@ -366,7 +367,7 @@ export function snapshotRun(task: TaskWorkspace): RunSnapshot {
     question: pipeline?.pendingQuestion && {
       stageName: pipeline.pendingQuestion.stageName,
       askedAt: pipeline.pendingQuestion.askedAt,
-      live: !!pipeline.pendingQuestion.liveCallId,
+      live: liveCallOf(pipeline, pipeline.pendingQuestion) !== undefined,
       items: pipeline.pendingQuestion.items
         .filter((item) => !item.answer)
         .map((item) => item.text),

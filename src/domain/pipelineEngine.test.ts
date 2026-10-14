@@ -2114,6 +2114,27 @@ describe("intervention counting", () => {
 
     expect(reverted.interventions).toBeUndefined();
   });
+
+  // The session holding the call goes with the subtask, so the question becomes one
+  // the brief answers rather than one waiting for a call nobody will collect.
+  it("drops the live call of the question the reverted subtask asked", () => {
+    const started = must(startSubtask(createPipeline(ROUTE), "review-1", "2026-08-07T09:00:00Z"));
+    const asking = {
+      ...started,
+      pendingQuestion: {
+        stageId: "review",
+        stageName: "Review",
+        subtaskId: "review-1",
+        askedAt: "2026-08-07T09:05:00Z",
+        items: [{ id: "q1", text: "Which tab?" }],
+        liveCallId: "call-1",
+      },
+    };
+    const reverted = must(revertSubtask(asking, "review-1"));
+
+    expect(reverted.pendingQuestion?.liveCallId).toBeUndefined();
+    expect(reverted.pendingQuestion?.items).toHaveLength(1);
+  });
 });
 
 describe("assessing work that already exists", () => {

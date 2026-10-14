@@ -807,6 +807,19 @@ export class PipelineRunner {
    * read that threw. `checkAuthoringSkipped` requires two readings that both exist, so
    * every one of those leaves the stage exactly as it was.
    */
+  /** A worktree-relative path a route declared, with the task's placeholders filled in. */
+  private resolveWorktreePath(task: TaskWorkspace, declared: string): string {
+    return substitutePlaceholders(declared, {
+      taskName: task.name,
+      branch: task.branchName,
+      baseBranch: task.baseBranch,
+      baseCommit: task.baseCommit,
+      worktreePath: task.worktreePath,
+      repoRoot: task.repositoryRoot,
+      ticket: taskTicket(task),
+    }).command;
+  }
+
   private async readCheckManifest(
     task: TaskWorkspace,
     stage: TaskStage,
@@ -2119,13 +2132,17 @@ Note: ${covered.skipped}`
     // at all: it would improvise from the brief, report done, and leave nobody able to
     // say which steps happened — the state this whole mechanism exists to prevent.
     let planSteps: PlanStep[] | undefined;
-    if (stage.planFile && this.readWorktreeFile) {
-      const document = await this.readWorktreeFile(task.worktreePath, stage.planFile);
+    // Substituted for `planOutput`'s reason: the stage that writes the plan files it
+    // under a path carrying the branch, so the stage that reads it must resolve the
+    // same placeholders or it looks for `${branch}` literally and never finds it.
+    const planFile = stage.planFile ? this.resolveWorktreePath(task, stage.planFile) : undefined;
+    if (planFile && this.readWorktreeFile) {
+      const document = await this.readWorktreeFile(task.worktreePath, planFile);
       const parsed = document ? parsePlanSteps(document) : [];
       if (!document || parsed.length === 0) {
         const reason = document
-          ? `${stage.planFile} has no numbered steps to account for`
-          : `${stage.planFile} does not exist in the worktree`;
+          ? `${planFile} has no numbered steps to account for`
+          : `${planFile} does not exist in the worktree`;
         this.logger.error(
           `Harness [${task.name}] "${stage.name}" not run: ${reason}. ` +
             "The stage executes that plan, so running it would leave its steps unaccounted for.",
@@ -2139,7 +2156,7 @@ Note: ${covered.skipped}`
       }
       planSteps = parsed;
       steps.push(
-        `"${stage.name}" must account for ${parsed.length} step(s) of ${stage.planFile}.`,
+        `"${stage.name}" must account for ${parsed.length} step(s) of ${planFile}.`,
       );
     }
 
@@ -2210,13 +2227,30 @@ Note: ${covered.skipped}`
               vocabulary,
               checksStageFor(task.pipeline!, stage.id)?.name,
             )
-          : subtaskPrompt(context, stage, subtask, planSteps, vocabulary, toImplement);
+          : subtaskPrompt(
+              context,
+              {
+                ...stage,
+                ...(planFile ? { planFile } : {}),
+                ...(stage.planOutput
+                  ? { planOutput: this.resolveWorktreePath(task, stage.planOutput) }
+                  : {}),
+              },
+              subtask,
+              planSteps,
+              vocabulary,
+              toImplement,
+            );
 
     let pipeline = task.pipeline!;
     // Registered before the session runs, so the steps exist to be unaccounted for
     // even if it dies mid-turn. A stage whose session vanished has accounted for
     // nothing, and that has to be visible rather than inferred from an absence.
-    if (planSteps) pipeline = recordPlanSteps(pipeline, stage.id, planSteps);
+    if (planSteps) {
+      pipeline = recordPlanSteps(pipeline, stage.id, planSteps);
+      // The plan has now been read, so a hold saying it could not be is no longer true.
+      pipeline = clearStageBlocked(pipeline, stage.id, isPlanMissingHold);
+    }
     const started = startSubtask(pipeline, subtask.id, {
       at: new Date().toISOString(),
     });
@@ -3813,4 +3847,12 @@ function routeOutline(
     name: stage.name,
     summary: summariseIntent(stage.intent),
   }));
+}
+
+/** Whether a hold is the one raised for a plan the stage could not read. */
+function isPlanMissingHold(reason: string): boolean {
+  return (
+    reason.endsWith(" does not exist in the worktree") ||
+    reason.endsWith(" has no numbered steps to account for")
+  );
 }

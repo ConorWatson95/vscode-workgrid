@@ -435,27 +435,9 @@ function drawTask($, ui, run, hotkey, columns) {
   );
   const rows = [drawTaskCard(ui, run, row)];
   if (!open) return rows;
-  rows.push(...drawAbout(ui, run, columns));
   const snapshot = view.runs.get(run.taskId);
-  if (!snapshot) return [...rows, <Row ui={ui} depth={2}><Text dimColor>Loading…</Text></Row>];
-  rows.push(
-    <Row ui={ui} depth={2}>
-      <Text> </Text>
-      <Icon ui={ui} glyph="↗" color="suggestion" />
-      <Button
-        key={"open-report:" + run.taskId}
-        plain
-        dimColor
-        label="Full report in browser"
-        onPress={() => void openReport($, run.taskId)}
-      />
-    </Row>,
-  );
-  if (!snapshot.inFlight) {
-    const advance = drawAdvance($, ui, snapshot, view.focus === run.taskId);
-    if (advance) rows.push(advance);
-    if (!snapshot.advancing) rows.push(...drawRemove($, ui, snapshot));
-  }
+  rows.push(drawTaskPanel($, ui, run, snapshot, columns));
+  if (!snapshot) return rows;
   rows.push(...drawHeldCalls($, ui, snapshot, columns));
   rows.push(...drawDeferrals($, ui, snapshot, columns));
   for (const part of foldStages(snapshot)) {
@@ -524,25 +506,73 @@ function gistOf(run) {
 }
 
 /**
- * What the work is, in full, at the top of an opened task: the hover shows one line,
- * and the ticket's link is where the rest of it lives.
+ * The task itself, in one box under its row: what the work is, and what can be done to
+ * the whole task. Stages follow outside it, so a button in here is always about the
+ * task and a button in a stage's box is always about that stage.
+ */
+function drawTaskPanel($, ui, run, snapshot, columns) {
+  const { Box, Text, Button } = ui;
+  const children = [...drawAbout(ui, run, columns)];
+  if (!snapshot) {
+    children.push(<Text dimColor>Loading…</Text>);
+    return <Panel ui={ui} depth={2}>{children}</Panel>;
+  }
+  const actions = [];
+  if (!snapshot.inFlight) {
+    const advance = drawAdvance($, ui, snapshot, view.focus === run.taskId);
+    if (advance) actions.push(advance);
+  }
+  actions.push(
+    <Box flexDirection="row" gap={1}>
+      <Icon ui={ui} glyph="↗" color="suggestion" />
+      <Button
+        plain
+        key={"open-report:" + run.taskId}
+        label="Full report"
+        onPress={() => void openReport($, run.taskId)}
+      />
+    </Box>,
+  );
+  const removable = !snapshot.inFlight && !snapshot.advancing;
+  if (removable) {
+    actions.push(
+      <Box flexDirection="row" gap={1}>
+        <Icon ui={ui} glyph="✕" color="error" />
+        <Button
+          plain
+          key={"remove:" + run.taskId}
+          label="Remove task…"
+          onPress={() => edit($, run.taskId, editingKind(run.taskId) ? undefined : "remove")}
+        />
+      </Box>,
+    );
+  }
+  if (children.length > 0) children.push(<Text> </Text>);
+  children.push(
+    <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+      {actions}
+    </Box>,
+  );
+  if (removable) {
+    const confirm = drawRemove($, ui, snapshot);
+    if (confirm) children.push(confirm);
+  }
+  return <Panel ui={ui} depth={2}>{children}</Panel>;
+}
+
+/**
+ * What the work is, in full: the hover shows one line, and the ticket's link is where
+ * the rest of it lives. The link is left out when the description already carries it,
+ * which a description written from the ticket usually does.
  */
 function drawAbout(ui, run, columns) {
   const { Text } = ui;
   const rows = [];
   const line = (run.description ?? "").replace(/\s+/g, " ").trim();
-  if (line) {
+  if (line) rows.push(<Text dimColor wrap="wrap">{clip(line, Math.max(80, (columns - 10) * 3))}</Text>);
+  if (run.ticketUrl && !line.includes(run.ticketUrl)) {
     rows.push(
-      <Row ui={ui} depth={2}>
-        <Text dimColor wrap="wrap">{clip(line, Math.max(80, (columns - 6) * 3))}</Text>
-      </Row>,
-    );
-  }
-  if (run.ticketUrl) {
-    rows.push(
-      <Row ui={ui} depth={2}>
-        <Text dimColor wrap="truncate-end">{[run.ticket, run.ticketUrl].filter(Boolean).join(" · ")}</Text>
-      </Row>,
+      <Text dimColor wrap="truncate-end">{[run.ticket, run.ticketUrl].filter(Boolean).join(" · ")}</Text>,
     );
   }
   return rows;
@@ -552,21 +582,15 @@ function drawAbout(ui, run, columns) {
  * Removing a task, as VS Code's Remove does with "Remove worktree": the worktree goes,
  * the task stops being tracked, the branch stays. Asked in two steps because it cannot
  * be undone from here, and the harness refuses a dirty worktree until the person has
- * said, with the count in front of them, that the changes may go.
+ * said, with the count in front of them, that the changes may go. The confirmation is
+ * its own red box directly under the button that opened it, so the second press is
+ * where the eye already is.
  */
 function drawRemove($, ui, run) {
-  const { Text, Button } = ui;
+  const { Box, Text, Button } = ui;
   const key = run.taskId;
   const kind = editingKind(key);
-  if (!kind) {
-    return [
-      <Row ui={ui} depth={2}>
-        <Text> </Text>
-        <Icon ui={ui} glyph="✕" color="error" />
-        <Button key={"remove:" + key} plain dimColor label="Remove task…" onPress={() => edit($, key, "remove")} />
-      </Row>,
-    ];
-  }
+  if (!kind) return undefined;
   const send = (label, args) =>
     decide($, label, "harness_remove_task", { taskId: run.taskId, ...args }).then((outcome) => {
       if (outcome?.ok) view.editing = undefined;
@@ -574,13 +598,12 @@ function drawRemove($, ui, run) {
       else if (outcome?.kind === "removalFailed") view.editing = { key, kind: "remove-failed" };
       $.ui.invalidate("ui.render");
     });
-  const cancel = <Button key="remove:cancel" plain dimColor label="Cancel" onPress={() => edit($, key, undefined)} />;
   if (view.busy) {
-    return [
-      <Row ui={ui} depth={3}>
+    return (
+      <Panel ui={ui} depth={0} color="error">
         <Text color="suggestion">{view.busy}</Text>
-      </Row>,
-    ];
+      </Panel>
+    );
   }
   const [explain, label, args] =
     kind === "remove-dirty"
@@ -588,17 +611,15 @@ function drawRemove($, ui, run) {
       : kind === "remove-failed"
         ? ["Git would not remove the folder. Stop tracking the task and remove the folder yourself?", "Stop tracking anyway", { untrack: true }]
         : ["Removes the worktree at " + run.worktreePath + ". Branch " + run.branch + " is kept.", "Remove", {}];
-  return [
-    <Row ui={ui} depth={3}>
-      <ui.Box flexShrink={1}>
-        <Text wrap="wrap">{explain}</Text>
-      </ui.Box>
-    </Row>,
-    <Row ui={ui} depth={3}>
-      <Button key="remove:confirm" plain label={label} onPress={() => send("Removing…", args)} />
-      {cancel}
-    </Row>,
-  ];
+  return (
+    <Panel ui={ui} depth={0} color="error">
+      <Text wrap="wrap">{explain}</Text>
+      <Box flexDirection="row" gap={1}>
+        <Button key="remove:confirm" variant="primary" label={label} onPress={() => send("Removing…", args)} />
+        <Button key="remove:cancel" label="Cancel" onPress={() => edit($, key, undefined)} />
+      </Box>
+    </Panel>
+  );
 }
 
 /**
@@ -658,11 +679,14 @@ function drawStage($, ui, run, stage, columns) {
   ];
   if (!open || !openable) return rows;
 
+  // Everything an opened stage holds sits in one box under its row, so its buttons read
+  // as belonging to that stage rather than to whatever happens to be drawn next.
+  const body = [];
   const actsHere = view.focus === run.taskId && here;
-  if (asked) rows.push(...drawQuestion($, ui, run));
+  if (asked) body.push(...drawQuestion($, ui, run));
   for (const item of stage.checklist) {
-    rows.push(
-      <Row ui={ui} depth={3}>
+    body.push(
+      <Row ui={ui} depth={0}>
         <Icon ui={ui} glyph={item.checked ? "✓" : "○"} color={item.checked ? "success" : "subtle"} />
         <Button
           key={"item:" + item.id}
@@ -689,11 +713,12 @@ function drawStage($, ui, run, stage, columns) {
         </Text>
       </Row>,
     );
-    rows.push(...drawItemTools($, ui, run, stage, item));
+    body.push(...drawItemTools($, ui, run, stage, item));
   }
   const actions = drawActions($, ui, run, stage, actsHere);
-  if (actions) rows.push(<Row ui={ui} depth={3}>{actions}</Row>);
-  if (stage.state !== "pending") rows.push(...drawReport($, ui, run, stage));
+  if (actions) body.push(<Row ui={ui} depth={0}>{actions}</Row>);
+  if (stage.state !== "pending") body.push(...drawReport($, ui, run, stage));
+  if (body.length > 0) rows.push(<Panel ui={ui} depth={3}>{body}</Panel>);
   return rows;
 }
 
@@ -708,13 +733,13 @@ function drawItemTools($, ui, run, stage, item) {
   const key = run.taskId + ":" + item.id;
   const kind = editingKind(key);
   if (!kind) return [];
-  if (view.busy) return [<Row ui={ui} depth={4}><Text color="suggestion">{view.busy}</Text></Row>];
+  if (view.busy) return [<Row ui={ui} depth={1}><Text color="suggestion">{view.busy}</Text></Row>];
   const close = <Button key="item:cancel" plain dimColor label="Cancel" onPress={() => edit($, key, undefined)} />;
   const verify = item.kind === "verify" && stage.kind === "humanVerification";
   if (kind === "note" || kind === "retire") {
     const retire = kind === "retire";
     return [
-      <Row ui={ui} depth={4}>
+      <Row ui={ui} depth={1}>
         <Input
           key={retire ? "itemretire" : "itemnote"}
           autoFocus
@@ -734,7 +759,7 @@ function drawItemTools($, ui, run, stage, item) {
   }
   if (kind === "cover") {
     return [
-      <Row ui={ui} depth={4}>
+      <Row ui={ui} depth={1}>
         <Text dimColor>Answered by:</Text>
         {(stage.checks ?? []).map((check) => (
           <Button
@@ -773,7 +798,7 @@ function drawItemTools($, ui, run, stage, item) {
     tools.push(<Button key={"itemretire:" + item.id} plain label="Withdraw" onPress={() => edit($, key, "retire")} />);
   }
   return [
-    <Row ui={ui} depth={4}>
+    <Row ui={ui} depth={1}>
       {tools}
       {close}
     </Row>,
@@ -883,7 +908,7 @@ function drawQuestion($, ui, run) {
   const question = run.question;
   if (question.submitted) {
     return [
-      <Row ui={ui} depth={3}>
+      <Row ui={ui} depth={0}>
         <Icon ui={ui} glyph="✓" color="success" />
         <Text dimColor>Answered · waiting for {question.live ? "the stage to receive it" : "it to be added to the brief"}</Text>
       </Row>,
@@ -895,7 +920,7 @@ function drawQuestion($, ui, run) {
     const id = question.itemIds[index];
     const answer = view.answers.get(id);
     rows.push(
-      <Row ui={ui} depth={3}>
+      <Row ui={ui} depth={0}>
         <Icon ui={ui} glyph="?" color="warning" />
         <ui.Box flexShrink={1}>
           <Text wrap="wrap">{text}</Text>
@@ -904,14 +929,14 @@ function drawQuestion($, ui, run) {
     );
     if (answer !== undefined) {
       rows.push(
-        <Row ui={ui} depth={4}>
+        <Row ui={ui} depth={1}>
           <Text dimColor wrap="wrap">→ {answer}</Text>
         </Row>,
       );
       return;
     }
     rows.push(
-      <Row ui={ui} depth={4}>
+      <Row ui={ui} depth={1}>
         <Input
           key={"answer:" + id}
           autoFocus={!focused && !view.confirm ? true : undefined}
@@ -955,12 +980,12 @@ function answerItem($, run, id, value) {
  * a second Advance would only be refused by the run lease.
  */
 function drawAdvance($, ui, run, hotkeys) {
-  const { Text, Button } = ui;
+  const { Box, Text, Button } = ui;
   const advancing = run.advancing;
   if (advancing) {
     const who = advancing.by === "headless" ? "headless" : "in VS Code";
     return (
-      <Row ui={ui} depth={2}>
+      <Box flexDirection="row" gap={1}>
         <Icon ui={ui} glyph="●" color="merged" />
         <Text dimColor>
           {advancing.stopRequested ? "Stopping" : "Advancing " + who} · {ageText(advancing.since) || "just now"}
@@ -977,13 +1002,12 @@ function drawAdvance($, ui, run, hotkeys) {
             }
           />
         )}
-      </Row>
+      </Box>
     );
   }
   if (run.attention.tone === "done") return null;
   return (
-    <Row ui={ui} depth={2}>
-      <Text> </Text>
+    <Box flexDirection="row" gap={1}>
       <Icon ui={ui} glyph="▶" color="suggestion" />
       <Button
         key={"advance:" + run.taskId}
@@ -994,7 +1018,7 @@ function drawAdvance($, ui, run, hotkeys) {
           view.busy ? undefined : decide($, "Starting a run…", "harness_advance_route", { taskId: run.taskId })
         }
       />
-    </Row>
+    </Box>
   );
 }
 
@@ -1206,7 +1230,7 @@ function drawReport($, ui, run, stage) {
   const report = view.reports.get(key);
   const current = report && report.revision === run.revision ? report : undefined;
   const rows = [
-    <Row ui={ui} depth={3}>
+    <Row ui={ui} depth={0}>
       <Button
         key={"report:" + key}
         plain
@@ -1231,13 +1255,13 @@ function drawReport($, ui, run, stage) {
   if (!shown) return rows;
   if (current && !current.loading) {
     rows.push(
-      <Row ui={ui} depth={3}>
+      <Row ui={ui} depth={0}>
         {current.failed ? <Text color="error">{current.text}</Text> : <Markdown text={current.text} />}
       </Row>,
     );
   } else if (stage.excerpt) {
     rows.push(
-      <Row ui={ui} depth={3}>
+      <Row ui={ui} depth={0}>
         <Markdown text={stage.excerpt} dimColor />
       </Row>,
     );
@@ -1593,6 +1617,24 @@ function Row({ ui, depth, children }) {
   const { Box } = ui;
   return (
     <Box flexDirection="row" gap={1} marginLeft={depth * 2} overflow="hidden">
+      {children}
+    </Box>
+  );
+}
+
+/** A bordered group, dim unless a colour says it is asking for something. */
+function Panel({ ui, depth, color, children }) {
+  const { Box } = ui;
+  return (
+    <Box
+      flexDirection="column"
+      marginLeft={depth * 2}
+      borderStyle="round"
+      borderColor={color}
+      borderDimColor={!color}
+      paddingX={1}
+      overflow="hidden"
+    >
       {children}
     </Box>
   );

@@ -5,6 +5,7 @@ import {
   refreshStageLabels,
   StageDefinitionSource,
 } from "../domain/stageRefresh";
+import { claimAnswers, orphanedAnswers } from "../domain/hostRequests";
 import { TaskWorkspace } from "../domain/taskWorkspace";
 import { Logger } from "../logging/logger";
 import { TaskRepository } from "../persistence/taskRepository";
@@ -46,6 +47,8 @@ export interface HousekeepingDeps {
 export interface HousekeepingReport {
   /** Subtasks left `active` by a host that is gone, now pending again. */
   reclaimed: number;
+  /** Tasks whose answers, given after the asking session died, went into the brief. */
+  answersDelivered: string[];
   /** Tasks a ticket reply moved back to the operator. */
   feedbackArrived: string[];
   /** `<task>: <stage ids>` for each task whose stages were brought into line with config. */
@@ -58,12 +61,16 @@ export class Housekeeping {
   /** Every job once, in the order that lets each see the last one's writes. */
   async tick(repositoryRoot: string): Promise<HousekeepingReport> {
     const reclaimed = await this.reclaimStale(repositoryRoot);
+    // After the reclaim, which is what turns a dead session's question into a brief one.
+    const answersDelivered = (await this.deliverOrphanedAnswers(repositoryRoot)).map(
+      (task) => task.name,
+    );
     const configSynced = await this.syncRouteConfig(repositoryRoot);
     const feedbackArrived = (await this.pollFeedback(repositoryRoot)).map(
       (task) => task.origin?.ref ?? task.name,
     );
     await this.sweepAgentProcesses(repositoryRoot);
-    return { reclaimed, feedbackArrived, configSynced };
+    return { reclaimed, answersDelivered, feedbackArrived, configSynced };
   }
 
   /**
@@ -86,6 +93,39 @@ export class Housekeeping {
     } catch (error) {
       this.deps.logger.warn(`Could not sweep for abandoned stage subtasks: ${String(error)}`);
       return 0;
+    }
+  }
+
+  /**
+   * Moves answers nothing live can receive into the brief.
+   *
+   * Only a process running a stage delivers answers, so with only Claude open an answer
+   * given after the asking session died was marked submitted and never read: the task
+   * sat parked holding it. Claimed inside the write, so a window serving the same file
+   * cannot deliver it twice, and a task another live process holds is left to it.
+   * Nothing is advanced — starting work is the operator's, and Advance now runs the
+   * stage with the answer in its brief.
+   */
+  async deliverOrphanedAnswers(repositoryRoot: string): Promise<TaskWorkspace[]> {
+    try {
+      const delivered: TaskWorkspace[] = [];
+      for (const task of await this.deps.repository.getByRepository(repositoryRoot)) {
+        if (!orphanedAnswers(task)) continue;
+        if (await this.deps.leases.heldElsewhere(task)) continue;
+        const at = this.deps.now();
+        const saved = await this.deps.repository.update(task.id, (current) =>
+          current && orphanedAnswers(current) ? claimAnswers(current, at)?.task : undefined,
+        );
+        if (!saved) continue;
+        this.deps.logger.info(
+          `Harness [${saved.name}] the stage that asked is gone, so its answers went into the brief. Advance Route runs it with them.`,
+        );
+        delivered.push(saved);
+      }
+      return delivered;
+    } catch (error) {
+      this.deps.logger.warn(`Could not deliver answers left for a stopped stage: ${String(error)}`);
+      return [];
     }
   }
 

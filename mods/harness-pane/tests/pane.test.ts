@@ -558,6 +558,51 @@ test("opening a task shows its full description and the ticket's link", async ($
   await ui.unmount();
 });
 
+test("a description that already carries the ticket's link is not followed by it again", async ($, on) => {
+  const described = {
+    ...urgent,
+    description: "NMGB-1 — https://jira/browse/NMGB-1 Export the pyramid",
+    ticketUrl: "https://jira/browse/NMGB-1",
+  };
+  const { ui } = await mountWith($, on, { ...snapshot, ...described }, () => ({}), described);
+  expect(await ui.find({ type: "Text", text: "NMGB-1 · https://jira/browse/NMGB-1" })).toBeUndefined();
+  await ui.unmount();
+});
+
+test("the task's own actions sit in one box, and Remove's confirmation in a red one inside it", async ($, on) => {
+  const { ui } = await mountWith($, on, snapshot, () => ({}));
+  const tree = await ui.drawn();
+  const panel = findBox(tree, (node) => !!node.props?.borderStyle && hasKey(node, "advance:t1"));
+  expect(panel && hasKey(panel, "open-report:t1") && hasKey(panel, "remove:t1")).toBe(true);
+  // The stage's buttons are in a box of their own, not the task's.
+  expect(hasKey(panel, "approve:t1:s-gate")).toBe(false);
+  expect(findBox(tree, (node) => !!node.props?.borderStyle && hasKey(node, "approve:t1:s-gate"))).toBeDefined();
+
+  await ui.press({ key: "remove:t1" });
+  const confirm = findBox(await ui.drawn(), (node) => node.props?.borderColor === "error");
+  expect(confirm && hasKey(confirm, "remove:confirm") && hasKey(confirm, "remove:cancel")).toBe(true);
+  // Pressing Remove again closes it, rather than leaving the box with no way out but Cancel.
+  await ui.press({ key: "remove:t1" });
+  expect(await ui.find({ key: "remove:confirm" })).toBeUndefined();
+  await ui.unmount();
+});
+
+/** The innermost Box satisfying `match`, so a nested box wins over the one around it. */
+function findBox(node: any, match: (node: any) => boolean): any {
+  if (!node || typeof node !== "object") return undefined;
+  for (const child of node.children ?? []) {
+    const found = findBox(child, match);
+    if (found) return found;
+  }
+  return node.type === "Box" && match(node) ? node : undefined;
+}
+
+function hasKey(node: any, key: string): boolean {
+  if (!node || typeof node !== "object") return false;
+  if (node.key === key || node.props?.key === key) return true;
+  return (node.children ?? []).some((child: any) => hasKey(child, key));
+}
+
 function findHidden(node: any): any {
   if (!node || typeof node !== "object") return undefined;
   if (node.props?.display === "none") return node;

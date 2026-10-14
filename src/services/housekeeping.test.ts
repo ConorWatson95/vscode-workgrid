@@ -110,6 +110,65 @@ describe("Housekeeping.syncRouteConfig", () => {
   });
 });
 
+describe("Housekeeping.deliverOrphanedAnswers", () => {
+  // The live case: a headless run asked, died, was reclaimed, and the operator then
+  // answered from Claude. Nothing was running to collect the answer, so it sat.
+  function asked(id: string, subtaskStatus: "active" | "pending", over: object = {}): TaskWorkspace {
+    const base = task(id);
+    const stage = base.pipeline!.stages[0];
+    return {
+      ...base,
+      description: "Brief.",
+      pipeline: {
+        ...base.pipeline!,
+        stages: [
+          { ...stage, subtasks: [{ id: "sub-1", title: "x", brief: "x", status: subtaskStatus }] },
+          ...base.pipeline!.stages.slice(1),
+        ] as never,
+        pendingQuestion: {
+          stageId: stage.id,
+          stageName: stage.name,
+          subtaskId: "sub-1",
+          askedAt: AT,
+          items: [{ id: "q1", text: "Promote or skip?", answer: "Skip" }],
+          liveCallId: "call-1",
+          submittedAt: AT,
+          ...over,
+        },
+      },
+    };
+  }
+
+  it("puts an answer for a session that is gone into the brief", async () => {
+    const { housekeeping, repository } = setup();
+    await repository.save(asked("gone", "pending"));
+
+    const delivered = await housekeeping.deliverOrphanedAnswers(ROOT);
+
+    expect(delivered.map((t) => t.id)).toEqual(["gone"]);
+    const saved = await repository.get("gone");
+    expect(saved?.pipeline?.pendingQuestion).toBeUndefined();
+    expect(saved?.description).toContain(["Q: Promote or skip?", "A: Skip"].join("\n"));
+  });
+
+  it("leaves an answer a running session is still waiting on, and one not yet submitted", async () => {
+    const { housekeeping, repository } = setup();
+    await repository.save(asked("live", "active"));
+    await repository.save(asked("draft", "pending", { submittedAt: undefined }));
+
+    expect(await housekeeping.deliverOrphanedAnswers(ROOT)).toEqual([]);
+    expect((await repository.get("live"))?.pipeline?.pendingQuestion).toBeDefined();
+    expect((await repository.get("draft"))?.pipeline?.pendingQuestion).toBeDefined();
+  });
+
+  it("leaves a task another live process holds to that process", async () => {
+    const { housekeeping, repository } = setup({}, ["busy"]);
+    await repository.save(asked("busy", "pending"));
+
+    expect(await housekeeping.deliverOrphanedAnswers(ROOT)).toEqual([]);
+  });
+});
+
 describe("Housekeeping.sweepAgentProcesses", () => {
   it("passes active subtasks, and tasks held elsewhere, as off limits", async () => {
     const { housekeeping, repository, swept } = setup({}, ["busy"]);
@@ -134,7 +193,12 @@ describe("Housekeeping.tick", () => {
     await repository.save(task("idle"));
 
     const report = await housekeeping.tick(ROOT);
-    expect(report).toEqual({ reclaimed: 1, feedbackArrived: ["NMGB-1"], configSynced: [] });
+    expect(report).toEqual({
+      reclaimed: 1,
+      answersDelivered: [],
+      feedbackArrived: ["NMGB-1"],
+      configSynced: [],
+    });
     expect(swept).toHaveLength(1);
   });
 });
