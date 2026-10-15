@@ -294,10 +294,23 @@ async function loadReport($, run, stage) {
   $.ui.invalidate("ui.render");
 }
 
-function approve($, run, stage, note) {
+/**
+ * An approved task is done with for now, so it closes: the route carries on and the
+ * task comes back under Working, where finding it still open is one more thing to fold.
+ */
+async function approve($, run, stage, note) {
   const args = { taskId: run.taskId, stageId: stage.id, revision: run.revision };
   if (note && note.trim()) args.note = note.trim();
-  return decide($, "Approving " + stage.name + "…", "harness_approve_stage", args);
+  const outcome = await decide($, "Approving " + stage.name + "…", "harness_approve_stage", args);
+  if (view.flash?.ok) closeTask($, run.taskId);
+  return outcome;
+}
+
+function closeTask($, taskId) {
+  view.openTasks.delete(taskId);
+  for (const key of [...view.openStages]) if (key.startsWith(taskId + ":")) view.openStages.delete(key);
+  if (view.focus === taskId) view.focus = undefined;
+  $.ui.invalidate("ui.render");
 }
 
 function retry($, run, stage) {

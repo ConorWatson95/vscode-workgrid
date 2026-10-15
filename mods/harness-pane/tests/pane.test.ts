@@ -121,6 +121,9 @@ test("the board puts what needs you first, and Approve sends the revision it dre
     name: "harness_approve_stage",
     arguments: { taskId: "t1", stageId: "s-gate", revision: "rev-1", note: "looks right" },
   });
+  // Approving closes the task, so it does not come back under Working still open.
+  expect(await ui.find({ key: "stage:t1:s-gate" })).toBeUndefined();
+  expect(await ui.find({ key: "run:t1" })).toBeDefined();
   // Declares MCP Apps support, without which the server offers no decision tools.
   expect(sent[0].params.capabilities.extensions["io.modelcontextprotocol/ui"].mimeTypes).toContain(
     "text/html;profile=mcp-app",
