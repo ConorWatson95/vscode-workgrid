@@ -172,7 +172,7 @@ export interface RunSnapshot extends RunSummary {
    * The process advancing this route, as its lease records it. Not probed: the board
    * is re-read on every change, and asking the OS whether each holder is alive would
    * spawn a process per render. A crashed holder therefore still shows here until
-   * the next advance takes its lease over.
+   * housekeeping drops its lease (`Housekeeping.releaseDeadLeases`).
    */
   advancing?: { by: "vscode" | "headless"; pid: number; since: string; logPath?: string; stopRequested: boolean };
   /** Tool calls the running stage is blocked on, waiting for a person to allow or deny. */

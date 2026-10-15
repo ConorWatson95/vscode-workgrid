@@ -85,6 +85,24 @@ export class RunLeaseService {
     return (await this.alive(held)) ? held : undefined;
   }
 
+  /**
+   * Drops a lease whose holder has died, and any stop asked of it.
+   *
+   * `acquire` takes such a lease over, but only when somebody presses Advance — and the
+   * clients read the lease as a run in progress, so they offered Stop instead of Advance
+   * and the task sat looking busy with nothing running. Dropped only if it is still the
+   * same dead holder's when written, so a run that took the task meanwhile keeps it.
+   */
+  async releaseDead(task: TaskWorkspace): Promise<boolean> {
+    const held = task.pipeline?.runLease;
+    if (!held || sameOwner(held, this.owner) || (await this.alive(held))) return false;
+    const saved = await this.repository.update(task.id, (current) => {
+      const dropped = dropLease(current, held);
+      return dropped ? (clearStop(dropped) ?? dropped) : undefined;
+    });
+    return saved !== undefined;
+  }
+
   /** Asks whoever holds the task to stop its run. */
   async requestStop(taskId: string, at: string): Promise<boolean> {
     return (await this.repository.update(taskId, (task) => requestStop(task, at))) !== undefined;

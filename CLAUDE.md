@@ -4855,6 +4855,11 @@ and no daemon. Rules, each load-bearing:
   its answer unread. A call is live only while its subtask is `active`. `revertSubtask`
   drops the id, `decideAnswers` and `hostWork` send an answer to a dead call into the
   brief, and housekeeping delivers any already stuck (`deliverOrphanedAnswers`).
+- **A dead holder's lease is dropped in the background** (`releaseDeadLeases`, 15 Oct
+  2026). `acquire` took a dead lease over only when somebody pressed Advance, and both
+  clients read a lease as a run in progress, so they offered Stop and no Advance. Two
+  tasks sat "Advancing" for two days behind a runner and a window that had both gone.
+  The OS is asked first, as `acquire` asks, and a probe that fails keeps the lease.
 - **Suggested work reaches Claude through a file** (`persistence/suggestionScanFile.ts`,
   `services/suggestionControlService.ts`, 12 Oct 2026). The pane starts a server process
   per call with a 60s timeout, so a scan held in memory had nowhere to land and could not

@@ -36,7 +36,10 @@ function setup(over: Partial<HousekeepingDeps> = {}, leased: string[] = []) {
     runner: {
       reclaimStale: async (t) => (reclaimedFrom.push(t.id), { reclaimed: [1] }),
     },
-    leases: { heldElsewhere: async (t) => (t && leased.includes(t.id) ? { pid: 1 } : undefined) },
+    leases: {
+      heldElsewhere: async (t) => (t && leased.includes(t.id) ? { pid: 1 } : undefined),
+      releaseDead: async () => false,
+    },
     feedback: { poll: async () => ({ arrived: [] }) },
     agentProcesses: {
       sweep: async (active, running) => void swept.push({ active, running }),
@@ -185,6 +188,26 @@ describe("Housekeeping.sweepAgentProcesses", () => {
   });
 });
 
+describe("Housekeeping.releaseDeadLeases", () => {
+  it("reports the tasks whose dead holder's lease was dropped", async () => {
+    const lease = { by: "headless" as const, pid: 7, host: "h", processStartedAt: AT, acquiredAt: AT };
+    const asked: string[] = [];
+    const { housekeeping, repository } = setup({
+      leases: {
+        heldElsewhere: async () => undefined,
+        releaseDead: async (t) => (asked.push(t.id), t.id === "dead"),
+      },
+    });
+    await repository.save(task("dead", { pipeline: { ...createPipeline(route), runLease: lease } }));
+    await repository.save(task("alive", { pipeline: { ...createPipeline(route), runLease: { ...lease, pid: 8 } } }));
+    await repository.save(task("free"));
+
+    expect((await housekeeping.releaseDeadLeases(ROOT)).map((t) => t.id)).toEqual(["dead"]);
+    // A task with no lease is not probed: asking the OS costs a process.
+    expect(asked.sort()).toEqual(["alive", "dead"]);
+  });
+});
+
 describe("Housekeeping.tick", () => {
   it("runs every job and reports what each did", async () => {
     const { housekeeping, repository, swept } = setup({
@@ -194,6 +217,7 @@ describe("Housekeeping.tick", () => {
 
     const report = await housekeeping.tick(ROOT);
     expect(report).toEqual({
+      leasesReleased: [],
       reclaimed: 1,
       answersDelivered: [],
       feedbackArrived: ["NMGB-1"],

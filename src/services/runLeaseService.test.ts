@@ -55,6 +55,30 @@ describe("RunLeaseService", () => {
     expect(taken.ok && taken.task.pipeline?.stopRequestedAt).toBeUndefined();
   });
 
+  it("drops a dead holder's lease and its stop request, and keeps a live one's", async () => {
+    const repo = await repository();
+    await new RunLeaseService(repo, "headless", async () => [], other).acquire("t1", AT);
+    await new RunLeaseService(repo, "headless", async () => [], other).requestStop("t1", AT);
+
+    const living = async (pids: readonly number[]) => pids.map((pid) => ({ pid, alive: true, osStartedAt: AT }));
+    expect(await new RunLeaseService(repo, "vscode", living, me).releaseDead((await repo.get("t1"))!)).toBe(false);
+    expect((await repo.get("t1"))?.pipeline?.runLease?.pid).toBe(2);
+
+    const dead = async (pids: readonly number[]) => pids.map((pid) => ({ pid, alive: false }));
+    expect(await new RunLeaseService(repo, "vscode", dead, me).releaseDead((await repo.get("t1"))!)).toBe(true);
+    expect((await repo.get("t1"))?.pipeline?.runLease).toBeUndefined();
+    expect((await repo.get("t1"))?.pipeline?.stopRequestedAt).toBeUndefined();
+  });
+
+  it("never drops its own lease as dead", async () => {
+    const repo = await repository();
+    const dead = async (pids: readonly number[]) => pids.map((pid) => ({ pid, alive: false }));
+    const mine = new RunLeaseService(repo, "vscode", dead, me);
+    await mine.acquire("t1", AT);
+    expect(await mine.releaseDead((await repo.get("t1"))!)).toBe(false);
+    expect((await repo.get("t1"))?.pipeline?.runLease?.pid).toBe(1);
+  });
+
   it("keeps a holder whose liveness could not be probed", async () => {
     const repo = await repository();
     await new RunLeaseService(repo, "headless", async () => [], other).acquire("t1", AT);

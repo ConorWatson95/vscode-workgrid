@@ -31,7 +31,10 @@ export interface HousekeepingDeps {
   runner: {
     reclaimStale(task: TaskWorkspace, at: string): Promise<{ reclaimed: readonly unknown[] }>;
   };
-  leases: { heldElsewhere(task: TaskWorkspace | undefined): Promise<unknown> };
+  leases: {
+    heldElsewhere(task: TaskWorkspace | undefined): Promise<unknown>;
+    releaseDead(task: TaskWorkspace): Promise<boolean>;
+  };
   feedback: { poll(repositoryRoot: string): Promise<{ arrived: TaskWorkspace[] }> };
   agentProcesses: {
     sweep(activeSubtaskIds: ReadonlySet<string>, runningTaskIds?: ReadonlySet<string>): Promise<void>;
@@ -45,6 +48,8 @@ export interface HousekeepingDeps {
 }
 
 export interface HousekeepingReport {
+  /** Tasks whose run lease named a process that has died, now free to advance. */
+  leasesReleased: string[];
   /** Subtasks left `active` by a host that is gone, now pending again. */
   reclaimed: number;
   /** Tasks whose answers, given after the asking session died, went into the brief. */
@@ -60,6 +65,7 @@ export class Housekeeping {
 
   /** Every job once, in the order that lets each see the last one's writes. */
   async tick(repositoryRoot: string): Promise<HousekeepingReport> {
+    const leasesReleased = (await this.releaseDeadLeases(repositoryRoot)).map((task) => task.name);
     const reclaimed = await this.reclaimStale(repositoryRoot);
     // After the reclaim, which is what turns a dead session's question into a brief one.
     const answersDelivered = (await this.deliverOrphanedAnswers(repositoryRoot)).map(
@@ -70,7 +76,32 @@ export class Housekeeping {
       (task) => task.origin?.ref ?? task.name,
     );
     await this.sweepAgentProcesses(repositoryRoot);
-    return { reclaimed, answersDelivered, feedbackArrived, configSynced };
+    return { leasesReleased, reclaimed, answersDelivered, feedbackArrived, configSynced };
+  }
+
+  /**
+   * Frees tasks whose run lease names a process that has died.
+   *
+   * A runner that crashes, or a VS Code window that closes mid-advance, leaves its lease
+   * behind, and both clients read a lease as a run in progress: the task showed
+   * "Advancing" with a Stop button and no Advance for days. Nothing is advanced here.
+   */
+  async releaseDeadLeases(repositoryRoot: string): Promise<TaskWorkspace[]> {
+    try {
+      const released: TaskWorkspace[] = [];
+      for (const task of await this.deps.repository.getByRepository(repositoryRoot)) {
+        if (!task.pipeline?.runLease) continue;
+        if (!(await this.deps.leases.releaseDead(task))) continue;
+        this.deps.logger.info(
+          `Harness [${task.name}] the process advancing it (pid ${task.pipeline.runLease.pid}) is gone, so the route is free to advance again.`,
+        );
+        released.push(task);
+      }
+      return released;
+    } catch (error) {
+      this.deps.logger.warn(`Could not release leases held by stopped processes: ${String(error)}`);
+      return [];
+    }
   }
 
   /**
