@@ -1,4 +1,10 @@
-import { SessionTokenTotals, Subtask, TaskPipeline, TaskStage } from "./taskPipeline";
+import {
+  SessionTokenTotals,
+  SubagentCounts,
+  Subtask,
+  TaskPipeline,
+  TaskStage,
+} from "./taskPipeline";
 import { humanWaitOf } from "./humanWait";
 
 /**
@@ -49,6 +55,20 @@ export interface UsageTotals {
    */
   models: string[];
   /**
+   * Of `models`, those the CLI said it could not price (`costBasis: "unknown"`).
+   *
+   * Shown, never held on. A CLI that predates a model reports a cost for it anyway,
+   * and on 2.1.284 a one-word Haiku 5.5 reply came out at about 40 times its real
+   * price — so a cheaper-model pilot would have read the cheap model as the dear one.
+   * Any `costUsd` total that includes one of these is not a measurement.
+   */
+  unpricedModels: string[];
+  /**
+   * Subagent outcomes summed across sessions that reported them. Absent when none
+   * did, which means unreported rather than none spawned.
+   */
+  subagents?: SubagentCounts;
+  /**
    * The largest single prompt any of these sessions sent. A maximum, never a sum —
    * it is about one request's size, not volume. Absent when nothing reported one.
    */
@@ -83,7 +103,28 @@ function emptyTotals(): UsageTotals {
     measured: 0,
     unmeasured: 0,
     models: [],
+    unpricedModels: [],
   };
+}
+
+/**
+ * Adds one session's tokens into a running total.
+ *
+ * The lifetime split is summed only from sessions that reported one, so on a route
+ * that ran partly before it was recorded the two halves add up to less than
+ * `cacheCreation` — which is the honest reading, and the report says so.
+ */
+export function addTokens(into: SessionTokenTotals, from: SessionTokenTotals): void {
+  into.input += from.input;
+  into.output += from.output;
+  into.cacheRead += from.cacheRead;
+  into.cacheCreation += from.cacheCreation;
+  if (from.cacheCreation1h !== undefined) {
+    into.cacheCreation1h = (into.cacheCreation1h ?? 0) + from.cacheCreation1h;
+  }
+  if (from.cacheCreation5m !== undefined) {
+    into.cacheCreation5m = (into.cacheCreation5m ?? 0) + from.cacheCreation5m;
+  }
 }
 
 /**
@@ -124,6 +165,7 @@ function elapsedOf(subtask: Subtask): number {
 export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
   const totals = emptyTotals();
   const models = new Set<string>();
+  const unpriced = new Set<string>();
   for (const subtask of subtasks) {
     if (!hasRun(subtask)) continue;
     totals.elapsedMs += elapsedOf(subtask);
@@ -131,7 +173,29 @@ export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
     // What ran, not what was asked for. A model an org policy disallows falls
     // back silently, and two runs compared on the requested name would then be
     // two runs of the same model reported as a comparison between two.
-    if (subtask.activity?.actualModel) models.add(subtask.activity.actualModel);
+    //
+    // The billed models outrank the init event where both exist: the init event names
+    // the model a session started on, and a refusal fallback moves it mid-session.
+    // Using one source per session also keeps a spelling difference between the two
+    // from listing one model twice — which is the very signal this list is read for.
+    const answered = subtask.activity?.answeredBy;
+    if (answered && answered.length > 0) {
+      for (const entry of answered) {
+        models.add(entry.model);
+        if (entry.costBasis === "unknown") unpriced.add(entry.model);
+      }
+    } else if (subtask.activity?.actualModel) {
+      models.add(subtask.activity.actualModel);
+    }
+    const subagents = subtask.activity?.subagents;
+    if (subagents) {
+      const sum = totals.subagents ?? { spawned: 0, completed: 0, failed: 0, killed: 0 };
+      sum.spawned += subagents.spawned;
+      sum.completed += subagents.completed;
+      sum.failed += subagents.failed;
+      sum.killed += subagents.killed;
+      totals.subagents = sum;
+    }
     const peak = subtask.activity?.peakContextTokens;
     if (peak !== undefined && peak > (totals.peakContextTokens ?? 0)) {
       totals.peakContextTokens = peak;
@@ -146,14 +210,10 @@ export function subtasksUsage(subtasks: readonly Subtask[]): UsageTotals {
     }
     totals.measured += 1;
     if (cost !== undefined) totals.costUsd += cost;
-    if (tokens) {
-      totals.tokens.input += tokens.input;
-      totals.tokens.output += tokens.output;
-      totals.tokens.cacheRead += tokens.cacheRead;
-      totals.tokens.cacheCreation += tokens.cacheCreation;
-    }
+    if (tokens) addTokens(totals.tokens, tokens);
   }
   totals.models = [...models].sort();
+  totals.unpricedModels = [...unpriced].sort();
   return totals;
 }
 
@@ -187,12 +247,7 @@ export function discardedUsage(pipeline: TaskPipeline): UsageTotals {
     totals.costUsd += run.costUsd ?? 0;
     totals.elapsedMs += run.elapsedMs ?? 0;
     totals.measured += run.sessions;
-    if (run.tokens) {
-      totals.tokens.input += run.tokens.input;
-      totals.tokens.output += run.tokens.output;
-      totals.tokens.cacheRead += run.tokens.cacheRead;
-      totals.tokens.cacheCreation += run.tokens.cacheCreation;
-    }
+    if (run.tokens) addTokens(totals.tokens, run.tokens);
   }
   return totals;
 }
@@ -200,6 +255,8 @@ export function discardedUsage(pipeline: TaskPipeline): UsageTotals {
 function addDiscarded(live: UsageTotals, pipeline: TaskPipeline): UsageTotals {
   const gone = discardedUsage(pipeline);
   if (!hasUsage(gone)) return live;
+  const tokens = { ...live.tokens };
+  addTokens(tokens, gone.tokens);
   return {
     costUsd: live.costUsd + gone.costUsd,
     elapsedMs: live.elapsedMs + gone.elapsedMs,
@@ -212,14 +269,12 @@ function addDiscarded(live: UsageTotals, pipeline: TaskPipeline): UsageTotals {
     measured: live.measured + gone.measured,
     unmeasured: live.unmeasured + gone.unmeasured,
     models: live.models,
+    // A discarded run records neither, so the surviving runs' are the only ones known.
+    unpricedModels: live.unpricedModels,
+    ...(live.subagents ? { subagents: live.subagents } : {}),
     // A discarded run records no peak, so the surviving runs' is the only one known.
     ...(live.peakContextTokens !== undefined ? { peakContextTokens: live.peakContextTokens } : {}),
-    tokens: {
-      input: live.tokens.input + gone.tokens.input,
-      output: live.tokens.output + gone.tokens.output,
-      cacheRead: live.tokens.cacheRead + gone.tokens.cacheRead,
-      cacheCreation: live.tokens.cacheCreation + gone.tokens.cacheCreation,
-    },
+    tokens,
   };
 }
 

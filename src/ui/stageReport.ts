@@ -193,11 +193,31 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
       `${formatTokens(output)} out`,
     );
   }
+  // Only once a session has reported the split. A one-hour write is dearer than a
+  // five-minute one and the CLI picks per session, so this is where a cost difference
+  // between two otherwise identical runs can come from.
+  const longWrites = totals.tokens.cacheCreation1h ?? 0;
+  const shortWrites = totals.tokens.cacheCreation5m ?? 0;
+  if (longWrites + shortWrites > 0) {
+    const unsplit = totals.tokens.cacheCreation - longWrites - shortWrites;
+    parts.push(
+      `cache writes ${formatTokens(longWrites)} 1h / ${formatTokens(shortWrites)} 5m` +
+        (unsplit > 0 ? ` (${formatTokens(unsplit)} unreported)` : ""),
+    );
+  }
 
   // Named rather than assumed: the requested model is not evidence of what ran.
   if (totals.models.length > 0) parts.push(`on ${totals.models.join(", ")}`);
   if (totals.peakContextTokens !== undefined) {
     parts.push(`largest prompt ${formatTokens(totals.peakContextTokens)}`);
+  }
+  const subagents = totals.subagents;
+  if (subagents && subagents.spawned > 0) {
+    const lost = [
+      subagents.failed > 0 ? `${subagents.failed} failed` : "",
+      subagents.killed > 0 ? `${subagents.killed} killed` : "",
+    ].filter(Boolean);
+    parts.push(`${subagents.spawned} subagent(s)${lost.length > 0 ? `, ${lost.join(", ")}` : ""}`);
   }
 
   if (parts.length === 0) return undefined;
@@ -215,6 +235,13 @@ export function formatUsageLine(totals: UsageTotals): string | undefined {
       totals.measured > 0
         ? ` · ${totals.unmeasured} subtask(s) reported no usage, so this total is partial`
         : ` · no cost was recorded for ${totals.unmeasured} subtask(s)`;
+  }
+  // Shown, never held on: the stage's work is not in question, only the figure. A CLI
+  // that predates a model still reports a cost for it, and it can be wrong by forty times.
+  if (totals.unpricedModels.length > 0) {
+    caveat +=
+      ` · the CLI could not price ${totals.unpricedModels.join(", ")}, ` +
+      "so the cost is not a measurement";
   }
   return `**Cost:** ${parts.join(" · ")}${caveat}`;
 }

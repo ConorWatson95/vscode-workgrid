@@ -1,5 +1,5 @@
 import { TaskPipeline } from "./taskPipeline";
-import { UsageTotals, pipelineUsage } from "./stageUsage";
+import { UsageTotals, addTokens, pipelineUsage } from "./stageUsage";
 import { outstandingChecklist, outstandingDeferrals } from "./pipelineEngine";
 
 /**
@@ -67,6 +67,7 @@ const EMPTY_OUTCOME = (): ArmOutcome => ({
     measured: 0,
     unmeasured: 0,
     models: [],
+    unpricedModels: [],
   },
   failedSubtasks: 0,
   heldStages: 0,
@@ -91,10 +92,7 @@ export function summariseArm(pipelines: readonly TaskPipeline[]): ArmOutcome {
     total.usage.blockedOnHumanMs += usage.blockedOnHumanMs;
     total.usage.measured += usage.measured;
     total.usage.unmeasured += usage.unmeasured;
-    total.usage.tokens.input += usage.tokens.input;
-    total.usage.tokens.output += usage.tokens.output;
-    total.usage.tokens.cacheRead += usage.tokens.cacheRead;
-    total.usage.tokens.cacheCreation += usage.tokens.cacheCreation;
+    addTokens(total.usage.tokens, usage.tokens);
     // Merged as a set rather than summed. An arm that ran on two models is the
     // signal that a comparison is measuring a silent policy fallback rather than
     // the model choice it was set up to test.
@@ -102,6 +100,10 @@ export function summariseArm(pipelines: readonly TaskPipeline[]): ArmOutcome {
       if (!total.usage.models.includes(model)) total.usage.models.push(model);
     }
     total.usage.models.sort();
+    for (const model of usage.unpricedModels) {
+      if (!total.usage.unpricedModels.includes(model)) total.usage.unpricedModels.push(model);
+    }
+    total.usage.unpricedModels.sort();
 
     for (const stage of pipeline.stages) {
       total.failedSubtasks += stage.subtasks.filter((s) => s.status === "failed").length;

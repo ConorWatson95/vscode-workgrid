@@ -4893,6 +4893,39 @@ and no daemon. Rules, each load-bearing:
     lost).
   - A missing state directory made every first write wait 2 s and go unlocked.
 
+
+### A retry that ran blind, and a result event nobody read
+
+16 Oct 2026, both from the CLI dailies for 2.1.296–2.1.301. Installed CLI 2.1.295.
+
+**A transient retry is now told what the dead attempt ran**
+(`domain/interruptedAttempt.ts`). The transient path reverts the subtask and runs it
+again, which is right, because nothing was judged. But the new run started cold, and a
+session that dies on a 529 mid-turn has often already acted. Its `commands` were
+recorded and given to nobody, so a promotion that had pushed was retried as though it
+had not. A tool error says the outcome is unknown, not that nothing ran. The note lists
+the last 20 commands, cut to 300 characters each and announced when cut. It says to
+check whether anything outside the worktree already took effect before repeating it.
+It is filed as stage-scoped guidance, `formatRetryNote`'s channel, and filed whether or
+not the retry budget remains, because a held stage is re-run cold too. No commands
+means no note, or every outage gets noise. The fix is information, not machinery: no
+journal and no idempotency layer.
+
+**`modelUsage`, the cache TTL split and `subagent_stats` are recorded**
+(`answeringModelsOf`, `subagentCountsOf`, `sessionTokensOf` in `streamJson.ts`). They are
+stored as `SubtaskActivity.answeredBy`, `subagents`, and `tokens.cacheCreation1h/5m`.
+- **`answeredBy` replaces `actualModel` in `UsageTotals.models` when present.** One
+  source per subtask, using `canonicalModel` before the key, or a `[1m]` suffix would
+  list one model twice.
+- **An `unknown` `costBasis` is shown, never held.** The usage line says the CLI could
+  not price that model, so the cost is not a measurement, and the dashboard shows an
+  `Unpriced` pill. That is the 2.1.284 Haiku mispricing, made visible on the record
+  rather than remembered. Holding a stage on it would stop work over a billing label.
+- **The TTL split is optional and summed only where reported** (`addTokens`). The line
+  names any creation it could not split, since absence means unreported, not zero.
+- **Subagents are shown only when some were spawned**, with failed and killed counts.
+  7% of stage sessions delegate, and a killed child was invisible before.
+
 ## Context discipline
 
 Sessions here have historically ballooned to 500+ tool calls, dominated by `Edit`

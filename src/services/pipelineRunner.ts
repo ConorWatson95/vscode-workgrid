@@ -106,6 +106,7 @@ import {
   isCapacityFailure,
   isTransientFailure,
 } from "../domain/transientFailure";
+import { interruptedAttemptNote, recordInterruptedAttempt } from "../domain/interruptedAttempt";
 import {
   DEFAULT_ENVIRONMENT_WAIT_MINUTES,
   ENVIRONMENT_POLL_MS,
@@ -2457,6 +2458,16 @@ Note: ${covered.skipped}`
       const cause = reply.error ?? "the transport failed";
       const reverted = revertSubtask(pipeline, subtask.id);
       if (reverted.ok) pipeline = reverted.value;
+      // Whether this advance retries or the budget is spent and a person does, the next
+      // run starts cold — so it is told what the dead attempt had already run. Filed
+      // either way, because a held stage is re-run by an advance just the same.
+      pipeline = recordInterruptedAttempt(
+        pipeline,
+        stage,
+        subtask.id,
+        interruptedAttemptNote(subtask.title, cause, reply.activity?.commands ?? []),
+        new Date().toISOString(),
+      );
       // Not counted as an intervention: `revertSubtask` records one only when given a
       // clock, and a retry the harness performs itself is not supervision.
       //

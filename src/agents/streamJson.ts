@@ -6,7 +6,7 @@
  * Parsing is isolated here (no I/O) so it can be unit-tested against fixtures.
  */
 
-import type { SessionTokenTotals } from "../domain/taskPipeline";
+import type { AnsweringModel, SessionTokenTotals, SubagentCounts } from "../domain/taskPipeline";
 import type { McpServerError, McpServerStatus } from "../domain/mcpServerStatus";
 
 /** A renderable entry in the chat transcript. */
@@ -62,6 +62,22 @@ interface Usage {
   output_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  /** On a `result` event: `cache_creation_input_tokens` split by entry lifetime. */
+  cache_creation?: { ephemeral_1h_input_tokens?: number; ephemeral_5m_input_tokens?: number };
+}
+
+/** One entry of a `result` event's `modelUsage`, keyed by model id. */
+interface ModelUsageEntry {
+  costUSD?: number;
+  canonicalModel?: string;
+  costBasis?: string;
+}
+
+interface SubagentStats {
+  spawned?: number;
+  completed?: number;
+  failed?: number;
+  killed?: { parent?: number; user?: number; system?: number };
 }
 
 export interface StreamEvent {
@@ -102,6 +118,10 @@ export interface StreamEvent {
   };
   /** Cumulative session cost, on the `result` event. */
   total_cost_usd?: number;
+  /** Per-model usage, on the `result` event. */
+  modelUsage?: Record<string, ModelUsageEntry>;
+  /** Subagent outcomes, on the `result` event. */
+  subagent_stats?: SubagentStats;
   message?: {
     role?: string;
     content?: ContentBlock[] | string;
@@ -159,6 +179,17 @@ export function sessionTokensOf(event: StreamEvent): SessionTokenTotals | undefi
     cacheRead: u.cache_read_input_tokens ?? 0,
     cacheCreation: u.cache_creation_input_tokens ?? 0,
   };
+  // Only when the split was reported: a build that sends none must not read as a
+  // session that wrote nothing at either lifetime.
+  const split = u.cache_creation;
+  if (split && typeof split === "object") {
+    if (typeof split.ephemeral_1h_input_tokens === "number") {
+      totals.cacheCreation1h = split.ephemeral_1h_input_tokens;
+    }
+    if (typeof split.ephemeral_5m_input_tokens === "number") {
+      totals.cacheCreation5m = split.ephemeral_5m_input_tokens;
+    }
+  }
   // A result carrying an all-zero usage says nothing; undefined lets callers
   // distinguish "no measurement" from "measured as free", which the report needs
   // in order to avoid presenting a partial total as a complete one.
@@ -168,6 +199,50 @@ export function sessionTokensOf(event: StreamEvent): SessionTokenTotals | undefi
     totals.cacheRead > 0 ||
     totals.cacheCreation > 0;
   return any ? totals : undefined;
+}
+
+/**
+ * Every model billed in this session, from a `result` event's `modelUsage`.
+ *
+ * The init event names the model a session *started* on, and a refusal fallback
+ * changes model mid-session without the init event ever saying so. This is the
+ * record of what actually answered, which is what a model comparison has to count.
+ * Undefined when the event carries no `modelUsage`, so absence stays unreported.
+ */
+export function answeringModelsOf(event: StreamEvent): AnsweringModel[] | undefined {
+  if (event.type !== "result") return undefined;
+  const usage = event.modelUsage;
+  if (!usage || typeof usage !== "object") return undefined;
+  const models: AnsweringModel[] = [];
+  for (const [key, entry] of Object.entries(usage)) {
+    if (!entry || typeof entry !== "object") continue;
+    // `canonicalModel` before the key: the key can carry a context suffix such as
+    // `[1m]`, which would list one model twice beside the init event's spelling.
+    const id = typeof entry.canonicalModel === "string" && entry.canonicalModel ? entry.canonicalModel : key;
+    models.push({
+      model: shortModelName(id),
+      ...(typeof entry.costUSD === "number" ? { costUsd: entry.costUSD } : {}),
+      ...(typeof entry.costBasis === "string" ? { costBasis: entry.costBasis } : {}),
+    });
+  }
+  return models.length > 0 ? models : undefined;
+}
+
+/**
+ * What became of this session's subagents, from a `result` event's `subagent_stats`.
+ * Undefined when the event does not carry them.
+ */
+export function subagentCountsOf(event: StreamEvent): SubagentCounts | undefined {
+  if (event.type !== "result") return undefined;
+  const stats = event.subagent_stats;
+  if (!stats || typeof stats !== "object") return undefined;
+  const n = (value: unknown) => (typeof value === "number" && value > 0 ? value : 0);
+  return {
+    spawned: n(stats.spawned),
+    completed: n(stats.completed),
+    failed: n(stats.failed),
+    killed: n(stats.killed?.parent) + n(stats.killed?.user) + n(stats.killed?.system),
+  };
 }
 
 /** Parses a single NDJSON line; returns null for blank or malformed lines. */

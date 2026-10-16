@@ -232,6 +232,42 @@ export interface SubtaskActivity {
    * the build. Absent means unreported, never old.
    */
   cliVersion?: string;
+  /**
+   * Every model that answered in this session, from the result event's `modelUsage`.
+   *
+   * `actualModel` is read from the init event, so it names the model the session
+   * *started* on. A refusal fallback switches model mid-session and the init event
+   * never says so, which leaves a stage that finished on another model counted as a
+   * success of the one it started on. `modelUsage` lists each model that was billed.
+   * Absent means unreported, never "the init model only".
+   */
+  answeredBy?: AnsweringModel[];
+  /**
+   * What became of the subagents this session spawned, from the result event's
+   * `subagent_stats`. Absent means unreported, never "none spawned".
+   */
+  subagents?: SubagentCounts;
+}
+
+/** One model that answered in a session, as `modelUsage` reports it. */
+export interface AnsweringModel {
+  /** Short form, as `actualModel` spells it: `opus-5-5`, not `claude-opus-5-5`. */
+  model: string;
+  costUsd?: number;
+  /**
+   * How the CLI priced it: `list` when it knows the model's rate. A CLI that
+   * predates a model reports `unknown` and misprices it silently — 2.1.284 put a
+   * one-word Haiku 5.5 reply at about 40 times its real cost.
+   */
+  costBasis?: string;
+}
+
+/** Subagent outcomes for one session. `killed` sums parent, user and system kills. */
+export interface SubagentCounts {
+  spawned: number;
+  completed: number;
+  failed: number;
+  killed: number;
 }
 
 /**
@@ -250,6 +286,14 @@ export interface SessionTokenTotals {
   cacheRead: number;
   /** Input written *into* the cache, which is charged at a premium. */
   cacheCreation: number;
+  /**
+   * `cacheCreation` split by how long the entry lives. A one-hour write costs more
+   * than a five-minute one, and the CLI chooses between them per session — so two
+   * runs with the same tokens can cost different amounts for a reason neither the
+   * model nor the route had anything to do with. Absent means unreported, not zero.
+   */
+  cacheCreation1h?: number;
+  cacheCreation5m?: number;
 }
 
 /**

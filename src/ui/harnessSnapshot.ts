@@ -117,6 +117,8 @@ export interface StageView {
   detail: string;
   model?: string;
   modelsRun: string[];
+  /** Of `modelsRun`, those the CLI could not price, so `costUsd` is not a measurement. */
+  unpricedModels?: string[];
   evidence: { basis: string; summary: string; selfReported: boolean };
   verification?: { command: string; exitCode: number; at: string };
   held?: string;
@@ -430,6 +432,7 @@ function stageView(
     detail: withoutLabel(visual.description, visual.label),
     model: stage.model,
     modelsRun: usage.models,
+    ...(usage.unpricedModels.length > 0 ? { unpricedModels: usage.unpricedModels } : {}),
     evidence: { basis: evidence.basis, summary: evidence.summary, selfReported: evidence.selfReported },
     verification: stage.verification,
     held: stage.blocked?.trim() || undefined,

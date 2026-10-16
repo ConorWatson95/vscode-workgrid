@@ -854,6 +854,9 @@ export const HARNESS_DASHBOARD_HTML = String.raw`<!doctype html>
     }
     if (s.verification) facts.push("check exit " + s.verification.exitCode + " · <code>" + esc(s.verification.command) + "</code>");
     if (s.costUsd || s.elapsedMs) facts.push(money(s.costUsd) + " · " + minutes(s.elapsedMs));
+    if (s.unpricedModels && s.unpricedModels.length) {
+      facts.push('<span class="pill warn" title="The CLI reported costBasis unknown for these models, so the cost shown is not a measurement">Unpriced: ' + esc(s.unpricedModels.join(", ")) + "</span>");
+    }
     facts.push(esc(s.modelsRun.length ? s.modelsRun.join(", ") : s.model || "default model"));
     html += '<div class="facts">' + facts.map(function (f) { return "<span>" + f + "</span>"; }).join("") + "</div>";
 

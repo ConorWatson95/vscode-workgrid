@@ -63,6 +63,52 @@ describe("usage in the report", () => {
       ],
     } as Partial<TaskStage>);
 
+  it("shows the cache TTL split and what it could not split", () => {
+    const report = formatStageReport(
+      "Task",
+      measured({
+        activity: {
+          costUsd: 0.4,
+          tokens: { input: 1000, output: 10, cacheRead: 0, cacheCreation: 3000, cacheCreation1h: 2000, cacheCreation5m: 500 },
+        },
+      }),
+      undefined,
+    );
+    expect(report).toContain("cache writes 2,000 1h / 500 5m (500 unreported)");
+  });
+
+  it("says when the CLI could not price a model, and still shows the cost", () => {
+    const report = formatStageReport(
+      "Task",
+      measured({
+        activity: {
+          costUsd: 0.093,
+          tokens: { input: 10, output: 1, cacheRead: 0, cacheCreation: 0 },
+          answeredBy: [{ model: "haiku-5-5", costUsd: 0.093, costBasis: "unknown" }],
+        },
+      }),
+      undefined,
+    );
+    expect(report).toContain("$0.0930");
+    expect(report).toContain("the CLI could not price haiku-5-5, so the cost is not a measurement");
+  });
+
+  it("counts subagents only when a session spawned some", () => {
+    const withAgents = formatStageReport(
+      "Task",
+      measured({
+        activity: {
+          costUsd: 0.1,
+          tokens: { input: 10, output: 1, cacheRead: 0, cacheCreation: 0 },
+          subagents: { spawned: 3, completed: 1, failed: 1, killed: 1 },
+        },
+      }),
+      undefined,
+    );
+    expect(withAgents).toContain("3 subagent(s), 1 failed, 1 killed");
+    expect(formatStageReport("Task", measured(), undefined)).not.toContain("subagent");
+  });
+
   it("puts the cost in the header, not under the command output", () => {
     const report = formatStageReport("Task", measured(), undefined);
     const header = report.slice(0, report.indexOf("## "));

@@ -205,3 +205,62 @@ describe("cost that re-runs threw away", () => {
     expect(pipelineUsage(clean).costUsd).toBe(1);
   });
 });
+
+describe("result-event usage", () => {
+  it("names the models that answered over the one the init event resolved", () => {
+    const totals = subtasksUsage([
+      subtask({
+        activity: activity({
+          actualModel: "opus-5-5",
+          answeredBy: [{ model: "opus-5-5" }, { model: "haiku-5-5" }],
+        }),
+      }),
+    ]);
+    expect(totals.models).toEqual(["haiku-5-5", "opus-5-5"].sort());
+  });
+
+  it("falls back to the init model when no result reported model usage", () => {
+    expect(subtasksUsage([subtask({ activity: activity({ actualModel: "opus-5-5" }) })]).models).toEqual([
+      "opus-5-5",
+    ]);
+  });
+
+  it("lists a model the CLI could not price, without holding anything on it", () => {
+    const totals = subtasksUsage([
+      subtask({
+        id: "a",
+        activity: activity({ answeredBy: [{ model: "haiku-5-5", costBasis: "unknown" }] }),
+      }),
+      subtask({ id: "b", activity: activity({ answeredBy: [{ model: "opus-5-5", costBasis: "list" }] }) }),
+    ]);
+    expect(totals.unpricedModels).toEqual(["haiku-5-5"]);
+    expect(totals.costUsd).toBeCloseTo(1.0);
+  });
+
+  it("sums subagent counts, and reports none when no session sent them", () => {
+    const totals = subtasksUsage([
+      subtask({ id: "a", activity: activity({ subagents: { spawned: 2, completed: 2, failed: 0, killed: 0 } }) }),
+      subtask({ id: "b", activity: activity({ subagents: { spawned: 3, completed: 1, failed: 1, killed: 1 } }) }),
+    ]);
+    expect(totals.subagents).toEqual({ spawned: 5, completed: 3, failed: 1, killed: 1 });
+    expect(subtasksUsage([subtask({ activity: activity() })]).subagents).toBeUndefined();
+  });
+
+  it("sums the cache TTL split only where a session reported it", () => {
+    const totals = subtasksUsage([
+      subtask({
+        id: "a",
+        activity: activity({
+          tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 300, cacheCreation1h: 200, cacheCreation5m: 100 },
+        }),
+      }),
+      subtask({ id: "b", activity: activity({ tokens: { input: 1, output: 1, cacheRead: 0, cacheCreation: 50 } }) }),
+    ]);
+    expect(totals.tokens).toMatchObject({ cacheCreation: 350, cacheCreation1h: 200, cacheCreation5m: 100 });
+  });
+
+  it("leaves the split absent when no session reported one", () => {
+    const totals = subtasksUsage([subtask({ activity: activity() })]);
+    expect(totals.tokens).not.toHaveProperty("cacheCreation1h");
+  });
+});

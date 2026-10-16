@@ -3122,6 +3122,42 @@ describe("a transport failure", () => {
     expect(build?.subtasks.some((sub) => sub.failureReason)).toBe(false);
   });
 
+  it("hands the retry the commands the dead attempt had already run", async () => {
+    // A tool error says the outcome is unknown, not that nothing executed: a push
+    // that landed before the 529 must not be pushed again blind.
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": [
+        { ok: false, text: "", error: OVERLOADED, activity: { commands: ["git push origin feature/x"] } },
+        { text: "done" },
+      ],
+    });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const note = (await repo.get("t1"))?.pipeline?.guidance?.find((g) => g.id.startsWith("interrupted-"));
+    expect(note).toMatchObject({ stageId: "build", scope: "stage" });
+    expect(note?.text).toContain("git push origin feature/x");
+    const retry = sessions.calls.filter((c) => c.label === "build:build-1")[1];
+    expect(retry.prompt).toContain("git push origin feature/x");
+  });
+
+  it("files no note when the dead attempt ran nothing", async () => {
+    const sessions = fakeSessions({
+      "plan:": { text: PLAN_REPLY },
+      "build:build-1": [{ ok: false, text: "", error: OVERLOADED }, { text: "done" }],
+    });
+    const { repo, runner } = makeRunner(sessions);
+    await repo.save(task());
+
+    await runner.advance((await repo.get("t1"))!);
+
+    const guidance = (await repo.get("t1"))?.pipeline?.guidance ?? [];
+    expect(guidance.some((g) => g.id.startsWith("interrupted-"))).toBe(false);
+  });
+
   it("holds the stage rather than failing it once the retries run out", async () => {
     // Held, not failed, is the load-bearing half: a failed stage cannot be moved
     // except by the command that discards it, which is what made an outage expensive.

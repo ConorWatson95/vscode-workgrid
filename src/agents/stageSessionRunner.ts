@@ -3,7 +3,12 @@ import { StreamSessionOptions } from "./claudeStreamSession";
 import { ChatItem } from "./streamJson";
 import { DenialWatcher, PermissionDenial } from "./permissionDenials";
 import { StageActivityWatcher } from "./stageActivity";
-import { SessionTokenTotals, SubtaskActivity } from "../domain/taskPipeline";
+import {
+  AnsweringModel,
+  SessionTokenTotals,
+  SubagentCounts,
+  SubtaskActivity,
+} from "../domain/taskPipeline";
 import { StageSessionRunner } from "../services/pipelineRunner";
 import { Logger } from "../logging/logger";
 import { redactSecrets } from "../domain/secretRedaction";
@@ -47,6 +52,10 @@ export interface StageSession {
   readonly cliVersion?: string;
   /** The largest single prompt it sent. See SubtaskActivity.peakContextTokens. */
   readonly peakContextTokens?: number;
+  /** Models billed in the session. See SubtaskActivity.answeredBy. */
+  readonly answeredBy?: AnsweringModel[];
+  /** Subagent outcomes. See SubtaskActivity.subagents. */
+  readonly subagents?: SubagentCounts;
   on(event: "status", listener: (status: string) => void): unknown;
   on(event: "item", listener: (item: ChatItem) => void): unknown;
   on(event: "mcp", listener: (report: McpStartupReport) => void): unknown;
@@ -402,6 +411,10 @@ export class ClaudeStageSessionRunner implements StageSessionRunner {
           // requested name would then be comparing two runs of the same model.
           ...(session.activeModel ? { actualModel: session.activeModel } : {}),
           ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
+          // What answered, which the init event cannot say: a fallback mid-session
+          // leaves `actualModel` naming the model the session merely started on.
+          ...(session.answeredBy ? { answeredBy: session.answeredBy } : {}),
+          ...(session.subagents ? { subagents: session.subagents } : {}),
         };
       };
 

@@ -15,6 +15,8 @@ import {
   compactInfoOf,
   mcpServersOf,
   mcpServerErrorsOf,
+  answeringModelsOf,
+  subagentCountsOf,
 } from "./streamJson";
 
 describe("sessionTokensOf", () => {
@@ -458,5 +460,68 @@ describe("mcpServersOf", () => {
       mcp_servers: [{ status: "connected" }, null, "nope", { name: "ok" }],
     };
     expect(mcpServersOf(event)).toEqual([{ name: "ok", status: "unknown" }]);
+  });
+});
+
+describe("answeringModelsOf", () => {
+  it("reads each model the result event priced, under its canonical name", () => {
+    const models = answeringModelsOf({
+      type: "result",
+      modelUsage: {
+        "claude-haiku-5-5": { costUSD: 0.093, canonicalModel: "claude-haiku-5-5", costBasis: "unknown" },
+        "claude-opus-5-5[1m]": { costUSD: 1.2, canonicalModel: "claude-opus-5-5", costBasis: "list" },
+      },
+    } as never);
+    expect(models).toEqual([
+      { model: shortModelName("claude-haiku-5-5"), costUsd: 0.093, costBasis: "unknown" },
+      { model: shortModelName("claude-opus-5-5"), costUsd: 1.2, costBasis: "list" },
+    ]);
+  });
+
+  it("reports nothing when the event carries no model usage", () => {
+    expect(answeringModelsOf({ type: "result" } as never)).toBeUndefined();
+    expect(answeringModelsOf({ type: "result", modelUsage: {} } as never)).toBeUndefined();
+    expect(
+      answeringModelsOf({ type: "assistant", modelUsage: { m: { costUSD: 1 } } } as never),
+    ).toBeUndefined();
+  });
+});
+
+describe("subagentCountsOf", () => {
+  it("sums the three ways a subagent can be killed", () => {
+    expect(
+      subagentCountsOf({
+        type: "result",
+        subagent_stats: { spawned: 4, completed: 2, failed: 1, killed: { parent: 1, user: 0, system: 2 } },
+      } as never),
+    ).toEqual({ spawned: 4, completed: 2, failed: 1, killed: 3 });
+  });
+
+  it("reports nothing when the CLI did not send the stats", () => {
+    expect(subagentCountsOf({ type: "result" } as never)).toBeUndefined();
+  });
+});
+
+describe("sessionTokensOf cache TTL split", () => {
+  it("carries the 1h/5m split when the CLI reports it", () => {
+    const tokens = sessionTokensOf({
+      type: "result",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation_input_tokens: 300,
+        cache_creation: { ephemeral_1h_input_tokens: 200, ephemeral_5m_input_tokens: 100 },
+      },
+    } as never);
+    expect(tokens).toMatchObject({ cacheCreation: 300, cacheCreation1h: 200, cacheCreation5m: 100 });
+  });
+
+  it("leaves the split absent rather than zero when it is not reported", () => {
+    const tokens = sessionTokensOf({
+      type: "result",
+      usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 300 },
+    } as never);
+    expect(tokens).not.toHaveProperty("cacheCreation1h");
+    expect(tokens).not.toHaveProperty("cacheCreation5m");
   });
 });

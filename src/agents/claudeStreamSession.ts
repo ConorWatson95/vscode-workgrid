@@ -22,9 +22,11 @@ import {
   encodeUserMessage,
   contextTokensOf,
   sessionTokensOf,
+  answeringModelsOf,
+  subagentCountsOf,
   compactInfoOf,
 } from "./streamJson";
-import { SessionTokenTotals } from "../domain/taskPipeline";
+import { AnsweringModel, SessionTokenTotals, SubagentCounts } from "../domain/taskPipeline";
 import {
   HANDOFF_PROMPT,
   Handoff,
@@ -214,6 +216,10 @@ export class ClaudeStreamSession {
    * to zero on compaction. This one only grows, and is what a stage persists.
    */
   tokenTotals?: SessionTokenTotals;
+  /** Models billed in this session, from the latest `result` event. */
+  answeredBy?: AnsweringModel[];
+  /** Subagent outcomes, from the latest `result` event. */
+  subagents?: SubagentCounts;
   /** True between issuing `/compact` and seeing its result, for feedback. */
   private compacting = false;
   /** True between asking for a handoff and consuming the reply. */
@@ -502,6 +508,10 @@ export class ClaudeStreamSession {
       // between two ways of running one are downstream of it.
       const totals = sessionTokensOf(event);
       if (totals) this.tokenTotals = totals;
+      const answered = answeringModelsOf(event);
+      if (answered) this.answeredBy = answered;
+      const subagents = subagentCountsOf(event);
+      if (subagents) this.subagents = subagents;
 
       const usage = event.usage ?? event.message?.usage;
       const cached = usage?.cache_read_input_tokens ?? 0;
